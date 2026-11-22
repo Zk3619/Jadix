@@ -62,12 +62,14 @@ fn tabs_and_sibling(value: Signal<String>, tall_list: bool) -> Element {
                     TabsTrigger(TabsTriggerProps {
                         value: Some("list".into()),
                         disabled: None,
+                        accessibility_description: None,
                         children: Some(Element::new().text("List")),
                         base: None,
                     }),
                     TabsTrigger(TabsTriggerProps {
                         value: Some("grid".into()),
                         disabled: None,
+                        accessibility_description: None,
                         children: Some(Element::new().text("Grid")),
                         base: None,
                     }),

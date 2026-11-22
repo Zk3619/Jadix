@@ -312,7 +312,7 @@ fn element_text_signal_and_closure_bind() {
 
 #[test]
 fn reactive_anchor_registers_independently_per_window_scope() {
-    use crate::app::window_scope::{WindowScope, enter};
+    use crate::app::window_scope::{enter, WindowScope};
     use crate::core::reactivity::{
         bind_current_owner_window_key_scope, create_effect, create_root, create_signal,
     };

@@ -1445,6 +1445,43 @@ pub mod text {
     pub type KeyHandler =
         std::rc::Rc<dyn Fn(&winit::event::KeyEvent, winit::keyboard::ModifiersState) -> bool>;
 
+    pub fn navigation_key(key: &winit::keyboard::Key) -> Option<jadix_core::presentation::NavigationKey> {
+        use jadix_core::presentation::NavigationKey;
+        use winit::keyboard::{Key, NamedKey};
+        match key {
+            Key::Named(NamedKey::ArrowUp) => Some(NavigationKey::Up),
+            Key::Named(NamedKey::ArrowDown) => Some(NavigationKey::Down),
+            Key::Named(NamedKey::ArrowLeft) => Some(NavigationKey::Left),
+            Key::Named(NamedKey::ArrowRight) => Some(NavigationKey::Right),
+            Key::Named(NamedKey::Home) => Some(NavigationKey::Home),
+            Key::Named(NamedKey::End) => Some(NavigationKey::End),
+            Key::Named(NamedKey::Tab) => Some(NavigationKey::Tab),
+            Key::Named(NamedKey::PageUp) => Some(NavigationKey::PageUp),
+            Key::Named(NamedKey::PageDown) => Some(NavigationKey::PageDown),
+            Key::Named(NamedKey::Enter) => Some(NavigationKey::Enter),
+            Key::Named(NamedKey::Escape) => Some(NavigationKey::Escape), _ => None,
+        }
+    }
+
+    /// Deliver declared unmodified navigation keys before editor caret movement.
+    /// Attach to `text_edit_key_handler`, whose caller excludes active IME preedit.
+    pub fn navigation_handler(
+        keys: impl Fn() -> Vec<jadix_core::presentation::NavigationKey> + 'static,
+        mut callback: impl FnMut(jadix_core::presentation::NavigationKey) + 'static,
+        previous: Option<KeyHandler>,
+    ) -> KeyHandler {
+        let callback = std::cell::RefCell::new(move |key| callback(key));
+        std::rc::Rc::new(move |event, modifiers| {
+            let key = navigation_key(&event.logical_key);
+            if event.state == winit::event::ElementState::Pressed && modifiers.is_empty() {
+                if let Some(key) = key.filter(|key| keys().contains(key)) {
+                    (callback.borrow_mut())(key); return true;
+                }
+            }
+            previous.as_ref().is_some_and(|handler| handler(event, modifiers))
+        })
+    }
+
     #[derive(Clone)]
     pub(crate) struct SubmitHandler(pub std::rc::Rc<std::cell::RefCell<Box<dyn FnMut()>>>);
 

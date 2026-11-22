@@ -263,7 +263,7 @@ fn system_locale_os() -> Option<String> {
 
 #[cfg(not(windows))]
 fn system_locale_os() -> Option<String> {
-    None
+    crate::environment::system_snapshot().ok().map(|snapshot| snapshot.locale.locale)
 }
 
 #[cfg(test)]

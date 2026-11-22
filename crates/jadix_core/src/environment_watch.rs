@@ -22,7 +22,7 @@ impl SystemEnvironmentWatcher {
     pub fn start(notify: impl Fn() + Send + 'static) -> io::Result<Self> {
         #[cfg(not(all(
             feature = "system-environment",
-            any(windows, all(target_os = "linux", not(target_env = "ohos")))
+            any(windows, target_os = "macos", all(target_os = "linux", not(target_env = "ohos")))
         )))]
         {
             let _ = notify;
@@ -33,7 +33,7 @@ impl SystemEnvironmentWatcher {
         }
         #[cfg(all(
             feature = "system-environment",
-            any(windows, all(target_os = "linux", not(target_env = "ohos")))
+            any(windows, target_os = "macos", all(target_os = "linux", not(target_env = "ohos")))
         ))]
         {
             let pending = Arc::new(Mutex::new(None));
@@ -58,6 +58,8 @@ impl SystemEnvironmentWatcher {
                     super::windows::run_watch(shutdown.clone(), tx, changed);
                     #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
                     super::linux::run_watch(shutdown.clone(), tx, changed);
+                    #[cfg(target_os = "macos")]
+                    super::macos::run_watch(shutdown.clone(), tx, changed);
                     if !shutdown.load(Ordering::Acquire) {
                         *slot.lock().unwrap_or_else(|e| e.into_inner()) =
                             Some(Err("system environment listener stopped".into()));

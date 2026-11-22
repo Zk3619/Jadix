@@ -113,7 +113,7 @@ fn visual_fully_outside_window_edges() {
         win.0,
         win.1
     )); // right
-        // Still intersecting by 1px → not fully outside (focus stays either way).
+    // Still intersecting by 1px → not fully outside (focus stays either way).
     assert!(!visual_fully_outside_window(
         [10.0, -23.0, 80.0, 24.0],
         win.0,
@@ -475,6 +475,7 @@ fn painted_bounds_prefer_caret_node() {
     });
     let nodes = vec![
         TextLayoutInfo {
+            node_id: None,
             text: "x".into(),
             shape_suffix: None,
             spans: None,
@@ -494,6 +495,7 @@ fn painted_bounds_prefer_caret_node() {
             glyph_raster: crate::renderer::GlyphRasterMode::Coverage,
         },
         TextLayoutInfo {
+            node_id: None,
             text: "啊a".into(),
             shape_suffix: None,
             spans: None,
@@ -546,6 +548,7 @@ fn test_text_node(
         });
     }
     TextLayoutInfo {
+        node_id: None,
         text: rest.into(),
         shape_suffix: None,
         spans: None,

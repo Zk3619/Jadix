@@ -83,6 +83,13 @@ pub enum Placement {
         pos: Signal<[f32; 2]>,
         gap: f32,
     },
+    /// Pointer coordinates when nonnegative; otherwise use the focused trigger.
+    /// Used by menus opened by either a pointer or a hardware keyboard.
+    PointOrTrigger {
+        pos: Signal<[f32; 2]>,
+        placement: PopupPlacement,
+        gap: f32,
+    },
     Unanchored,
 }
 
@@ -617,13 +624,13 @@ fn sync_panel_focus_return(
             previous.restore();
         }
     } else if opts.mode == OverlayMode::Stacked && opts.kind != OverlayKind::Tooltip {
-        if let (Some(panel), Placement::Trigger { focus_id, .. }) = (panel, opts.resolve(id)) {
-            let target = if focus_id.trim().is_empty() {
-                trigger.to_string()
-            } else {
-                focus_id
+        if let Some(panel) = panel {
+            let target = match opts.resolve(id) {
+                Placement::Trigger { focus_id, .. } if !focus_id.trim().is_empty() => Some(focus_id),
+                Placement::Trigger { .. } | Placement::PointOrTrigger { .. } => Some(trigger.to_string()),
+                _ => None,
             };
-            state.set(Some(PanelFocusReturn::capture(panel, target)));
+            if let Some(target) = target { state.set(Some(PanelFocusReturn::capture(panel, target))); }
         }
     }
 }
@@ -767,7 +774,7 @@ fn assemble_mounted_panel(
         panel.set_attr(crate::utils::popup::ATTR_FLOATING_EXITING, "1");
     }
     match &placement {
-        Placement::Trigger { .. } | Placement::Point { .. } => {
+        Placement::Trigger { .. } | Placement::Point { .. } | Placement::PointOrTrigger { .. } => {
             apply_stored_floating_place(&mut panel, id);
         }
         Placement::Unanchored => {}
@@ -885,6 +892,16 @@ fn apply_placement(
             let [x, y] = pos.peek();
             mark_floating_at_point(panel, overlay_id, "", x, y, *gap);
             panel.attrs.remove(ATTR_FLOATING_TRIGGER);
+            apply_size_attrs(panel, match_trigger_width, max_h, width);
+            take_absolute(panel);
+        }
+        Placement::PointOrTrigger { pos, placement, gap } => {
+            let [x, y] = pos.peek();
+            if x.is_finite() && y.is_finite() && x >= 0.0 && y >= 0.0 {
+                mark_floating_at_point(panel, overlay_id, &trigger_fid.peek(), x, y, *gap);
+            } else {
+                mark_floating_with_gap(panel, overlay_id, &trigger_fid.peek(), *placement, *gap);
+            }
             apply_size_attrs(panel, match_trigger_width, max_h, width);
             take_absolute(panel);
         }

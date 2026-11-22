@@ -35,7 +35,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::{Rc, Weak};
 
 use crate::core::reactivity::{
-    EffectId, Signal, create_render_effect, dispose_effect, effect_is_alive, untrack, use_signal,
+    create_render_effect, dispose_effect, effect_is_alive, untrack, use_signal, EffectId, Signal,
 };
 use crate::core::tree::{
     Element, IntoCssDim, IntoNodeBg, IntoNodeClass, IntoNodeFg, IntoNodeOpacity, IntoNodeSize,
@@ -369,6 +369,7 @@ fn subtree_is_clone_safe(root: &Element) -> bool {
     while let Some(el) = stack.pop() {
         if el.on_click.is_some()
             || el.on_accessibility_value.is_some()
+        || el.on_accessibility_action.is_some()
             || el.on_wheel.is_some()
             || el.on_hover.is_some()
             || el.on_mousedown.is_some()
@@ -376,6 +377,7 @@ fn subtree_is_clone_safe(root: &Element) -> bool {
             || el.on_context_menu.is_some()
             || el.on_double_click.is_some()
             || el.on_mousemove.is_some()
+            || el.on_text_link_hover.is_some()
             || el.on_mouseover.is_some()
             || el.on_mouseout.is_some()
             || el.on_mouseenter.is_some()
@@ -1395,7 +1397,11 @@ pub fn show<F>(when: bool, render: F) -> Element
 where
     F: FnOnce() -> Element,
 {
-    if when { render() } else { Element::new() }
+    if when {
+        render()
+    } else {
+        Element::new()
+    }
 }
 
 /// Like [`show`], but wraps result in a stable anchor element so branch toggles do not

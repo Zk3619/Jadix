@@ -18,15 +18,7 @@ pub use jadix_window_materials::WindowBackdrop;
 /// Persistence identity for the primary window when [`Self::window_label`] is unset.
 pub const PRIMARY_WINDOW_LABEL: &str = "main";
 
-/// Screen orientations accepted by a native window. Platform policy may still
-/// restrict the orientations the device can use.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum ScreenOrientations {
-    #[default]
-    LandscapeAndPortrait,
-    Landscape,
-    Portrait,
-}
+pub use jadix_core::window::ScreenOrientations;
 
 /// Creation-time window attributes (title, size, decorations, compositor alpha).
 ///
@@ -726,11 +718,20 @@ impl super::App {
                 ..
             }
         ) {
+            // The compositor may consume MouseUp once it owns this gesture.
+            if self.is_secondary_window(id) {
+                self.bind_pointer_window(id);
+                super::window_scope::force_secondary_id(id);
+                self.cancel_pointer_session();
+            } else {
+                self.with_primary_input(id, |app| app.cancel_pointer_session());
+            }
             handle.chrome.pressed.store(true, Ordering::Relaxed);
             if let Err(e) = handle.start_resize(direction) {
                 log::debug!("native resize border: {e}");
                 handle.chrome.pressed.store(false, Ordering::Relaxed);
             }
+            self.finish_native_pointer_handoff();
         }
         // Clear content hover once when entering the native band.
         if !was_hovered {
@@ -817,8 +818,10 @@ fn with_active_window<R>(f: impl FnOnce(&dyn Window) -> R) -> Option<R> {
 
 /// Begin an OS window move. Call from **mousedown** on a custom title bar (not `click`).
 pub fn start_window_drag() {
-    let err = with_active_window(|w| w.drag_window().err()).flatten();
-    if let Some(e) = err {
+    let result = super::multi_window::current_window()
+        .ok_or_else(|| "there is no current window".to_string())
+        .and_then(|window| window.start_drag());
+    if let Err(e) = result {
         log::debug!("start_window_drag: {e}");
     }
 }

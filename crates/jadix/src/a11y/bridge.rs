@@ -11,7 +11,7 @@ use std::hash::{Hash, Hasher};
 use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
 use crate::utils::roving::TABSTRIP_FOCUS_PREFIX;
-use crate::utils::text_field::{INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX, input_value_signal_key};
+use crate::utils::text_field::{input_value_signal_key, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX};
 use crate::utils::text_selection::ATTR_LABEL_FOR;
 use std::collections::HashMap;
 
@@ -79,10 +79,10 @@ fn parse_accesskit_role(raw: &str) -> Option<Role> {
         "switch" => Some(Role::Switch),
         "radio" | "radiobutton" | "radio_button" => Some(Role::RadioButton),
         "radiogroup" | "radio_group" => Some(Role::RadioGroup),
-        "slider" => Some(Role::Slider),
+        "slider" | "adjustable" => Some(Role::Slider),
         "progressbar" | "progressindicator" | "progress_indicator" => Some(Role::ProgressIndicator),
-        "textinput" | "text_input" | "textfield" => Some(Role::TextInput),
-        "label" => Some(Role::Label),
+        "textbox" | "textinput" | "text_input" | "textfield" => Some(Role::TextInput),
+        "text" | "summary" | "label" => Some(Role::Label),
         "group" => Some(Role::Group),
         "tab" => Some(Role::Tab),
         "tablist" => Some(Role::TabList),
@@ -107,8 +107,8 @@ fn parse_accesskit_role(raw: &str) -> Option<Role> {
         "dialog" => Some(Role::Dialog),
         "alertdialog" | "alert_dialog" => Some(Role::AlertDialog),
         "heading" => Some(Role::Heading),
-        "option" => Some(Role::ListBoxOption),
-        "image" => Some(Role::Image),
+        "option" | "listboxoption" | "list_box_option" => Some(Role::ListBoxOption),
+        "img" | "image" => Some(Role::Image),
         "paragraph" => Some(Role::Paragraph),
         _ => None,
     }
@@ -149,6 +149,7 @@ fn should_be_accesskit_node(el: &Element) -> bool {
     el.focus_id.as_deref().is_some_and(|s| !s.is_empty())
         || el.on_click.is_some()
         || el.on_accessibility_value.is_some()
+        || el.on_accessibility_action.is_some()
         || el.text.is_some()
         || el.attrs.contains_key("accesskit_role")
         || structural_role(el).is_some()
@@ -285,7 +286,7 @@ fn collect_visible_text(el: &Element) -> String {
 fn collect_visible_text_into(el: &Element, parts: &mut Vec<String>) {
     let mut stack: Vec<&Element> = vec![el];
     while let Some(node) = stack.pop() {
-        if node.attrs.get("aria-hidden").map(String::as_str) == Some("true") {
+        if accessibility_hidden(node) {
             continue;
         }
         if let Some(t) = node
@@ -457,7 +458,11 @@ fn collect_label_caption(el: &Element) -> Option<String> {
     let mut parts = Vec::new();
     collect_label_caption_into(el, &mut parts, true);
     let s = parts.join(" ");
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 fn collect_label_caption_into(el: &Element, parts: &mut Vec<String>, is_root: bool) {
@@ -581,8 +586,70 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
         node.set_live(live);
     }
 
-    if el.attrs.get("disabled").map(String::as_str) == Some("true") {
+    if el.attrs.get("disabled").map(String::as_str) == Some("true")
+        || el.attrs.get("aria-disabled").map(String::as_str) == Some("true")
+    {
         node.set_disabled();
+    }
+    if el.attrs.get("aria-readonly").map(String::as_str) == Some("true") {
+        node.set_read_only();
+    }
+    if let Some(expanded) = el.attrs.get("aria-expanded").map(String::as_str) {
+        match expanded {
+            "true" => node.set_expanded(true),
+            "false" => node.set_expanded(false),
+            _ => {}
+        }
+    }
+    if el.attrs.get("aria-multiselectable").map(String::as_str) == Some("true") {
+        node.set_multiselectable();
+    }
+    if el.attrs.get("aria-busy").map(String::as_str) == Some("true") {
+        node.set_busy();
+    }
+    if let Some(autocomplete) =
+        el.attrs
+            .get("aria-autocomplete")
+            .and_then(|value| match value.as_str() {
+                "inline" => Some(accesskit::AutoComplete::Inline),
+                "list" => Some(accesskit::AutoComplete::List),
+                "both" => Some(accesskit::AutoComplete::Both),
+                _ => None,
+            })
+    {
+        node.set_auto_complete(autocomplete);
+    }
+    // AccessKit reads the total from the container (including an empty set),
+    // while ARIA authors place a positive set size on individual items.
+    if let Some(size) = el
+        .attrs
+        .get("accesskit_size_of_set")
+        .and_then(|value| value.parse::<usize>().ok())
+        .or_else(|| {
+            el.attrs
+                .get("aria-setsize")
+                .and_then(|value| value.parse::<usize>().ok())
+                .filter(|size| *size > 0)
+        })
+    {
+        node.set_size_of_set(size);
+    }
+    // ARIA is one based; AccessKit's platform adapters add one themselves.
+    if let Some(position) = el
+        .attrs
+        .get("aria-posinset")
+        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(|position| position.checked_sub(1))
+        .filter(|position| node.size_of_set().is_none_or(|size| *position < size))
+    {
+        node.set_position_in_set(position);
+    }
+    if let Some(selected) = el.attrs.get("aria-selected").map(String::as_str) {
+        match selected {
+            "true" => node.set_selected(true),
+            "false" => node.set_selected(false),
+            _ => {}
+        }
     }
     if let Some(invalid) = el.attrs.get("aria-invalid").map(String::as_str) {
         match invalid {
@@ -596,6 +663,23 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
         match pressed {
             "true" => node.set_toggled(Toggled::True),
             "false" => node.set_toggled(Toggled::False),
+            _ => {}
+        }
+    }
+    if matches!(
+        role,
+        Role::CheckBox
+            | Role::Switch
+            | Role::RadioButton
+            | Role::MenuItemCheckBox
+            | Role::MenuItemRadio
+    ) {
+        match el.attrs.get("aria-checked").map(String::as_str) {
+            Some("true") => node.set_toggled(Toggled::True),
+            Some("false") => node.set_toggled(Toggled::False),
+            Some("mixed") if matches!(role, Role::CheckBox | Role::MenuItemCheckBox) => {
+                node.set_toggled(Toggled::Mixed)
+            }
             _ => {}
         }
     }
@@ -623,6 +707,18 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
     if el.on_click.is_some() {
         node.add_action(Action::Click);
     }
+    if el.on_accessibility_action.is_some() {
+        if let Some(semantics) = shared_semantics(el).filter(|s| !s.hidden && !s.disabled && !s.read_only && s.accessible != Some(false)) {
+            for (index, action) in semantics.actions.iter().enumerate() {
+                let native = semantic_action(&action.id);
+                node.add_action(native);
+                if native == Action::CustomAction {
+                    node.push_custom_action(accesskit::CustomAction { id: index as i32, description: action.label.clone().into() });
+                }
+            }
+        }
+    }
+
     if el.on_accessibility_value.is_some()
         && el.attrs.get("disabled").map(String::as_str) != Some("true")
         && el.attrs.get("aria-disabled").map(String::as_str) != Some("true")
@@ -640,13 +736,21 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
             Toggled::False
         });
     } else if let Some(s) = el.checkbox_sync {
-        node.set_toggled(if el.attrs.get("aria-checked").map(String::as_str) == Some("mixed") {
-            Toggled::Mixed
-        } else if s.get() {
-            Toggled::True
-        } else {
-            Toggled::False
-        });
+        node.set_toggled(
+            if el.attrs.get("aria-checked").map(String::as_str) == Some("mixed") {
+                Toggled::Mixed
+            } else if s.get() {
+                Toggled::True
+            } else {
+                Toggled::False
+            },
+        );
+    } else if role == Role::Tab {
+        if let Some(s) = el.radio_selected_sync {
+            if let Some(item) = el.attrs.get("jadix_tabs_value") {
+                node.set_selected(s.get() == *item);
+            }
+        }
     } else if let Some(s) = el.radio_selected_sync {
         let item = el
             .attrs
@@ -658,7 +762,7 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
         } else {
             Toggled::False
         });
-    } else if role == Role::TextInput {
+    } else if matches!(role, Role::TextInput | Role::ComboBox) {
         if let Some(rest) = fid.and_then(|f| {
             f.strip_prefix(INPUT_FOCUS_PREFIX)
                 .or_else(|| f.strip_prefix(TEXTAREA_FOCUS_PREFIX))
@@ -835,7 +939,7 @@ fn text_leaves(el: &Element) -> Vec<String> {
     let mut out = Vec::new();
     let mut stack: Vec<&Element> = vec![el];
     while let Some(node) = stack.pop() {
-        if node.attrs.get("aria-hidden").map(String::as_str) == Some("true") {
+        if accessibility_hidden(node) {
             continue;
         }
         if let Some(t) = node
@@ -888,7 +992,8 @@ fn walk_subtree(
         let last = stack.len() - 1;
         if !stack[last].started {
             stack[last].started = true;
-            if stack[last].under && is_plain_text_name_leaf(stack[last].el) {
+            if accessibility_hidden(stack[last].el)
+                || (stack[last].under && is_plain_text_name_leaf(stack[last].el)) {
                 stack[last].skipped = true;
             } else {
                 stack[last].absorb = stack[last].under || uses_name_from_contents(stack[last].el);
@@ -1064,7 +1169,7 @@ pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> T
     used.insert(ROOT_ID.0);
     used.insert(doc_id.0);
 
-    for (i, child) in root.children.iter().enumerate() {
+    for (i, child) in root.children.iter().enumerate().filter(|_| !accessibility_hidden(root)) {
         walk_subtree(
             child,
             &i.to_string(),
@@ -1079,7 +1184,7 @@ pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> T
     }
 
     // Root element itself may be an a11y node (unusual but supported).
-    if should_be_accesskit_node(root) {
+    if !accessibility_hidden(root) && should_be_accesskit_node(root) {
         let preferred = stable_node_key(root, "root");
         let (_key, id) = alloc_unique_node_id(&preferred, "root", &mut used);
         let mut node = build_node(root, &for_map);
@@ -1167,7 +1272,8 @@ fn find_element_by_node_id<'a>(
         let last = stack.len() - 1;
         if !stack[last].started {
             stack[last].started = true;
-            if stack[last].under && is_plain_text_name_leaf(stack[last].el) {
+            if accessibility_hidden(stack[last].el)
+                || (stack[last].under && is_plain_text_name_leaf(stack[last].el)) {
                 stack[last].skipped = true;
             } else {
                 stack[last].absorb = stack[last].under || uses_name_from_contents(stack[last].el);
@@ -1218,7 +1324,40 @@ fn find_element_by_node_id<'a>(
     None
 }
 
+fn shared_semantics(el: &Element) -> Option<jadix_core::presentation::accessibility::Accessibility> {
+    let semantics: jadix_core::presentation::accessibility::Accessibility = serde_json::from_str(el.attrs.get("jadix-accessibility")?).ok()?;
+    semantics.is_valid().then_some(semantics)
+}
+fn accessibility_hidden(el: &Element) -> bool {
+    el.attrs.get("aria-hidden").map(String::as_str) == Some("true")
+        || shared_semantics(el).is_some_and(|value| value.hidden)
+}
+fn semantic_action(id: &str) -> Action {
+    match id { "activate" => Action::Click, "increment" => Action::Increment, "decrement" => Action::Decrement,
+        "expand" => Action::Expand, "collapse" => Action::Collapse, "setValue" => Action::SetValue, _ => Action::CustomAction }
+}
+
 fn apply_accesskit_action(el: &Element, request: &ActionRequest) -> bool {
+    let semantics = shared_semantics(el);
+    let attr = |name| el.attrs.get(name).map(String::as_str) == Some("true");
+    if accessibility_hidden(el) || attr("disabled") || attr("aria-disabled")
+        || semantics.as_ref().is_some_and(|value| value.disabled || value.accessible == Some(false))
+        || (request.action != Action::Focus && (attr("aria-readonly")
+            || semantics.as_ref().is_some_and(|value| value.read_only))) {
+        return false;
+    }
+    if let (Some(callback), Some(semantics)) = (&el.on_accessibility_action, shared_semantics(el)) {
+        if el.attrs.get("disabled").map(String::as_str) == Some("true") { return false; }
+        let selected = semantics.actions.iter().enumerate().find(|(index, action)| {
+            semantic_action(&action.id) == request.action && (request.action != Action::CustomAction
+                || matches!(request.data, Some(ActionData::CustomAction(id)) if id == *index as i32))
+        });
+        if let Some((_, action)) = selected {
+            let value = match &request.data { Some(ActionData::NumericValue(value)) if request.action == Action::SetValue => Some(*value),
+                None | Some(ActionData::CustomAction(_)) if request.action != Action::SetValue => None, _ => return false };
+            return semantics.accepts(&action.id, value) && callback.borrow_mut()(&action.id, value);
+        }
+    }
     match request.action {
         Action::SetValue => {
             if el.attrs.get("disabled").map(String::as_str) == Some("true")
@@ -1262,14 +1401,14 @@ pub fn dispatch_accesskit_action(root: &Element, request: &ActionRequest) -> boo
     used.insert(ROOT_ID.0);
     used.insert(document_node_id().0);
     // Same path scheme as [`tree_update_from_elements`].
-    for (i, child) in root.children.iter().enumerate() {
+    for (i, child) in root.children.iter().enumerate().filter(|_| !accessibility_hidden(root)) {
         if let Some(el) =
             find_element_by_node_id(child, request.target_node, &i.to_string(), &mut used, false)
         {
             return apply_accesskit_action(el, request);
         }
     }
-    if should_be_accesskit_node(root) {
+    if !accessibility_hidden(root) && should_be_accesskit_node(root) {
         let preferred = stable_node_key(root, "root");
         let (_key, id) = alloc_unique_node_id(&preferred, "root", &mut used);
         if id == request.target_node {

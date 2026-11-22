@@ -14,7 +14,7 @@ use crate::utils::keyboard::{
     caret_visual_line_end, caret_visual_line_home, delete_char_forward, extend_selection,
     normalized_selection,
 };
-use crate::utils::text_edit::field::{filter_insert_for_type, strip_control_insert, InputType};
+use crate::utils::text_edit::field::{InputType, filter_insert_for_type, strip_control_insert};
 use crate::utils::text_field::input_type_signal_key;
 
 use super::ime_support::{self, apply_ime_commit, text_edit_rest};
@@ -106,6 +106,7 @@ fn commit_multi_edit(
     val_sig: crate::core::reactivity::Signal<String>,
     new_value: String,
     cursors: Vec<crate::utils::text_multi_cursor::TextCursor>,
+    edits: crate::utils::text_multi_cursor::CursorEdits,
     kind: crate::utils::text_edit_history::EditKind,
 ) -> bool {
     let old_text = val_sig.peek();
@@ -116,6 +117,7 @@ fn commit_multi_edit(
     let old_latest = crate::utils::text_field::latest_caret_signal(rest).peek();
     #[cfg(feature = "text-undo")]
     crate::utils::text_edit_history::will_user_edit_field(rest, kind);
+    crate::utils::text_annotations::apply_edits(rest, &old_text, &edits);
     crate::utils::text_field::commit_value_sig(rest, val_sig, new_value);
     crate::utils::text_field::store_text_cursors(rest, &cursors);
     if let Some(latest) = old_latest {
@@ -279,20 +281,25 @@ impl super::App {
                         let old_cs = crate::utils::text_field::load_text_cursors(rest, &committed);
                         let latest = crate::utils::text_field::latest_caret_signal(rest).peek();
                         let had_sel = old_cs.iter().any(|c| c.caret != c.anchor);
-                        let cs = if had_sel {
-                            crate::utils::text_multi_cursor::insert_at_cursors(
+                        let (cs, edits) = if had_sel {
+                            crate::utils::text_multi_cursor::insert_at_cursors_with_edits(
                                 &mut committed,
                                 old_cs.clone(),
                                 "",
                             )
                         } else {
-                            old_cs.clone()
+                            (old_cs.clone(), Vec::new())
                         };
                         if had_sel {
                             #[cfg(feature = "text-undo")]
                             crate::utils::text_edit_history::will_user_edit_field(
                                 rest,
                                 crate::utils::text_edit_history::EditKind::Replace,
+                            );
+                            crate::utils::text_annotations::apply_edits(
+                                rest,
+                                &val_sig.peek(),
+                                &edits,
                             );
                             crate::utils::text_field::commit_value_sig(
                                 rest,
@@ -382,14 +389,16 @@ impl super::App {
                     let new_caret = if filtered.is_empty() && !s.is_empty() {
                         caret_sig.get().unwrap_or(v.len()).min(v.len())
                     } else if multi {
-                        let cs = crate::utils::text_multi_cursor::insert_at_cursors(
-                            &mut v, cs, &filtered,
-                        );
+                        let (cs, edits) =
+                            crate::utils::text_multi_cursor::insert_at_cursors_with_edits(
+                                &mut v, cs, &filtered,
+                            );
                         if !commit_multi_edit(
                             rest,
                             val_sig,
                             v,
                             cs,
+                            edits,
                             crate::utils::text_edit_history::EditKind::Replace,
                         ) {
                             filtered.clear();
@@ -540,6 +549,13 @@ impl super::App {
 
     fn handle_keyboard_input_ex(&mut self, event: KeyEvent, allow_primary_tree: bool) -> bool {
         if event.state == ElementState::Pressed {
+            if allow_primary_tree && !matches!(&event.logical_key, Key::Named(NamedKey::End)) {
+                for rest in self.scroll_metrics_cache.keys() {
+                    crate::core::scroll_viewport::cancel_scroll_end_x(rest);
+                    crate::core::scroll_viewport::cancel_scroll_end_y(rest);
+                }
+            }
+            crate::utils::roving::resume_keyboard_focus();
             #[cfg(all(debug_assertions, feature = "devtools"))]
             if crate::app::devtools::try_toggle_from_key(&event, self.modifiers) {
                 crate::app::runtime::request_redraw();
@@ -574,8 +590,6 @@ impl super::App {
                 if !ids.is_empty() {
                     let focused =
                         crate::core::reactivity::use_signal("__jadix_button_focus_id", String::new);
-                    let focus_visible =
-                        crate::core::reactivity::use_signal("__jadix_focus_visible", || false);
                     // peek: event path must not subscribe focus into a reactive effect.
                     let current = focused.peek();
                     let shift = self.modifiers.shift_key();
@@ -592,8 +606,7 @@ impl super::App {
                         }
                     };
                     let next_id = ids[next_idx].clone();
-                    focus_visible.set(true);
-                    focused.set(next_id.clone());
+                    crate::utils::roving::focus_by_id(next_id.clone());
                     if crate::utils::text_field::select_all_in_text_edit(&next_id) {
                         crate::renderer::restart_caret_blink();
                     }
@@ -641,8 +654,24 @@ impl super::App {
                     && event.state == ElementState::Pressed
                     && matches!(event.logical_key, Key::Named(NamedKey::Escape))
                 {
-                    let closed = crate::app::portal_overlay::try_close_top()
-                        || crate::app::navigator::try_pop_active();
+                    let composing = text_edit_rest(&fid).is_some_and(|rest| {
+                        !crate::core::reactivity::use_signal(
+                            &crate::utils::text_field::input_preedit_signal_key(rest), String::new,
+                        ).get().is_empty()
+                    });
+                    if !composing && self.text_edit_key_handler(&fid)
+                        .is_some_and(|handler| handler(&event, self.modifiers)) {
+                        if let Some(st) = (*self.state.borrow_mut()).as_mut() { st.window.request_redraw(); }
+                        return true;
+                    }
+                    let panel_z = super::portal_overlay::top_stacked_panel_z();
+                    let handlers = (*self.state.borrow()).as_ref().and_then(|st| {
+                        super::tree_hit::focused_escape_handlers(&st.root_element, &fid, panel_z)
+                    });
+                    let closed = super::tree_hit::run_focused_escape_or_close_overlay(
+                        handlers.as_ref(),
+                        &event,
+                    ) || crate::app::navigator::try_pop_active();
                     if closed {
                         if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                             st.window.request_redraw();
@@ -664,9 +693,16 @@ impl super::App {
                 // and never reach the list. Do **not** fall through to Space/Enter→click
                 // (that would swallow Space in the field).
                 if allow_primary_tree {
-                    let key_handlers = (*self.state.borrow()).as_ref().and_then(|st| {
-                        super::tree_hit::focused_key_handlers(&st.root_element, &fid)
-                    });
+                    // Escape presses were already dispatched. Releases must not run
+                    // the callback either: clear-on-press must not dismiss-on-release.
+                    let key_handlers = if matches!(event.logical_key, Key::Named(NamedKey::Escape))
+                    {
+                        None
+                    } else {
+                        (*self.state.borrow()).as_ref().and_then(|st| {
+                            super::tree_hit::focused_key_handlers(&st.root_element, &fid)
+                        })
+                    };
                     if let Some(handlers) = key_handlers {
                         let handled = if editing {
                             super::tree_hit::run_focused_keydown_only(&handlers, &event)
@@ -859,7 +895,7 @@ impl super::App {
                                                         let cs = crate::utils::text_field::load_text_cursors(
                                                             rest, &s,
                                                         );
-                                                        let cs = crate::utils::text_multi_cursor::insert_at_cursors(
+                                                        let (cs, edits) = crate::utils::text_multi_cursor::insert_at_cursors_with_edits(
                                                             &mut s, cs, &text,
                                                         );
                                                         commit_multi_edit(
@@ -867,6 +903,7 @@ impl super::App {
                                                             val_sig,
                                                             s,
                                                             cs,
+                                                            edits,
                                                             crate::utils::text_edit_history::EditKind::Replace,
                                                         );
                                                     }
@@ -918,8 +955,8 @@ impl super::App {
                                                     clipboard_set_text(&payload);
                                                 }
                                             }
-                                            let cs =
-                                                crate::utils::text_multi_cursor::insert_at_cursors(
+                                            let (cs, edits) =
+                                                crate::utils::text_multi_cursor::insert_at_cursors_with_edits(
                                                     &mut s, cs, "",
                                                 );
                                             commit_multi_edit(
@@ -927,6 +964,7 @@ impl super::App {
                                                 val_sig,
                                                 s,
                                                 cs,
+                                                edits,
                                                 crate::utils::text_edit_history::EditKind::Replace,
                                             );
                                         } else if let Some((lo, hi)) =
@@ -1211,13 +1249,16 @@ impl super::App {
                                 Key::Named(NamedKey::Delete) => {
                                     let mut s = val_sig.get();
                                     let cs = crate::utils::text_field::load_text_cursors(rest, &s);
-                                    let cs =
-                                        crate::utils::text_multi_cursor::delete_forward(&mut s, cs);
+                                    let (cs, edits) =
+                                        crate::utils::text_multi_cursor::delete_forward_with_edits(
+                                            &mut s, cs,
+                                        );
                                     commit_multi_edit(
                                         rest,
                                         val_sig,
                                         s,
                                         cs,
+                                        edits,
                                         crate::utils::text_edit_history::EditKind::Delete,
                                     );
                                     nav_handled = true;
@@ -1652,13 +1693,16 @@ impl super::App {
                             if crate::utils::text_field::has_extra_carets(rest) {
                                 let mut s = val_sig.get();
                                 let cs = crate::utils::text_field::load_text_cursors(rest, &s);
-                                let cs =
-                                    crate::utils::text_multi_cursor::delete_backward(&mut s, cs);
+                                let (cs, edits) =
+                                    crate::utils::text_multi_cursor::delete_backward_with_edits(
+                                        &mut s, cs,
+                                    );
                                 commit_multi_edit(
                                     rest,
                                     val_sig,
                                     s,
                                     cs,
+                                    edits,
                                     crate::utils::text_edit_history::EditKind::Delete,
                                 );
                             } else {
@@ -1752,7 +1796,7 @@ impl super::App {
                                 };
                                 if !text.is_empty() {
                                     let cs = crate::utils::text_field::load_text_cursors(rest, &s);
-                                    let cs = crate::utils::text_multi_cursor::insert_at_cursors(
+                                    let (cs, edits) = crate::utils::text_multi_cursor::insert_at_cursors_with_edits(
                                         &mut s, cs, &text,
                                     );
                                     commit_multi_edit(
@@ -1760,6 +1804,7 @@ impl super::App {
                                         val_sig,
                                         s,
                                         cs,
+                                        edits,
                                         crate::utils::text_edit_history::EditKind::Insert,
                                     );
                                 }

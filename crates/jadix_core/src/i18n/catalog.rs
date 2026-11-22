@@ -54,6 +54,7 @@ impl MessageBundle {
     /// Parse JSON object (nested objects flatten with `.`).
     pub fn from_json(locale: impl Into<Locale>, src: &str) -> Result<Self, String> {
         let value: serde_json::Value = serde_json::from_str(src).map_err(|e| e.to_string())?;
+        if !value.is_object() { return Err("translation root must be a JSON object".into()); }
         let mut bundle = Self::new(locale);
         flatten_json("", &value, &mut bundle.messages);
         Ok(bundle)
@@ -156,7 +157,12 @@ impl Catalog {
     }
 
     pub fn get(&self, locale: &Locale, key: &str) -> Option<&str> {
-        for candidate in locale.fallback_chain() {
+        self.get_language(locale, key).or_else(|| self.get_language(&Locale::en(), key))
+    }
+
+    /// Resolve the requested language without prematurely selecting English.
+    pub(crate) fn get_language(&self, locale: &Locale, key: &str) -> Option<&str> {
+        for candidate in locale.fallback_chain().into_iter().filter(|c| c.language() == locale.language()) {
             for bundle in &self.bundles {
                 if bundle.locale() == &candidate {
                     if let Some(msg) = bundle.get(key) {
@@ -174,6 +180,12 @@ impl Catalog {
             }
         }
         None
+    }
+
+    /// Stable, sorted catalog locales for language pickers and preference negotiation.
+    pub fn locales(&self) -> Vec<String> {
+        let mut result = self.bundles.iter().map(|b| b.locale().tag()).collect::<Vec<_>>();
+        result.sort(); result.dedup(); result
     }
 
     pub fn clear(&mut self) {

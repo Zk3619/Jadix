@@ -259,6 +259,30 @@ pub(crate) fn clipboard_get_text() -> Option<String> {
     hooks::clipboard_get_text()
 }
 
+pub(crate) fn clipboard_get_html() -> Option<String> {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    return desktop::clipboard_get_html();
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    None
+}
+
+pub(crate) fn clipboard_set_text_and_html(text: &str, html: Option<&str>) -> bool {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    return desktop::clipboard_set_text_and_html(text, html);
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (text, html);
+        false
+    }
+}
+
+pub(crate) fn clipboard_set_html(html: &str) {
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+    desktop::clipboard_set_html(html);
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let _ = html;
+}
+
 pub(crate) fn edit_shortcut_modifiers(modifiers: &ModifiersState) -> bool {
     hooks::edit_shortcut_modifiers(modifiers)
 }

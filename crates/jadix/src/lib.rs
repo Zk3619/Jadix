@@ -37,6 +37,8 @@ pub mod core;
 pub use jadix_core::environment;
 #[cfg(feature = "gpu")]
 pub use jadix_core::presentation;
+pub use jadix_core::shortcut;
+pub use jadix_core::text_filter;
 #[cfg(feature = "gpu")]
 pub mod layout;
 #[cfg(feature = "gpu")]
@@ -67,9 +69,11 @@ pub mod authoring;
 #[path = "../../jadix_components/src/components/mod.rs"]
 #[cfg(feature = "gpu")]
 pub mod components;
+#[cfg(all(test, feature = "product-tests", feature = "gpu"))]
+#[path = "../../jadix_components/src/emoji_picker.rs"]
+pub mod emoji_picker;
 #[cfg(feature = "i18n")]
-/// Locale overlays, ICU-lite format, TOML catalogs. Off by default; see [`tr_default`].
-#[cfg(feature = "gpu")]
+/// Shared locale overlays, ICU formatters and catalogs.
 pub mod i18n;
 /// 可选运行时日志（`--features runtime-logging`）：控制台 + 应用数据目录日志文件，支持 `JADIX_LOG_FILE` / `JADIX_LOG_DIR` 覆盖。
 #[cfg(feature = "gpu")]
@@ -193,13 +197,11 @@ macro_rules! ui {
 }
 
 /// `true` when `src/i18n` (catalogs / locale overlay) is compiled in.
-#[cfg(feature = "gpu")]
 pub const fn i18n_enabled() -> bool {
     cfg!(feature = "i18n")
 }
 
 /// `{name}` substitution for [`tr_with_default`] when feature `i18n` is off.
-#[cfg(feature = "gpu")]
 pub(crate) fn i18n_interpolate(template: &str, args: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
@@ -231,7 +233,6 @@ pub(crate) fn i18n_interpolate(template: &str, args: &[(&str, &str)]) -> String 
 /// With `--features i18n` this registers **en-US** then translates. Without the
 /// feature it returns `en_us`. Jadix widgets that ship Chinese use [`tr_default_zh`].
 /// Optional third locale at the call site: [`tr_default!`].
-#[cfg(feature = "gpu")]
 pub fn tr_default(key: &str, en_us: &str) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -245,7 +246,6 @@ pub fn tr_default(key: &str, en_us: &str) -> String {
 }
 
 /// Jadix component chrome: register **en-US** and **zh-CN**, then look up.
-#[cfg(feature = "gpu")]
 pub fn tr_default_zh(key: &str, en_us: &str, zh_cn: &str) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -263,7 +263,6 @@ pub fn tr_default_zh(key: &str, en_us: &str, zh_cn: &str) -> String {
 }
 
 /// [`tr_default`] with named `{placeholder}` args.
-#[cfg(feature = "gpu")]
 pub fn tr_with_default(key: &str, en_us: &str, args: &[(&str, &str)]) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -277,7 +276,6 @@ pub fn tr_with_default(key: &str, en_us: &str, args: &[(&str, &str)]) -> String 
 }
 
 /// [`tr_default_zh`] with named `{placeholder}` args.
-#[cfg(feature = "gpu")]
 pub fn tr_with_default_zh(key: &str, en_us: &str, zh_cn: &str, args: &[(&str, &str)]) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -297,7 +295,6 @@ pub fn tr_with_default_zh(key: &str, en_us: &str, zh_cn: &str, args: &[(&str, &s
     }
 }
 
-#[cfg(feature = "gpu")]
 thread_local! {
     static CHROME_LOCALE: std::cell::RefCell<String> = std::cell::RefCell::new(
         std::env::var("JADIX_LOCALE").unwrap_or_else(|_| "en-US".into()).to_ascii_lowercase()
@@ -305,7 +302,6 @@ thread_local! {
 }
 
 /// Lightweight component language, available without the full i18n feature.
-#[cfg(feature = "gpu")]
 pub fn chrome_locale() -> String {
     #[cfg(feature = "i18n")]
     {
@@ -318,16 +314,15 @@ pub fn chrome_locale() -> String {
 }
 
 /// Sets component language; with i18n enabled this also selects the catalog locale.
-#[cfg(feature = "gpu")]
 pub fn set_chrome_locale(tag: &str) {
     CHROME_LOCALE.with(|locale| *locale.borrow_mut() = tag.to_ascii_lowercase());
     #[cfg(feature = "i18n")]
     crate::i18n::set_locale(tag);
+    #[cfg(feature = "gpu")]
     crate::app::runtime::request_redraw_all();
 }
 
 /// First weekday: 0 = Sunday. With `i18n`, follows CLDR / ICU for the active locale.
-#[cfg(feature = "gpu")]
 pub fn first_weekday() -> u32 {
     #[cfg(feature = "i18n")]
     {
@@ -340,7 +335,6 @@ pub fn first_weekday() -> u32 {
 }
 
 /// `true` when the active locale is RTL (Arabic, Hebrew, …).
-#[cfg(feature = "gpu")]
 pub fn chrome_rtl() -> bool {
     #[cfg(feature = "i18n")]
     {
@@ -353,7 +347,6 @@ pub fn chrome_rtl() -> bool {
 }
 
 /// Chevron name for previous/next chrome (flips in RTL).
-#[cfg(feature = "gpu")]
 pub(crate) fn chrome_nav_chevron(previous: bool) -> &'static str {
     match (chrome_rtl(), previous) {
         (false, true) | (true, false) => "chevron-left",
@@ -362,7 +355,6 @@ pub(crate) fn chrome_nav_chevron(previous: bool) -> &'static str {
 }
 
 #[cfg(not(feature = "i18n"))]
-#[cfg(feature = "gpu")]
 const ENGLISH_MONTHS: [&str; 12] = [
     "January",
     "February",
@@ -379,13 +371,11 @@ const ENGLISH_MONTHS: [&str; 12] = [
 ];
 
 #[cfg(not(feature = "i18n"))]
-#[cfg(feature = "gpu")]
 fn english_month(month: u32) -> &'static str {
     ENGLISH_MONTHS[month.saturating_sub(1).min(11) as usize]
 }
 
 /// Long date in the active locale (`August 14, 2026` / `2026年8月14日`).
-#[cfg(feature = "gpu")]
 pub fn format_date_long(year: i32, month: u32, day: u32) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -398,7 +388,6 @@ pub fn format_date_long(year: i32, month: u32, day: u32) -> String {
 }
 
 /// Year-month caption in the active locale (`August 2026` / `2026年8月`).
-#[cfg(feature = "gpu")]
 pub fn format_year_month(year: i32, month: u32) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -411,7 +400,6 @@ pub fn format_year_month(year: i32, month: u32) -> String {
 }
 
 /// Date + time in the active locale (no timezone conversion).
-#[cfg(feature = "gpu")]
 pub fn format_datetime(
     year: i32,
     month: u32,
@@ -435,7 +423,6 @@ pub fn format_datetime(
 
 /// `tr_default!("key", "English")` or `tr_default!("key", "English", "中文")`.
 #[macro_export]
-#[cfg(feature = "gpu")]
 macro_rules! tr_default {
     ($key:expr, $en:expr $(,)?) => {
         $crate::tr_default($key, $en)
@@ -447,7 +434,6 @@ macro_rules! tr_default {
 
 /// `tr_with_default!("key", "Hello {name}", args)` or with a zh-CN template before `args`.
 #[macro_export]
-#[cfg(feature = "gpu")]
 macro_rules! tr_with_default {
     ($key:expr, $en:expr, $args:expr $(,)?) => {
         $crate::tr_with_default($key, $en, $args)
@@ -462,17 +448,9 @@ macro_rules! tr_with_default {
 /// Requires `--features i18n` for overlay lookup. Without the feature, returns
 /// the key (or interpolates `{name}` in the key string).
 #[macro_export]
-#[cfg(feature = "gpu")]
 macro_rules! t {
     ($key:expr) => {{
-        #[cfg(feature = "i18n")]
-        {
-            $crate::i18n::tr($key)
-        }
-        #[cfg(not(feature = "i18n"))]
-        {
-            ::std::string::String::from($key)
-        }
+        $crate::__translate($key, &[])
     }};
     ($key:expr, $($name:ident = $val:expr),+ $(,)?) => {{
         let __jadix_i18n_vals = [$($crate::__t_arg($val)),+];
@@ -482,20 +460,19 @@ macro_rules! t {
             .zip(__jadix_i18n_vals.iter())
             .map(|(n, v)| (*n, v.as_str()))
             .collect();
-        #[cfg(feature = "i18n")]
-        {
-            $crate::i18n::tr_with($key, &__jadix_i18n_pairs)
-        }
-        #[cfg(not(feature = "i18n"))]
-        {
-            let _ = __jadix_i18n_pairs;
-            ::std::string::String::from($key)
-        }
+        $crate::__translate($key, &__jadix_i18n_pairs)
     }};
 }
 
 #[doc(hidden)]
-#[cfg(feature = "gpu")]
+pub fn __translate(key: &str, args: &[(&str, &str)]) -> String {
+    #[cfg(feature = "i18n")]
+    { crate::i18n::tr_with(key, args) }
+    #[cfg(not(feature = "i18n"))]
+    { i18n_interpolate(key, args) }
+}
+
+#[doc(hidden)]
 pub fn __t_arg(v: impl ToString) -> String {
     v.to_string()
 }

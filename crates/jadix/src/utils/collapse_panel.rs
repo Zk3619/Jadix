@@ -21,6 +21,7 @@ use crate::utils::panel_presence::{
     sync_panel_presence, tick_panel_cells, use_panel_presence, PanelPresence, SyncPolicy,
 };
 use crate::utils::presence::PresencePhase;
+use jadix_animation::{clock::css_timeline_now_ms, Spring, SpringPhysics};
 
 /// ShadCN 同形不同名：`collapsible-down/up` 与 `accordion-down/up`。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,7 +47,7 @@ impl CollapseKeyframes {
 const PANEL_EXIT: Duration = Duration::from_millis(200);
 
 thread_local! {
-    static PANEL_PRESENCE_REGISTRY: RefCell<Vec<Rc<RefCell<PanelPresenceCell<()>>>>> =
+    static PANEL_PRESENCE_REGISTRY: RefCell<Vec<Rc<RefCell<PanelPresenceCell<CollapsePanelState>>>>> =
         const { RefCell::new(Vec::new()) };
     static PENDING_UNMOUNTS: RefCell<Vec<CollapsePanelPresence>> =
         const { RefCell::new(Vec::new()) };
@@ -54,7 +55,20 @@ thread_local! {
 
 use crate::utils::panel_presence::PanelPresenceCell;
 
-pub type CollapsePanelPresence = PanelPresence<()>;
+#[derive(Default)]
+pub struct CollapsePanelState {
+    spring: Option<SpringPhysics>,
+    run: Option<CollapseSpringRun>,
+}
+
+struct CollapseSpringRun {
+    spring: Spring,
+    physics: SpringPhysics,
+    started_ms: f64,
+    target: f32,
+}
+
+pub type CollapsePanelPresence = PanelPresence<CollapsePanelState>;
 
 /// 按稳定 `key` 取（或建）一块面板 presence。多实例须带实例前缀。
 pub fn use_collapse_panel_presence(key: &str) -> CollapsePanelPresence {
@@ -62,7 +76,7 @@ pub fn use_collapse_panel_presence(key: &str) -> CollapsePanelPresence {
         &format!("__jadix_collapse_panel:{key}"),
         &format!("__jadix_collapse_mounted:{key}"),
         PANEL_EXIT,
-        || (),
+        CollapsePanelState::default,
         |rc| {
             PANEL_PRESENCE_REGISTRY.with(|r| {
                 let mut v = r.borrow_mut();
@@ -80,8 +94,28 @@ pub fn use_collapse_panel_presence(key: &str) -> CollapsePanelPresence {
 }
 
 impl CollapsePanelPresence {
+    /// Opt into physical height reveal. Invalid/non-dissipating physics use the
+    /// CSS default. `None` retains the existing keyframe behavior.
+    pub fn set_reveal_spring(&self, physics: Option<SpringPhysics>) {
+        self.cell.borrow_mut().spring = physics.map(|p| {
+            if [p.stiffness, p.damping, p.mass]
+                .iter()
+                .all(|v| v.is_finite() && *v > 0.0)
+            {
+                p
+            } else {
+                SpringPhysics::default_css()
+            }
+        });
+    }
+
+    pub fn has_reveal_spring(&self) -> bool {
+        self.cell.borrow().spring.is_some()
+    }
+
     /// CSS 退场播完：立刻 Absent，下一帧 drain 卸树。
     pub fn finish_exit(&self) {
+        self.cell.borrow_mut().run = None;
         self.force_absent_flags();
         PENDING_UNMOUNTS.with(|q| q.borrow_mut().push(self.clone()));
         crate::app::runtime::request_redraw();
@@ -313,6 +347,94 @@ fn max_height_is_auto(el: &Element) -> bool {
     )
 }
 
+fn apply_collapse_spring(
+    el: &mut Element,
+    presence: &CollapsePanelPresence,
+) -> CollapseHeightEffect {
+    let exiting = presence.phase() == PresencePhase::Exiting;
+    let (enter, exit) = presence.begin_frame_flags(!exiting, exiting);
+    let height = panel_content_height(el);
+    if enter && height < 1.0 && !crate::style::prefers_reduced_motion() {
+        el.style.max_size.height = Dimension::auto();
+        el.style.opacity = 0.0;
+        return CollapseHeightEffect::Measuring;
+    }
+    presence.clear_needs_enter();
+    el.style.opacity = 1.0;
+    let target = if exiting { 0.0 } else { height };
+    let now = css_timeline_now_ms();
+    let mut state = presence.cell.borrow_mut();
+    let physics = state.spring.expect("spring selected by caller");
+    if !enter && !exit && state.run.is_none() {
+        return if exiting {
+            CollapseHeightEffect::FinishedExit
+        } else {
+            el.style.max_size.height = Dimension::auto();
+            state.enter_active = false;
+            CollapseHeightEffect::Idle
+        };
+    }
+    let restart = enter
+        || exit
+        || state
+            .run
+            .as_ref()
+            .is_some_and(|run| run.physics != physics || (run.target - target).abs() > 0.5);
+    if restart {
+        let (from, velocity) = if let Some(run) = &state.run {
+            let sample = run.spring.next((now - run.started_ms).max(0.0) as f32);
+            (sample.value, sample.velocity)
+        } else if enter {
+            (0.0, 0.0)
+        } else {
+            (
+                crate::layout::dim_length_px(el.style.max_size.height).unwrap_or(height),
+                0.0,
+            )
+        };
+        clear_motion(el);
+        el.style.animations.clear();
+        reset_anim_snapshot(el);
+        state.run = Some(CollapseSpringRun {
+            spring: Spring::from_physics(from, target, velocity, physics).with_rest(0.5, 0.1),
+            physics,
+            started_ms: now,
+            target,
+        });
+    }
+    let run = state.run.as_ref().expect("active collapse spring");
+    let elapsed = (now - run.started_ms).max(0.0) as f32;
+    let sample = run.spring.next(elapsed);
+    // A pathological but finite author configuration must not retain a closed
+    // subtree forever. This is a safety ceiling, not the animation duration.
+    let done = sample.done
+        || !sample.value.is_finite()
+        || elapsed >= 20_000.0
+        || crate::style::prefers_reduced_motion();
+    el.style.max_size.height = if done && !exiting {
+        Dimension::auto()
+    } else {
+        // Clip to the natural extent: overshoot must not become the next
+        // layout pass's intrinsic height and move the spring's own target.
+        Dimension::length(if done {
+            target
+        } else {
+            sample.value.clamp(0.0, height)
+        })
+    };
+    if done {
+        state.run = None;
+        state.enter_active = false;
+        if exiting {
+            CollapseHeightEffect::FinishedExit
+        } else {
+            CollapseHeightEffect::Idle
+        }
+    } else {
+        CollapseHeightEffect::Animating
+    }
+}
+
 fn mark_layout(el: &Element, layout_tree: &mut LayoutTree) -> LayoutStatus {
     if el.layout_node.is_some() {
         layout_tree.update_taffy_node_style(el);
@@ -333,6 +455,7 @@ pub fn apply_collapse_motion(
 ) -> LayoutStatus {
     let phase = presence.phase();
     if !phase.is_mounted() {
+        presence.cell.borrow_mut().run = None;
         let mut layout = false;
         if el.style.display != Display::None {
             el.style.display = Display::None;
@@ -378,7 +501,12 @@ pub fn apply_collapse_motion(
     }
 
     let previous_max_height = el.style.max_size.height;
-    let effect = apply_collapse_height(el, presence, keys, CollapseHeightOpts::default());
+    let effect = if presence.has_reveal_spring() {
+        apply_collapse_spring(el, presence)
+    } else {
+        presence.cell.borrow_mut().run = None;
+        apply_collapse_height(el, presence, keys, CollapseHeightOpts::default())
+    };
     if effect == CollapseHeightEffect::Measuring {
         el.set_attr("jadix_collapse_measuring", "1");
     } else {

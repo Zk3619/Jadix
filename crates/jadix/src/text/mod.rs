@@ -50,13 +50,14 @@ pub use diff::{DiffDocument, DiffLineKind, DiffMode, DiffRow};
 pub use document::{DocumentEditError, TextDocument};
 #[cfg(feature = "document-editing")]
 pub use document_editor::{
-    DocumentEditMode, DocumentEditorSnapshot, DocumentEditorState, DocumentListKind, DocumentMark,
-    DocumentSelection,
+    DocumentEditMode, DocumentEditorSnapshot, DocumentEditorState, DocumentFragmentTransform,
+    DocumentListKind, DocumentMark, DocumentPasteContent, DocumentPasteRequest,
+    DocumentPasteTransform, DocumentSelection,
 };
 #[cfg(feature = "document")]
 pub use document_layout::{DocumentHeightIndex, DocumentScrollAnchor};
 #[cfg(feature = "markdown")]
-pub use markdown::parse_markdown_blocks;
+pub use markdown::{document_inline_spans, parse_markdown_blocks};
 #[cfg(feature = "markdown")]
 pub use markdown_inline::parse_markdown_inline;
 pub use measure::{
@@ -75,8 +76,8 @@ pub use molecule::{Molecule, MoleculeAtom, MoleculeBond, MoleculeData};
 pub use rich_text::{RichTextBlock, RichTextSpan};
 #[cfg(feature = "markdown")]
 pub use semantic_document::{
-    Document, DocumentAlignment, DocumentBlock, DocumentBlockKind, DocumentFormat, DocumentInline,
-    DocumentInlineKind, DocumentInlineStyle,
+    is_safe_document_destination, Document, DocumentAlignment, DocumentBlock, DocumentBlockKind,
+    DocumentFormat, DocumentInline, DocumentInlineKind, DocumentInlineStyle,
 };
 pub use uax14_wrap::{needs_logical_prewrap, soft_wrap_logical};
 pub use visual_lines::{

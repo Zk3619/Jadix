@@ -1,9 +1,52 @@
 use super::*;
 use crate::app::reactive::{immediate_region, reactive_view, reset_registered_anchors};
 use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
-use crate::core::reactivity::{create_effect, create_root, OwnerHandle};
+use crate::core::reactivity::{OwnerHandle, create_effect, create_root};
 use crate::core::tree::{Element, LayoutTree};
 use std::rc::Rc;
+
+#[test]
+#[cfg(feature = "product-tests")]
+fn virtual_list_navigation_wakes_only_its_owning_window_and_expires_with_owner() {
+    use crate::components::virtual_list::{ListScrollAlign, VirtualListHandle, virtual_list};
+    reset();
+    let handle = VirtualListHandle::default();
+    let (owner, tree) = {
+        let _scope = crate::app::window_scope::enter(WindowScope::Secondary(77));
+        create_root(|| {
+            let tree: Element = virtual_list("window-navigation")
+                .handle(handle.clone())
+                .item_count(100)
+                .into();
+            tree
+        })
+    };
+    {
+        let _scope = crate::app::window_scope::enter(WindowScope::Secondary(88));
+        assert!(handle.scroll_to_index(50, ListScrollAlign::Center, 0.0));
+        assert!(pending(WindowScope::Secondary(77)));
+        assert!(!pending(WindowScope::Secondary(88)));
+        assert!(!pending(WindowScope::Primary));
+    }
+    {
+        let _scope = crate::app::window_scope::enter(WindowScope::Secondary(77));
+        let stats = invalidation_stats();
+        begin_frame();
+        assert_eq!(
+            invalidation_stats().layout_subtrees,
+            stats.layout_subtrees + 1
+        );
+        assert!(!pending(WindowScope::Secondary(77)));
+    }
+    drop(owner);
+    assert!(
+        !handle.scroll_to_end(),
+        "retained tree cannot revive disposed signals"
+    );
+    assert!(!pending(WindowScope::Secondary(77)));
+    drop(tree);
+    reset();
+}
 
 fn harness(mut render: impl FnMut() -> Element + 'static) -> (OwnerHandle, Rc<RefCell<Element>>) {
     reset();

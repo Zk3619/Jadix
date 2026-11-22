@@ -464,6 +464,9 @@ pub fn ensure_text_xform_texture_spans(
         span.size.map(|v| v.to_bits()).hash(&mut hasher);
         (span.kind as u8).hash(&mut hasher);
         span.background.hash(&mut hasher);
+        span.background_outsets()
+            .map(f32::to_bits)
+            .hash(&mut hasher);
         span.padding_x.to_bits().hash(&mut hasher);
         span.italic.hash(&mut hasher);
         span.monospace.hash(&mut hasher);
@@ -1231,14 +1234,15 @@ fn paint_span_chrome(
             let width = (max_x - min_x).round().max(1.0) as i32;
             if let Some(bg) = span.background {
                 let pad = span.padding_x * dpr;
+                let [top, bottom] = span.background_outsets().map(|v| v * dpr);
                 fill_rect_rgba(
                     rgba,
                     tw,
                     th,
                     (min_x - pad).round() as i32 + origin_x,
-                    line_top.round() as i32 + origin_y,
+                    (line_top - top).round() as i32 + origin_y,
                     (max_x - min_x + 2.0 * pad).round().max(1.0) as i32,
-                    line_height.round().max(1.0) as i32,
+                    (line_height + top + bottom).round().max(1.0) as i32,
                     bg,
                 );
             }

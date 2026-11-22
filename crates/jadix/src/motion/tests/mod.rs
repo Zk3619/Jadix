@@ -842,6 +842,39 @@ fn motion_layout_id_interrupts_from_last_presentation_and_copies_spring_velocity
 }
 
 #[test]
+fn motion_layout_id_handoff_ignores_unpresented_layouts() {
+    let mut tree = LayoutTree::new();
+    tree.defer_initial_layout_motion();
+    let source = LayoutMotion::new(LayoutAnimation::Both).transition(linear());
+    let mut root = shared_layout_scene(false, &source);
+    tree.build_and_layout(&mut root, 500.0, 240.0, [-1.0; 2]);
+    tree.commit_presentation();
+    let destination = LayoutMotion::new(LayoutAnimation::Both).transition(linear());
+    root = shared_layout_scene(true, &destination);
+    tree.build_and_layout(&mut root, 500.0, 240.0, [-1.0; 2]);
+    tick_animations(0.05);
+    let middle = tree.build_and_layout(&mut root, 500.0, 240.0, [-1.0; 2]);
+    close(shared_chip_bounds(&middle)[0], 175.0);
+    // A different owner must start at the actual last surface frame, not `middle`.
+    let replacement = LayoutMotion::new(LayoutAnimation::Both).transition(linear());
+    root = shared_layout_scene(true, &replacement);
+    let frame = tree.build_and_layout(&mut root, 500.0, 240.0, [-1.0; 2]);
+    close(shared_chip_bounds(&frame)[0], 30.0);
+    tick_animations(0.05);
+    let frame = tree.build_and_layout(&mut root, 500.0, 240.0, [-1.0; 2]);
+    close(shared_chip_bounds(&frame)[0], 175.0);
+    tree.commit_presentation();
+    // Failed/measurement-only empty passes do not age the committed handoff out.
+    for _ in 0..3 {
+        tree.build_and_layout(&mut Element::new(), 500.0, 240.0, [-1.0; 2]);
+    }
+    let returning = LayoutMotion::new(LayoutAnimation::Both).transition(linear());
+    root = shared_layout_scene(false, &returning);
+    let frame = tree.build_and_layout(&mut root, 500.0, 240.0, [-1.0; 2]);
+    close(shared_chip_bounds(&frame)[0], 175.0);
+}
+
+#[test]
 fn motion_layout_id_is_window_local_and_duplicates_do_not_handoff() {
     let source = LayoutMotion::new(LayoutAnimation::Both);
     let mut root = shared_layout_scene(false, &source);

@@ -269,6 +269,9 @@ impl<Key: Clone + Ord> Tree<Key> {
     pub fn focused(&self) -> Option<&Key> {
         self.focused.as_ref()
     }
+    pub fn visible_index(&self, key: &Key) -> Option<usize> {
+        self.positions.get(key).copied()
+    }
     pub fn selected(&self) -> &BTreeSet<Key> {
         &self.selected
     }

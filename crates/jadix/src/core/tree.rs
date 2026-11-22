@@ -1097,6 +1097,7 @@ pub struct ElementInner {
     /// Layout-pass used sizes for `max-height: auto` → content px keyframes.
     pub used_layout: crate::style::UsedLayout,
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
+    pub on_accessibility_action: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(&str, Option<f64>) -> bool>>>,
     pub on_accessibility_value: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(f64) -> bool>>>,
     pub on_wheel: Option<crate::app::pointer_events::WheelHandler>,
     pub on_hover: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
@@ -1121,6 +1122,8 @@ pub struct ElementInner {
     pub on_mousemove: Option<
         std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
     >,
+    /// Painted-link observations, including stationary-pointer redraws.
+    pub(crate) on_text_link_hover: Option<crate::app::pointer_events::PointerHandler>,
     /// DOM `mouseover` (bubbles; [`crate::app::pointer_events::MouseEvent::related_target`] is the node being left).
     pub on_mouseover: Option<
         std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
@@ -1268,6 +1271,7 @@ fn blank_inner() -> ElementInner {
         specified_present: Default::default(),
         used_layout: Default::default(),
         on_click: None,
+        on_accessibility_action: None,
         on_accessibility_value: None,
         on_wheel: None,
         on_hover: None,
@@ -1276,6 +1280,7 @@ fn blank_inner() -> ElementInner {
         on_context_menu: None,
         on_double_click: None,
         on_mousemove: None,
+        on_text_link_hover: None,
         on_mouseover: None,
         on_mouseout: None,
         on_mouseenter: None,
@@ -1352,12 +1357,14 @@ fn alloc_inner() -> Box<ElementInner> {
 fn recycle_inner_box(mut inner: Box<ElementInner>) {
     #[cfg(all(debug_assertions, feature = "devtools"))]
     crate::app::devtools::forget_instance(inner.inspector_instance_id);
+    // Callbacks can own Elements whose Drop re-enters this pool. Release them
+    // before borrowing the slab, including when its capacity is already full.
+    *inner = blank_inner();
     let _ = INNER_SLAB.try_with(|cell| {
         let mut slab = cell.borrow_mut();
         if slab.free.len() >= INNER_SLAB_CAP {
             return;
         }
-        *inner = blank_inner();
         slab.free.push(inner);
     });
 }
@@ -2119,6 +2126,19 @@ impl Element {
         self
     }
 
+    /// Activate the click handler on primary press while retaining the current focus.
+    /// Call after installing `on_click`; keyboard and accessibility activation remain available.
+    pub fn activate_on_press(mut self) -> Self {
+        self.attrs.insert("jadix_activate_on_press".into(), "1".into());
+        self
+    }
+
+    /// Handle an advertised shared accessibility action in its domain value space.
+    pub fn on_accessibility_action(mut self, handler: impl FnMut(&str, Option<f64>) -> bool + 'static) -> Self {
+        self.on_accessibility_action = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
     /// Handle a finite numeric value requested by assistive technology.
     /// Return whether the control accepted it; clamp and step in the control's value domain.
     pub fn on_accessibility_value(mut self, handler: impl FnMut(f64) -> bool + 'static) -> Self {
@@ -2146,6 +2166,66 @@ impl Element {
         handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
     ) -> Self {
         self.on_mouseup = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
+    /// Handle validated inline link activation on target/bubble mouseup.
+    /// Chains the currently installed mouseup handler; applications own navigation.
+    pub fn on_text_link(
+        mut self,
+        mut handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,
+    ) -> Self {
+        let previous = self.on_mouseup.take();
+        self.on_mouseup(move |event| {
+            if let Some(previous) = &previous {
+                previous.borrow_mut()(event);
+            }
+            if event.phase != crate::app::pointer_events::EventPhase::Capture
+                && !event.is_consumed()
+                && !event.default_prevented()
+                && event.text_link.is_some()
+            {
+                handler(event);
+            }
+        })
+    }
+
+    /// Observe changes to the painted inline link under the pointer.
+    /// `hovered_text_link == None` dismisses the preview on plain text, leave or
+    /// press. Repeated moves within the same link and visual node do not call
+    /// the handler; switching nodes or moving its bounds refreshes the preview.
+    /// Also reconciles after layout, scroll or document changes with a stationary
+    /// pointer, without synthesizing `mousemove`. Chains prior link observers
+    /// and respects capture/propagation/default guards.
+    pub fn on_text_link_hover(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,
+    ) -> Self {
+        use crate::app::pointer_events::EventPhase;
+        let mut current = (None, None);
+        let mut handler = handler;
+        let previous = self.on_text_link_hover.take();
+        self.on_text_link_hover = Some(std::rc::Rc::new(std::cell::RefCell::new(
+            move |event: &crate::app::pointer_events::MouseEvent| {
+                if let Some(previous) = &previous {
+                    previous.borrow_mut()(event);
+                }
+                if event.phase == EventPhase::Capture
+                    || event.is_consumed()
+                    || event.default_prevented()
+                {
+                    return;
+                }
+                if current.0 != event.hovered_text_link || current.1 != event.text_link_hover_target
+                {
+                    current = (
+                        event.hovered_text_link.clone(),
+                        event.text_link_hover_target,
+                    );
+                    handler(event);
+                }
+            },
+        )));
         self
     }
 
@@ -3121,6 +3201,16 @@ impl Element {
         self.style.focus_ring_color = Some(color.into_paint_color());
         self
     }
+    pub fn text_appearance(mut self, appearance: jadix_core::presentation::style::TextAppearance) -> Self {
+        self.text_style.apply_presentation_appearance(&appearance);
+        if let Some(sync) = self.input_paint_sync.as_mut() {
+            sync.caret_color = appearance.caret_color;
+            sync.selection_bg = appearance.selection_color;
+        }
+        self.authoring_state.set(appearance);
+        self
+    }
+
     /// CSS `caret-color`. On Input/Textarea this forwards into [`TextEditPaintSync`].
     pub fn caret_color(mut self, color: impl IntoTextColor) -> Self {
         let c = color.into_text_color();

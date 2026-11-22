@@ -549,8 +549,9 @@ fn shape_buffer_to_model(
         shaping,
         None,
     );
-    let tall = (line_height * (text.lines().count().max(1) as f32 + 4.0)).max(line_height + 2.0);
-    buffer.set_size(Some(avail), Some(tall));
+    // This is the complete row model, not a viewport: soft wraps can far exceed
+    // the hard-line count. A finite height would silently truncate layout_runs.
+    buffer.set_size(Some(avail), None);
     buffer.shape_until_scroll(font_system, false);
 
     let mut hard_starts: Vec<usize> = Vec::with_capacity(buffer.lines.len().max(1));
@@ -710,8 +711,9 @@ pub fn visual_selection_highlights(
             shaping,
             None,
         );
-        let tall = (lh * (text.lines().count().max(1) as f32 + 4.0)).max(lh + 2.0);
-        buffer.set_size(Some(avail), Some(tall));
+        // Keep every wrapped row available; the caller clips selection chrome
+        // to its viewport after projecting the complete logical range.
+        buffer.set_size(Some(avail), None);
         buffer.shape_until_scroll(font_system, false);
 
         let mut hard_starts: Vec<usize> = Vec::with_capacity(buffer.lines.len().max(1));

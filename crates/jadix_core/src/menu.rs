@@ -98,11 +98,21 @@ pub fn validate(items: &[MenuItem]) -> Result<(), String> {
     let mut selected = std::collections::HashSet::new();
     let mut pending: Vec<_> = items.iter().map(|i| (i, 0)).collect();
     let mut count = 0;
+    let mut icon_bytes = 0;
     let text = |s: &str| !s.trim().is_empty() && s.len() <= 256 && !s.chars().any(char::is_control);
     while let Some((item, depth)) = pending.pop() {
         count += 1;
         if count > 1024 || depth > 8 {
             return Err("menu exceeds node/depth budget".into());
+        }
+        if let Some(icon) = item.icon() {
+            if icon.source.is_empty()
+                || icon.source.len() > 1024 * 1024 - icon_bytes
+                || icon.source.chars().any(char::is_control)
+            {
+                return Err("invalid menu icon source or menu exceeds icon source budget".into());
+            }
+            icon_bytes += icon.source.len();
         }
         match item {
             MenuItem::Command {
@@ -146,6 +156,13 @@ pub fn validate(items: &[MenuItem]) -> Result<(), String> {
     Ok(())
 }
 
+/// Image source for a menu item, using the same URI syntax as native images.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuIcon {
+    pub source: String,
+    pub template: bool,
+}
+
 /// A command, nested submenu, or separator shared by native and terminal menus.
 #[derive(Clone)]
 pub enum MenuItem {
@@ -156,12 +173,14 @@ pub enum MenuItem {
         /// Muda syntax, e.g. `CmdOrCtrl+Shift+S`.
         accelerator: Option<String>,
         state: MenuState,
+        icon: Option<MenuIcon>,
         on_select: Rc<dyn Fn()>,
     },
     Submenu {
         label: String,
         enabled: bool,
         items: Vec<MenuItem>,
+        icon: Option<MenuIcon>,
     },
     Separator,
 }
@@ -191,6 +210,7 @@ impl MenuItem {
             enabled: true,
             accelerator: None,
             state: MenuState::Plain,
+            icon: None,
             on_select: Rc::new(on_select),
         }
     }
@@ -200,6 +220,24 @@ impl MenuItem {
             label: label.into(),
             enabled: true,
             items,
+            icon: None,
+        }
+    }
+
+    pub fn with_icon(mut self, icon: MenuIcon) -> Self {
+        match &mut self {
+            Self::Command { icon: current, .. } | Self::Submenu { icon: current, .. } => {
+                *current = Some(icon);
+            }
+            Self::Separator => {}
+        }
+        self
+    }
+
+    pub fn icon(&self) -> Option<&MenuIcon> {
+        match self {
+            Self::Command { icon, .. } | Self::Submenu { icon, .. } => icon.as_ref(),
+            Self::Separator => None,
         }
     }
 
@@ -216,6 +254,10 @@ impl MenuItem {
             *accelerator = Some(value.into());
         }
         self
+    }
+    /// Use the same validated stroke for command routing and visible keycaps.
+    pub fn key_chord(self, value: &crate::shortcut::KeyChord) -> Self {
+        self.accelerator(value.to_string())
     }
     pub fn checked(mut self, checked: bool) -> Self {
         if let Self::Command { state, .. } = &mut self {

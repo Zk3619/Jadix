@@ -57,9 +57,9 @@ fn scaled_scrollbar_drag_preserves_the_grab_point_on_both_axes() {
                         ((pointer + delta - track[index] - grab) / span).clamp(0.0, 1.0) * 1000.0;
                     let expected = 400.0 + delta / (200.0 * zoom) * 1000.0;
                     assert!(
-                            (offset - expected).abs() < 0.01,
-                            "zoom={zoom} axis={axis:?} delta={delta}: offset={offset}, expected={expected}"
-                        );
+                        (offset - expected).abs() < 0.01,
+                        "zoom={zoom} axis={axis:?} delta={delta}: offset={offset}, expected={expected}"
+                    );
                     let projected = visual_track[index]
                         + offset / 1000.0 * (visual_track[index + 2] - visual_thumb[index + 2])
                         + visual_thumb[index + 2] * 0.37;

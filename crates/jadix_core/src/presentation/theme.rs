@@ -157,6 +157,10 @@ impl ConsistentTheme {
                 }
             }
             if actionable {
+                let view = style.view.get_or_insert_with(Default::default);
+                if view.control == super::style::ControlAppearance::Native {
+                    view.control = super::style::ControlAppearance::Consistent;
+                }
                 style.min_height = style
                     .min_height
                     .max(self.control_height * environment.font_scale);

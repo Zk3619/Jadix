@@ -14,7 +14,10 @@ mod memory;
 mod scroll;
 mod window;
 
-pub(crate) use clipboard::{clipboard_get_text, clipboard_set_text, edit_shortcut_modifiers};
+pub(crate) use clipboard::{
+    clipboard_get_html, clipboard_get_text, clipboard_set_html, clipboard_set_text,
+    clipboard_set_text_and_html, edit_shortcut_modifiers,
+};
 #[cfg_attr(target_os = "windows", allow(unused_imports))]
 #[cfg(any(debug_assertions, test))]
 pub(crate) use console::{enable_ansi_stderr, local_hms};

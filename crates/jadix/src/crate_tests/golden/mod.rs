@@ -168,12 +168,14 @@ fn golden_component_tabs_two() {
                         TabsTrigger(TabsTriggerProps {
                             value: Some("one".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("A")),
                             base: None,
                         }),
                         TabsTrigger(TabsTriggerProps {
                             value: Some("two".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("B")),
                             base: None,
                         }),

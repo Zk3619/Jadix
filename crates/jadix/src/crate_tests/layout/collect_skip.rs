@@ -247,6 +247,22 @@ fn retained_collect_history_matches_uncached_output() {
 }
 #[test]
 fn retained_collect_structural_history_preserves_hits_and_reclaims_nodes() {
+    // A laid-out parent may also have inherited style changes. Isolate these
+    // payload-only updates so those incidental changes cannot mask a Clean result.
+    for suffix in [false, true] {
+        let mut previous = Element::new().text("same text");
+        let mut next = previous.clone_static_skeleton();
+        if suffix {
+            next.text_shape_suffix = Some(" composition".into());
+        } else {
+            next.text_spans = Some(vec![crate::style::TextSpan::new("same text").size(28.0)]);
+        }
+        assert_eq!(
+            crate::app::state::reconcile_scene_tree(&mut next, &mut previous, &mut Vec::new()),
+            crate::core::tree::LayoutStatus::LayoutChanged,
+            "text payload update must invalidate layout (suffix={suffix})"
+        );
+    }
     fn fixture() -> Element {
         Element::new()
             .w(320.0)
@@ -269,14 +285,18 @@ fn retained_collect_structural_history_preserves_hits_and_reclaims_nodes() {
                     }))
             }))
     }
-    let mut roots = [fixture(), fixture()];
+    // Keep an unbound model: the oracle must allocate a fresh Taffy tree, rather
+    // than sharing the incremental path (and therefore its possible mistakes).
+    let mut model = fixture();
+    let mut roots = [model.clone_static_skeleton(), model.clone_static_skeleton()];
     let mut trees = [LayoutTree::new(), LayoutTree::new()];
     for (root, tree) in roots.iter_mut().zip(&mut trees) {
         tree.build_and_layout(root, 320.0, 240.0, [-1.0; 2]);
     }
     for frame in 0..96 {
-        for root in &mut roots {
-            match frame % 8 {
+        {
+            let root = &mut model;
+            match frame % 16 {
                 1 => root.children.swap(0, 1),
                 2 => root.children[0].children.swap(0, 1),
                 3 => {
@@ -297,15 +317,52 @@ fn retained_collect_structural_history_preserves_hits_and_reclaims_nodes() {
                 ),
                 6 => root.children[2].style.opacity = 0.4,
                 7 => root.children[2].style.opacity = 1.0,
+                8 => root.children[2].children[0].text = Some(format!("changed {frame}")),
+                9 => root.children[2].children[0].text_style.letter_spacing = 4.0,
+                10 => root.children[2].children[0].text_style.letter_spacing = 0.0,
+                11 => root.children[2].children[0].focus_id = None,
+                12 => root.children[2].children[0].focus_id = Some("replacement-focus".into()),
+                14 => {
+                    let leaf = &mut root.children[2].children[0];
+                    leaf.text_spans = Some(crate::style::TextSpan::highlight_matches(
+                        leaf.text.as_deref().unwrap(),
+                        "changed",
+                        [0, 120, 255, 255],
+                    ));
+                }
+                15 => {
+                    let leaf = &mut root.children[2].children[0];
+                    leaf.text_spans = None;
+                    leaf.text_shape_suffix = Some(format!(" {frame}"));
+                }
                 _ => {}
             }
         }
+        let mut next = model.clone_static_skeleton();
+        let mut dirty = Vec::new();
+        let status = crate::app::state::reconcile_scene_tree(&mut next, &mut roots[0], &mut dirty);
+        if matches!(frame % 16, 14 | 15) {
+            assert_ne!(
+                status,
+                crate::core::tree::LayoutStatus::Clean,
+                "rich text updates must schedule a frame: {frame}"
+            );
+        }
+        trees[0].mark_dirty_nodes_in_tree(&next, &dirty.into_iter().collect());
+        roots[0] = next;
+        roots[1] = model.clone_static_skeleton();
+        trees[1] = LayoutTree::new();
         trees[0].set_collect_skip_allowed(frame % 16 != 15);
         trees[1].set_collect_skip_allowed(false);
+        let width = if frame % 16 == 13 { 280.0 } else { 320.0 };
         let a =
-            trees[0].build_and_layout_fast(&mut roots[0], 320.0, 240.0, [-1.0; 2], false, false);
-        let b =
-            trees[1].build_and_layout_fast(&mut roots[1], 320.0, 240.0, [-1.0; 2], false, false);
+            trees[0].build_and_layout_fast(&mut roots[0], width, 240.0, [-1.0; 2], false, false);
+        let b = trees[1].build_and_layout(&mut roots[1], width, 240.0, [-1.0; 2]);
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&a.clip_polys),
+            bytemuck::cast_slice::<_, u8>(&b.clip_polys),
+            "clips frame {frame}"
+        );
         assert_eq!(
             bytemuck::cast_slice::<_, u8>(&a.instances),
             bytemuck::cast_slice::<_, u8>(&b.instances),
@@ -322,14 +379,17 @@ fn retained_collect_structural_history_preserves_hits_and_reclaims_nodes() {
                 .iter()
                 .map(|n| {
                     (
-                        &n.text,
+                        n.text.clone(),
+                        n.shape_suffix.clone(),
+                        n.spans.clone(),
+                        n.style.clone(),
+                        n.clip_bounds,
                         n.x.to_bits(),
                         n.y.to_bits(),
                         n.width.to_bits(),
                         n.height.to_bits(),
                     )
                 })
-                .map(|(text, x, y, w, h)| (text.clone(), x, y, w, h))
                 .collect::<Vec<_>>()
         };
         assert_eq!(texts(&a), texts(&b), "text frame {frame}");

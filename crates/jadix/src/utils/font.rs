@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -364,13 +365,12 @@ fn user_font_family_list() -> Option<String> {
 }
 
 fn first_concrete_family_in_list(db: &Database, family_list: &str) -> Option<&'static str> {
-    for raw_name in family_list.split(',') {
-        let name = raw_name.trim().trim_matches(|c| c == '\'' || c == '"');
-        if name.is_empty() || is_css_generic_family(name) {
+    for (name, quoted) in font_families(family_list) {
+        if !quoted && is_css_generic_family(&name) {
             continue;
         }
-        if family_present(db, name) {
-            return Some(leak_family_name(name));
+        if family_present(db, &name) {
+            return Some(leak_family_name(&name));
         }
     }
     None
@@ -379,11 +379,9 @@ fn first_concrete_family_in_list(db: &Database, family_list: &str) -> Option<&'s
 fn join_css_stack(user: Option<String>, candidates: &[&str], generics: &[&str]) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(user) = user {
-        for raw in user.split(',') {
-            let name = raw.trim();
-            if !name.is_empty() {
-                parts.push(name.to_string());
-            }
+        if !user.trim().is_empty() {
+            // Preserve quoted commas and escape sequences in the authored stack.
+            parts.push(user.trim().to_string());
         }
     }
     for name in candidates {
@@ -819,12 +817,60 @@ fn family_name_present(db: &Database, name: &str) -> bool {
 
 /// True when the list names a concrete face (e.g. `"lucide"`), not only CSS generics.
 fn is_specific_family_request(family_list: &str) -> bool {
-    family_list.split(',').any(|raw| {
-        let name = raw.trim().trim_matches(|c| c == '\'' || c == '"');
-        if name.is_empty() {
-            return false;
+    font_families(family_list).any(|(name, quoted)| quoted || !is_css_generic_family(&name))
+}
+
+/// Borrow ordinary names; allocate only to decode escaped punctuation. Quotes
+/// protect commas and distinguish a concrete family named "serif" from a generic.
+fn font_families(mut list: &str) -> impl Iterator<Item = (Cow<'_, str>, bool)> {
+    std::iter::from_fn(move || loop {
+        if list.is_empty() {
+            return None;
         }
-        !is_css_generic_family(name)
+        let mut quote = None;
+        let mut escaped = false;
+        let mut end = list.len();
+        for (index, ch) in list.char_indices() {
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if Some(ch) == quote {
+                quote = None;
+            } else if quote.is_none() {
+                if ch == ',' {
+                    end = index;
+                    break;
+                }
+                if ch == '\'' || ch == '"' {
+                    quote = Some(ch);
+                }
+            }
+        }
+        let raw = list[..end].trim();
+        list = list.get(end + 1..).unwrap_or_default();
+        let quoted = raw.starts_with(['\'', '"'])
+            && raw.len() >= 2
+            && raw.as_bytes().first() == raw.as_bytes().last();
+        let name = if quoted { &raw[1..raw.len() - 1] } else { raw };
+        if name.is_empty() {
+            continue;
+        }
+        let name = if name.contains('\\') {
+            let mut chars = name.chars();
+            let mut decoded = String::with_capacity(name.len());
+            while let Some(ch) = chars.next() {
+                decoded.push(if ch == '\\' {
+                    chars.next().unwrap_or(ch)
+                } else {
+                    ch
+                });
+            }
+            Cow::Owned(decoded)
+        } else {
+            Cow::Borrowed(name)
+        };
+        return Some((name, quoted));
     })
 }
 
@@ -864,9 +910,7 @@ pub fn resolve_family<'a>(db: &Database, family_list: &'a str) -> Family<'a> {
         !matches!(result, Family::SansSerif) || !is_specific_family_request(family_list);
     if should_cache {
         let to_cache = match result {
-            Family::Name(name) => {
-                ResolvedFamilyCached::Named(Box::leak(name.to_string().into_boxed_str()))
-            }
+            Family::Name(name) => ResolvedFamilyCached::Named(leak_family_name(name)),
             Family::SansSerif => ResolvedFamilyCached::SansSerif,
             Family::Serif => ResolvedFamilyCached::Serif,
             Family::Monospace => ResolvedFamilyCached::Monospace,
@@ -907,14 +951,9 @@ fn map_generic_serif<'a>(db: &Database) -> Family<'a> {
 }
 
 fn resolve_family_uncached<'a>(db: &Database, family_list: &'a str) -> Family<'a> {
-    for raw_name in family_list.split(',').map(|s| s.trim()) {
-        let name = raw_name.trim_matches(|c| c == '\'' || c == '"');
-        if name.is_empty() {
-            continue;
-        }
-
+    for (name, quoted) in font_families(family_list) {
         let lower = name.to_ascii_lowercase();
-        match lower.as_str() {
+        match if quoted { "" } else { lower.as_str() } {
             "sans-serif" | "sans" | "system-ui" | "ui-sans-serif" | "ui-rounded" => {
                 return map_generic_sans(db);
             }
@@ -927,7 +966,7 @@ fn resolve_family_uncached<'a>(db: &Database, family_list: &'a str) -> Family<'a
             _ => {}
         }
 
-        let alias = match lower.as_str() {
+        let alias = match if quoted { "" } else { lower.as_str() } {
             "noto sans cjk" => resolved_noto_sans_cjk_family(db),
             "noto serif cjk" => Some(resolved_default_serif_family(db)),
             "noto emoji" | "noto color emoji" | "emoji" => resolved_emoji_family(db),
@@ -954,9 +993,12 @@ fn resolve_family_uncached<'a>(db: &Database, family_list: &'a str) -> Family<'a
 
         if db
             .faces()
-            .any(|face| face.families.iter().any(|(f, _)| f == name))
+            .any(|face| face.families.iter().any(|(f, _)| f == name.as_ref()))
         {
-            return Family::Name(name);
+            return Family::Name(match name {
+                Cow::Borrowed(name) => name,
+                Cow::Owned(name) => leak_family_name(&name),
+            });
         }
     }
 

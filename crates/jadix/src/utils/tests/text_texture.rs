@@ -759,3 +759,91 @@ fn rich_span_background_is_scaled_once_with_its_glyphs() {
         "background must follow one DPR scale, got {right_edges:?}"
     );
 }
+
+#[test]
+fn rich_span_background_outsets_preserve_glyphs_at_each_dpr() {
+    use crate::style::TextSpan;
+    let color = [30, 90, 200, 255];
+    let plain = TextSpan::new("AAAA").background(color);
+    let padded = plain.clone().background_padding_y(4.0, 2.0);
+    assert_eq!(
+        plain
+            .clone()
+            .background_padding_y(f32::NAN, -1.0)
+            .background_padding_y,
+        [0.0; 2]
+    );
+    for dpr in [1.0, 2.0] {
+        let raster = |span: &TextSpan| {
+            rasterize_rich_text_rgba(
+                std::slice::from_ref(span),
+                20.0,
+                400,
+                [255; 4],
+                120.0,
+                25.0,
+                144.0,
+                49.0,
+                12.0,
+                glyphon::cosmic_text::Align::Left,
+                dpr,
+                0.0,
+                25.0,
+            )
+            .unwrap()
+        };
+        let (w, h, before) = raster(&plain);
+        let (_, _, after) = raster(&padded);
+        let bounds = |pixels: &[u8]| {
+            let rows: Vec<_> = pixels
+                .chunks_exact(4)
+                .enumerate()
+                .filter_map(|(i, p)| (p == color).then_some(i / w as usize))
+                .collect();
+            (
+                *rows.iter().min().unwrap() as i32,
+                *rows.iter().max().unwrap() as i32,
+            )
+        };
+        let (top, bottom) = bounds(&before);
+        assert_eq!(
+            bounds(&after),
+            (top - (4.0 * dpr) as i32, bottom + (2.0 * dpr) as i32)
+        );
+        assert!(bounds(&after).0 > 0 && bounds(&after).1 < h as i32 - 1);
+        let glyph_pixels = |pixels: &[u8]| {
+            pixels
+                .chunks_exact(4)
+                .enumerate()
+                .filter_map(|(i, p)| (p == [255; 4]).then_some(i))
+                .collect::<Vec<_>>()
+        };
+        assert!(!glyph_pixels(&before).is_empty());
+        assert_eq!(glyph_pixels(&before), glyph_pixels(&after));
+        let key = |span: &TextSpan| {
+            ensure_text_xform_texture_spans(
+                std::slice::from_ref(span),
+                20.0,
+                400,
+                [255; 4],
+                120.0,
+                25.0,
+                144.0,
+                49.0,
+                12.0,
+                glyphon::cosmic_text::Align::Left,
+                dpr,
+                false,
+                0.0,
+                25.0,
+            )
+            .unwrap()
+            .0
+        };
+        assert_ne!(
+            key(&plain),
+            key(&padded),
+            "paint changes must invalidate the bake cache"
+        );
+    }
+}

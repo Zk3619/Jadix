@@ -279,8 +279,20 @@ pub fn insert_at_cursors(
     cursors: Vec<TextCursor>,
     insert: &str,
 ) -> Vec<TextCursor> {
+    insert_at_cursors_with_edits(text, cursors, insert).0
+}
+
+/// Replacements use the sequential coordinates at which they were applied.
+pub type CursorEdits = Vec<(std::ops::Range<usize>, String)>;
+
+pub fn insert_at_cursors_with_edits(
+    text: &mut String,
+    cursors: Vec<TextCursor>,
+    insert: &str,
+) -> (Vec<TextCursor>, CursorEdits) {
+    let mut edits = Vec::new();
     if insert.is_empty() && cursors.iter().all(|c| c.caret == c.anchor) {
-        return normalize(text, cursors);
+        return (normalize(text, cursors), edits);
     }
     let mut cs: Vec<(usize, TextCursor)> = cursors.into_iter().enumerate().collect();
     cs.sort_by_key(|(_, c)| c.range().0);
@@ -291,10 +303,11 @@ pub fn insert_at_cursors(
         let lo = clamp_shifted(text, raw_lo, delta);
         let hi = clamp_shifted(text, raw_hi, delta).max(lo);
         text.replace_range(lo..hi, insert);
+        edits.push((lo..hi, insert.to_string()));
         next[orig_i] = TextCursor::collapsed(lo + insert.len());
         delta += insert.len() as isize - (hi - lo) as isize;
     }
-    normalize(text, next)
+    (normalize(text, next), edits)
 }
 
 fn clamp_shifted(text: &str, pos: usize, delta: isize) -> usize {
@@ -303,6 +316,14 @@ fn clamp_shifted(text: &str, pos: usize, delta: isize) -> usize {
 }
 
 pub fn delete_backward(text: &mut String, cursors: Vec<TextCursor>) -> Vec<TextCursor> {
+    delete_backward_with_edits(text, cursors).0
+}
+
+pub fn delete_backward_with_edits(
+    text: &mut String,
+    cursors: Vec<TextCursor>,
+) -> (Vec<TextCursor>, CursorEdits) {
+    let mut edits = Vec::new();
     let mut cs: Vec<(usize, TextCursor)> = cursors.into_iter().enumerate().collect();
     cs.sort_by_key(|(_, c)| c.range().0);
     let mut next = vec![TextCursor::collapsed(0); cs.len()];
@@ -313,21 +334,31 @@ pub fn delete_backward(text: &mut String, cursors: Vec<TextCursor>) -> Vec<TextC
         let hi = clamp_shifted(text, raw_hi, delta).max(lo);
         if lo < hi {
             text.replace_range(lo..hi, "");
+            edits.push((lo..hi, String::new()));
             next[orig_i] = TextCursor::collapsed(lo);
             delta -= (hi - lo) as isize;
         } else if lo > 0 {
             let prev = text.floor_char_boundary(lo - 1);
             text.replace_range(prev..lo, "");
+            edits.push((prev..lo, String::new()));
             next[orig_i] = TextCursor::collapsed(prev);
             delta -= (lo - prev) as isize;
         } else {
             next[orig_i] = TextCursor::collapsed(0);
         }
     }
-    normalize(text, next)
+    (normalize(text, next), edits)
 }
 
 pub fn delete_forward(text: &mut String, cursors: Vec<TextCursor>) -> Vec<TextCursor> {
+    delete_forward_with_edits(text, cursors).0
+}
+
+pub fn delete_forward_with_edits(
+    text: &mut String,
+    cursors: Vec<TextCursor>,
+) -> (Vec<TextCursor>, CursorEdits) {
+    let mut edits = Vec::new();
     let mut cs: Vec<(usize, TextCursor)> = cursors.into_iter().enumerate().collect();
     cs.sort_by_key(|(_, c)| c.range().0);
     let mut next = vec![TextCursor::collapsed(0); cs.len()];
@@ -338,16 +369,20 @@ pub fn delete_forward(text: &mut String, cursors: Vec<TextCursor>) -> Vec<TextCu
         let hi = clamp_shifted(text, raw_hi, delta).max(lo);
         if lo < hi {
             text.replace_range(lo..hi, "");
+            edits.push((lo..hi, String::new()));
             next[orig_i] = TextCursor::collapsed(lo);
             delta -= (hi - lo) as isize;
         } else {
             let before = text.len();
             let _ = delete_char_forward(text, lo);
+            if text.len() != before {
+                edits.push((lo..lo + before - text.len(), String::new()));
+            }
             next[orig_i] = TextCursor::collapsed(lo.min(text.len()));
             delta -= (before - text.len()) as isize;
         }
     }
-    normalize(text, next)
+    (normalize(text, next), edits)
 }
 
 pub fn move_cursors(

@@ -5,7 +5,7 @@
 //! treated the row as a ghost Button (wiping `border-b`) and dest-reset the row
 //! box without recapturing nested cell text.
 
-use crate::app::damage::{paint_element_key, take_frame_paint_nodes, PaintDirty, PaintDirtyKind};
+use crate::app::damage::{PaintDirty, PaintDirtyKind, paint_element_key, take_frame_paint_nodes};
 use crate::app::draw_cull::{
     node_present_capture_text_indices, node_present_scissor_logical, node_present_scissor_pad,
 };
@@ -13,12 +13,12 @@ use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchor
 use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
 use crate::components::button::sync_button_hover_paint_subtree;
 use crate::components::table::{
-    table, Table, TableBody, TableBodyProps, TableCell, TableCellProps, TableColumn, TableFooter,
+    Table, TableBody, TableBodyProps, TableCell, TableCellProps, TableColumn, TableFooter,
     TableFooterProps, TableHead, TableHeadProps, TableHeader, TableHeaderProps, TableProps,
-    TableRow, TableRowProps,
+    TableRow, TableRowProps, table,
 };
 use crate::core::reactivity::{create_effect, create_root};
-use crate::core::tree::{overflow_clip_axes, Element, Handler, LayoutStatus, LayoutTree};
+use crate::core::tree::{Element, Handler, LayoutStatus, LayoutTree, overflow_clip_axes};
 use crate::layout::layout_tree::RenderResult;
 use crate::primitives::text::text;
 use crate::style::{sync_class_variants_subtree, tick_active_css_transitions_subtree};
@@ -546,10 +546,14 @@ fn data_table_sort_headers_align_with_body_through_layout_and_hover() {
                         let edge = |el: &Element| {
                             el.layout_bounds[0] + if end { el.layout_bounds[2] } else { 0.0 }
                         };
-                        assert!((edge(head) - edge(body)).abs() < 1.0,
+                        assert!(
+                            (edge(head) - edge(body)).abs() < 1.0,
                             "sortable={sortable}, cycle={cycle}, hover={hovered}, {header}: header={:?}, body={:?}, justify={:?}",
-                            head.layout_bounds, body.layout_bounds,
-                            find_focus(&root, "diag-th-align:th:name").map(|el| el.style.justify_content));
+                            head.layout_bounds,
+                            body.layout_bounds,
+                            find_focus(&root, "diag-th-align:th:name")
+                                .map(|el| el.style.justify_content)
+                        );
                     }
                 }
                 let sort_column = if cycle < 3 { "name" } else { "score" };
@@ -565,6 +569,183 @@ fn data_table_sort_headers_align_with_body_through_layout_and_hover() {
         reset_registered_anchors();
         crate::app::tree_hit::clear_hover_tracking();
     }
+}
+
+#[test]
+fn striped_data_table_empty_tail_paints_without_data_or_idle_work() {
+    for count in [0, 1, 2, 3, 4, 20] {
+        reset_registered_anchors();
+        let live = Rc::new(RefCell::new(Element::new()));
+        let reads = Rc::new(std::cell::Cell::new(0));
+        install_test_reconcile_root(Rc::clone(&live));
+        let (_handle, _) = create_root({
+            let live = Rc::clone(&live);
+            let reads = Rc::clone(&reads);
+            move || {
+                create_effect(move || {
+                    let reads = Rc::clone(&reads);
+                    *live.borrow_mut() = table(format!("striped-{count}"))
+                        .columns([TableColumn::new("name", "Name")])
+                        .row_count(count)
+                        .stripe(true)
+                        .height(150.0)
+                        .cell(move |row, _| {
+                            assert!(row < count, "decoration must not access data");
+                            reads.set(reads.get() + 1);
+                            row.to_string()
+                        })
+                        .into();
+                });
+            }
+        });
+        drain_deferred_view_remounts();
+        let mut root = live.borrow_mut();
+        let mut tree = LayoutTree::new();
+        let frame = tree.build_and_layout(&mut root, W, H, [-1.0; 2]);
+        let tail = find_slot(&root, "table-empty-stripes");
+        assert_eq!(tail.is_some(), count < 4);
+        if let Some(tail) = tail {
+            assert!(!tail.pointer_events_enabled());
+            assert_eq!(
+                tail.attrs.get("aria-hidden").map(String::as_str),
+                Some("true")
+            );
+            assert!(tail.focus_id.is_none());
+            for band in &tail.children {
+                let [x, y, w, h] = band.layout_bounds;
+                let top = y - tail.layout_bounds[1];
+                assert!(top >= count as f32 * 40.0 - 0.01);
+                assert!(top + h <= 150.01, "partial last band must end at viewport");
+                assert!(
+                    frame.instances.iter().any(|paint| {
+                        paint.color == crate::style::parse_color("muted/25")
+                            && (paint.rect_pos[0] - x).abs() < 0.01
+                            && (paint.rect_pos[1] - y).abs() < 0.01
+                            && (paint.rect_size[0] - w).abs() < 0.01
+                            && (paint.rect_size[1] - h).abs() < 0.01
+                    }),
+                    "empty stripe must reach the paint output"
+                );
+            }
+        }
+        let mut rows = Vec::new();
+        walk_slots(&root, "table-row", &mut rows);
+        let mounted = rows.iter().filter(|row| row.focus_id.is_some()).count();
+        if count < 4 {
+            assert_eq!(mounted, count, "only real rows may be mounted");
+        } else {
+            assert!((4..=count).contains(&mounted));
+        }
+        let built = reads.get();
+        let _ = take_frame_paint_nodes();
+        tree.set_collect_skip_allowed(true);
+        for _ in 0..3 {
+            let _ = tree.build_and_layout_fast(&mut root, W, H, [-1.0; 2], false, false);
+            assert_eq!(reads.get(), built, "idle frames must reuse real rows");
+            assert!(
+                take_frame_paint_nodes().is_empty(),
+                "idle tail must not dirty paint"
+            );
+        }
+        drop(root);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+}
+
+#[test]
+fn striped_data_table_tracks_visible_order_selection_and_hover() {
+    use crate::components::table::{TablePaginationState, TableSortDir, TableSortState};
+    use crate::core::reactivity::use_signal;
+
+    reset_registered_anchors();
+    crate::app::tree_hit::clear_hover_tracking();
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    let (_handle, (selected, page, filter)) = create_root({
+        let live = Rc::clone(&live);
+        move || {
+            let selected = use_signal("stripe-selection", || Some(2));
+            let page = use_signal("stripe-page", || TablePaginationState::new(0, 2));
+            let filter = use_signal("stripe-filter", || "keep".to_string());
+            let sort = use_signal("stripe-sort", || TableSortState {
+                column_id: Some("name".into()),
+                dir: TableSortDir::Desc,
+            });
+            create_effect(move || {
+                *live.borrow_mut() = table("stripe-order")
+                    .columns([TableColumn::new("name", "Name")])
+                    .rows([
+                        vec!["drop-0".into()],
+                        vec!["keep-1".into()],
+                        vec!["keep-2".into()],
+                        vec!["keep-3".into()],
+                    ])
+                    .height(150.0)
+                    .stripe(true)
+                    .selected_signal(selected)
+                    .sort_signal(sort)
+                    .global_filter_signal(filter)
+                    .pagination_signal(page)
+                    .into();
+            });
+            (selected, page, filter)
+        }
+    });
+    drain_deferred_view_remounts();
+    let mut tree = LayoutTree::new();
+    {
+        let mut root = live.borrow_mut();
+        let _ = tree.build_and_layout(&mut root, W, H, [-1.0; 2]);
+        assert_eq!(row_bg(&root, "stripe-order:tr:3"), [0.0; 4]);
+        assert_eq!(row_bg(&root, "stripe-order:tr:2"), crate::tokens::muted());
+    }
+    selected.set(None);
+    drain_deferred_view_remounts();
+    {
+        let mut root = live.borrow_mut();
+        let _ = tree.build_and_layout(&mut root, W, H, [-1.0; 2]);
+        assert_eq!(
+            row_bg(&root, "stripe-order:tr:2"),
+            crate::style::parse_color("muted/25")
+        );
+        let mouse = row_mouse(&root, "stripe-order:tr:2");
+        sync_table_hover(&mut root, &mut tree, mouse, W, H);
+        let mut hover_bg = crate::style::parse_color("muted");
+        hover_bg[3] *= 0.5;
+        assert_eq!(row_bg(&root, "stripe-order:tr:2"), hover_bg);
+        crate::app::tree_hit::sync_pointer_component_chrome_after_layout(
+            &mut root, &mut tree, [-1.0; 2], W, H,
+        );
+        assert_eq!(
+            row_bg(&root, "stripe-order:tr:2"),
+            crate::style::parse_color("muted/25")
+        );
+    }
+    page.set(TablePaginationState::new(1, 2));
+    drain_deferred_view_remounts();
+    {
+        let mut root = live.borrow_mut();
+        let _ = tree.build_and_layout(&mut root, W, H, [-1.0; 2]);
+        assert_eq!(
+            row_bg(&root, "stripe-order:tr:1"),
+            [0.0; 4],
+            "stripe follows page position"
+        );
+        let tail = find_slot(&root, "table-empty-stripes").unwrap();
+        assert!((tail.children[0].layout_bounds[1] - tail.layout_bounds[1] - 40.0).abs() < 0.01);
+    }
+    filter.set("no matches".into());
+    drain_deferred_view_remounts();
+    {
+        let mut root = live.borrow_mut();
+        let _ = tree.build_and_layout(&mut root, W, H, [-1.0; 2]);
+        assert!(find_row(&root, "stripe-order:tr:1").is_none());
+        assert!(find_slot(&root, "table-empty-stripes").is_some());
+    }
+    clear_test_reconcile_root();
+    reset_registered_anchors();
+    crate::app::tree_hit::clear_hover_tracking();
 }
 
 #[test]
@@ -882,10 +1063,7 @@ fn nested_scroll_table_texts_survive_chrome_skip_and_hover() {
         for needle in ["INV001", "Paid", "$250.00"] {
             assert!(
                 captured_texts.iter().any(|t| t.contains(needle))
-                    || skipped
-                        .text_nodes
-                        .iter()
-                        .any(|n| n.text.contains(needle)),
+                    || skipped.text_nodes.iter().any(|n| n.text.contains(needle)),
                 "dest-reset after mount chrome must keep `{needle}`; captured={captured_texts:?} dirty={dirties:?}"
             );
         }
@@ -1383,7 +1561,9 @@ fn data_table_row_hover_must_not_stamp_invoice_status_as_sta() {
         .filter_map(|&i| hovered.text_nodes.get(i).map(|n| n.text.as_str()))
         .collect();
     assert!(
-        !captured_texts.iter().any(|t| *t == "Status" || t.contains("Sta")),
+        !captured_texts
+            .iter()
+            .any(|t| *t == "Status" || t.contains("Sta")),
         "data_table hover dest-reset must not recapture invoice Status; captured={captured_texts:?}"
     );
 

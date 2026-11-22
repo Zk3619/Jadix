@@ -109,7 +109,7 @@ mod tests {
     }
 }
 pub(super) fn snapshot() -> io::Result<EnvironmentSnapshot> {
-    let name = ["LC_ALL", "LC_MESSAGES", "LANG"]
+    let name = ["LC_ALL", "LC_TIME", "LC_NUMERIC", "LC_MESSAGES", "LANG"]
         .into_iter()
         .filter_map(|k| std::env::var(k).ok())
         .find(|s| !s.is_empty())
@@ -195,6 +195,7 @@ pub(super) fn snapshot() -> io::Result<EnvironmentSnapshot> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(1.0),
         lifecycle: Lifecycle::Active,
+        wake_count: 0,
     };
     value.validate()?;
     Ok(value)
@@ -211,14 +212,10 @@ pub(super) fn run_watch(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn();
-    let mut monitor = match monitor {
-        Ok(v) => v,
-        Err(e) => {
-            let _ = ready.send(Err(e));
-            return;
-        }
-    };
-    let mut stdout = monitor.stdout.take().unwrap();
+    // GNOME is optional. Keep the independent timezone watch alive if the
+    // executable/schema/session bus is absent or the monitor exits later.
+    let mut monitor = monitor.ok();
+    let mut stdout = monitor.as_mut().and_then(|child| child.stdout.take());
     let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
     if fd >= 0 {
         let path = c"/etc";
@@ -236,7 +233,7 @@ pub(super) fn run_watch(
     while !stop.load(Ordering::Acquire) {
         let mut fds = [
             libc::pollfd {
-                fd: stdout.as_raw_fd(),
+                fd: stdout.as_ref().map_or(-1, AsRawFd::as_raw_fd),
                 events: libc::POLLIN,
                 revents: 0,
             },
@@ -253,15 +250,15 @@ pub(super) fn run_watch(
             }
             break;
         }
-        if fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
-            break;
-        }
         let mut dirty = false;
         if fds[0].revents & libc::POLLIN != 0 {
-            match stdout.read(&mut buffer) {
+            match stdout.as_mut().unwrap().read(&mut buffer) {
                 Ok(n) if n > 0 => dirty = true,
-                _ => break,
+                _ => stdout = None,
             }
+        }
+        if fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            stdout = None;
         }
         if fd >= 0 && fds[1].revents & libc::POLLIN != 0 {
             unsafe {
@@ -273,8 +270,7 @@ pub(super) fn run_watch(
             changed();
         }
     }
-    let _ = monitor.kill();
-    let _ = monitor.wait();
+    if let Some(mut monitor) = monitor { let _ = monitor.kill(); let _ = monitor.wait(); }
     if fd >= 0 {
         unsafe {
             libc::close(fd);

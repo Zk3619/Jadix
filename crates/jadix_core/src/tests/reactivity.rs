@@ -3,6 +3,120 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[test]
+fn quit_veto_preserves_cleanup_and_owned_decisions() {
+    let veto = Rc::new(Cell::new(true));
+    let calls = Rc::new(Cell::new(0));
+    let (owner, ()) = create_root(|| {
+        let veto = veto.clone();
+        on_quit_request(move || !veto.get());
+        let calls = calls.clone();
+        on_app_quit(move || { calls.set(calls.get() + 1); async {} });
+    });
+    let mut cleanup = AppQuitCleanup::default();
+    let now = std::time::Instant::now();
+    assert!(!cleanup.begin(now));
+    assert_eq!(calls.get(), 0);
+    veto.set(false);
+    assert!(cleanup.begin(now));
+    assert!(cleanup.begin(now));
+    assert_eq!(calls.get(), 1);
+    assert!(cleanup.poll(now, std::task::Waker::noop()));
+    owner.dispose();
+    assert!(app_quit_requested());
+}
+
+#[test]
+fn quit_cleanup_is_bounded_and_reentrant_decisions_are_rejected() {
+    let (owner, ()) = create_root(|| on_quit_request(app_quit_requested));
+    assert!(!app_quit_requested());
+    owner.dispose();
+    let (owner, ()) = create_root(|| on_app_quit(std::future::pending::<()>));
+    let now = std::time::Instant::now();
+    let mut cleanup = AppQuitCleanup::default();
+    assert!(cleanup.begin(now));
+    assert!(!cleanup.poll(now, std::task::Waker::noop()));
+    assert!(cleanup.poll(now + APP_QUIT_TIMEOUT, std::task::Waker::noop()));
+    owner.dispose();
+}
+
+#[test]
+fn collection_signal_growth_and_borrow_do_not_clone_existing_entries() {
+    // No PartialEq: an unconditional mutation does not need to compare payloads.
+    struct Entry(Rc<Cell<usize>>);
+    impl Clone for Entry {
+        fn clone(&self) -> Self {
+            self.0.set(self.0.get() + 1);
+            Self(self.0.clone())
+        }
+    }
+    let (_owner, ()) = create_root(|| {
+        let clones = Rc::new(Cell::new(0));
+        let entries = Signal::new(Vec::<Entry>::new());
+        for expected_index in 0..5000 {
+            let index = entries.update_in_place(|items| {
+                let index = items.len();
+                items.push(Entry(clones.clone()));
+                index
+            });
+            assert_eq!(index, expected_index);
+        }
+        assert_eq!(entries.with_untracked(Vec::len), 5000);
+        assert_eq!(
+            clones.get(),
+            0,
+            "collection growth must not copy prior rows"
+        );
+    });
+}
+
+#[test]
+fn in_place_updates_notify_after_borrow_release_and_preserve_tracking_and_batching() {
+    let (_owner, ()) = create_root(|| {
+        let rows = Signal::new(vec![1]);
+        let other = Signal::new(0);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        create_effect({
+            let seen = seen.clone();
+            move || seen.borrow_mut().push(rows.with(Vec::len))
+        });
+        let untracked_runs = Rc::new(Cell::new(0));
+        create_effect({
+            let runs = untracked_runs.clone();
+            move || {
+                rows.with_untracked(|_| {
+                    let _ = other.get();
+                });
+                runs.set(runs.get() + 1);
+            }
+        });
+        let count = create_memo(move || rows.with(Vec::len));
+        batch(|| {
+            rows.update_in_place(|r| r.push(2));
+            rows.update_in_place(|r| r.push(3));
+        });
+        assert_eq!(*seen.borrow(), [1, 3], "batched writes coalesce");
+        assert_eq!(count.get(), 3, "memos observe in-place mutations");
+        assert_eq!(untracked_runs.get(), 1, "borrow must not subscribe rows");
+        other.set(1);
+        assert_eq!(untracked_runs.get(), 2, "other reads still subscribe");
+        rows.update_in_place(|_| {});
+        assert_eq!(*seen.borrow(), [1, 3, 3], "notification is unconditional");
+        rows.update(|_| {});
+        assert_eq!(
+            *seen.borrow(),
+            [1, 3, 3],
+            "existing update still suppresses equality"
+        );
+        assert_eq!(rows.update_in_place(Vec::pop), Some(3));
+        assert_eq!(
+            *seen.borrow(),
+            [1, 3, 3, 2],
+            "observers can borrow the updated value"
+        );
+    });
+}
+
+#[test]
 fn app_quit_handlers_follow_owner_lifetime() {
     let (owner, ()) = create_root(|| {
         on_app_quit(|| async {});

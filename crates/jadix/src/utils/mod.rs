@@ -53,6 +53,7 @@ pub mod popup;
 pub mod presence;
 pub mod roving;
 pub mod table_sort;
+pub mod text_annotations;
 pub mod text_buffer;
 pub mod text_edit_history;
 pub mod text_field;

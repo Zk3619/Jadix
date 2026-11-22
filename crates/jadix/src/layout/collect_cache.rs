@@ -1384,11 +1384,14 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
             span.size.map(f32::to_bits).hash(h);
             std::mem::discriminant(&span.kind).hash(h);
             span.background.hash(h);
+            span.background_outsets().map(f32::to_bits).hash(h);
             span.padding_x.to_bits().hash(h);
             span.italic.hash(h);
             span.monospace.hash(h);
             span.underline.hash(h);
             span.strikethrough.hash(h);
+            // Replayed TextLayoutInfo also carries link metadata.
+            span.href.hash(h);
         }
     }
 

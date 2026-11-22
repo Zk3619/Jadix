@@ -1,10 +1,48 @@
 use super::{
-    apply_pending_scroll_item_into_view, cancel_scroll_item_into_view,
+    ScrollItemAlign, apply_pending_scroll_item_into_view, cancel_scroll_item_into_view,
     has_pending_scroll_item_align, request_scroll_item_into_view, reset_scroll_item_into_view,
-    scroll_offset_to_center_item, set_scroll_offset_with_behavior, ScrollItemAlign,
+    scroll_offset_to_center_item, set_scroll_offset_with_behavior,
 };
 use crate::core::reactivity::create_root;
 use crate::core::scroll_viewport::scroll_offset_y_signal_key;
+
+#[test]
+fn nearest_alignment_reveals_edges_without_disturbing_visible_or_spanning_targets() {
+    use super::scroll_offset_to_align_rect;
+    let viewport = [10.0, 20.0, 100.0, 100.0];
+    for (target, expected) in [
+        ([20.0, 40.0, 30.0, 20.0], [50.0, 50.0]),
+        ([20.0, 10.0, 30.0, 20.0], [50.0, 40.0]),
+        ([20.0, 110.0, 30.0, 30.0], [50.0, 70.0]),
+        ([0.0, 10.0, 150.0, 150.0], [50.0, 50.0]),
+        ([20.0, -50.0, 30.0, 150.0], [50.0, 30.0]),
+        ([20.0, 80.0, 30.0, 150.0], [50.0, 110.0]),
+    ] {
+        assert_eq!(
+            scroll_offset_to_align_rect(
+                viewport,
+                target,
+                [50.0, 50.0],
+                [400.0, 400.0],
+                ScrollItemAlign::Nearest
+            ),
+            expected
+        );
+    }
+    assert_eq!(
+        ScrollItemAlign::parse("nearest"),
+        Some(ScrollItemAlign::Nearest)
+    );
+    create_root(|| {
+        let rest = "nearest-fit";
+        request_scroll_item_into_view(rest, 0, 1, ScrollItemAlign::Nearest);
+        assert!(!apply_pending_scroll_item_into_view(rest, 200.0, 100.0));
+        assert!(
+            !has_pending_scroll_item_align(),
+            "fitting content must not keep the redraw pump alive"
+        );
+    });
+}
 
 #[test]
 fn year_center_uses_real_row_height_not_32px() {
@@ -143,9 +181,9 @@ fn pending_align_keeps_placed_cap_when_expand_viewport_is_a_sliver() {
         let sy = crate::core::reactivity::use_signal(&scroll_offset_y_signal_key(rest), || 0.0_f32)
             .peek();
         assert!(
-                (sy - expected).abs() < 0.5,
-                "must keep the placed-cap offset, not recenter in the sliver, got {sy} expected {expected}"
-            );
+            (sy - expected).abs() < 0.5,
+            "must keep the placed-cap offset, not recenter in the sliver, got {sy} expected {expected}"
+        );
     });
 }
 
@@ -316,7 +354,7 @@ fn descendant_alignment_is_stable_after_scrolling() {
 #[test]
 fn after_smooth_writes_target_not_offset() {
     use crate::core::scroll_viewport::{
-        scroll_behavior_signal_key, scroll_target_y_signal_key, SCROLL_BEHAVIOR_SMOOTH,
+        SCROLL_BEHAVIOR_SMOOTH, scroll_behavior_signal_key, scroll_target_y_signal_key,
     };
     let _ = create_root(|| {
         let rest = "after-smooth";
@@ -377,7 +415,7 @@ fn public_scroll_alignment_uses_smooth_unless_jump_is_explicit() {
 
 #[test]
 fn after_jump_snaps_offset() {
-    use crate::core::scroll_viewport::{scroll_behavior_signal_key, SCROLL_BEHAVIOR_JUMP};
+    use crate::core::scroll_viewport::{SCROLL_BEHAVIOR_JUMP, scroll_behavior_signal_key};
     let _ = create_root(|| {
         let rest = "after-jump";
         cancel_scroll_item_into_view(rest);

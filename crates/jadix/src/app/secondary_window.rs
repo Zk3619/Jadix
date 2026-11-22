@@ -200,19 +200,19 @@ impl SecondaryWindowState {
             crate::renderer::theme_transition::ThemeTransition::new_for_surface(&device, &config);
         let (textured_pipeline, textured_instance_buffer) =
             init_secondary_textured(&device, &config);
-        let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
+        let text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
             JadixTextRenderer::new_sharing_font_system(&device, &queue, &config, shared)
         } else {
             // Headless / tests without primary shared FS: own a FontSystem.
             JadixTextRenderer::new(&device, &queue, &config)
         };
-        let overlay_font = text_renderer.font_system_mut() as *mut glyphon::FontSystem;
         let overlay_text_renderer =
-            JadixTextRenderer::new_sharing_font_system(&device, &queue, &config, overlay_font);
+            JadixTextRenderer::new_sharing_resources(&device, &queue, &config, &text_renderer);
 
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut root_element);
 
         let mut layout_tree = LayoutTree::new();
+        layout_tree.defer_initial_layout_motion();
         let scale = window.scale_factor() as f32;
         let logical_w = config.width as f32 / scale.max(1.0);
         let logical_h = config.height as f32 / scale.max(1.0);
@@ -310,18 +310,18 @@ impl SecondaryWindowState {
             crate::renderer::theme_transition::ThemeTransition::new_for_surface(&device, &config);
         let (textured_pipeline, textured_instance_buffer) =
             init_secondary_textured(&device, &config);
-        let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
+        let text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
             JadixTextRenderer::new_sharing_font_system(&device, &queue, &config, shared)
         } else {
             JadixTextRenderer::new(&device, &queue, &config)
         };
-        let overlay_font = text_renderer.font_system_mut() as *mut glyphon::FontSystem;
         let overlay_text_renderer =
-            JadixTextRenderer::new_sharing_font_system(&device, &queue, &config, overlay_font);
+            JadixTextRenderer::new_sharing_resources(&device, &queue, &config, &text_renderer);
 
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut root_element);
 
         let mut layout_tree = LayoutTree::new();
+        layout_tree.defer_initial_layout_motion();
         let scale = window.scale_factor() as f32;
         let logical_w = config.width as f32 / scale.max(1.0);
         let logical_h = config.height as f32 / scale.max(1.0);
@@ -1159,6 +1159,7 @@ impl SecondaryWindowState {
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         self.queue.present(output);
+        self.layout_tree.commit_presentation();
         if self.pending_window_chrome && !self.theme_transition.needs_frame() {
             super::window_chrome::apply_created_window(
                 self.window.as_ref(),
@@ -1193,6 +1194,10 @@ impl SecondaryWindowState {
             self.window.request_redraw();
         }
         self.text_nodes = render_result.text_nodes;
+        self.text_renderer
+            .text_links
+            .borrow_mut()
+            .retain_nodes(&self.text_nodes);
         if super::pending_images::any_active_gif_playing(&self.gif_textures) {
             self.window.request_redraw();
         }
@@ -1202,13 +1207,12 @@ impl SecondaryWindowState {
     fn ensure_overlay_band_text_renderers(&mut self, band_count: usize) {
         let extra_needed = band_count.saturating_sub(1);
         while self.overlay_band_text_renderers.len() < extra_needed {
-            let font_ptr = self.text_renderer.font_system_mut() as *mut glyphon::FontSystem;
             self.overlay_band_text_renderers
-                .push(JadixTextRenderer::new_sharing_font_system(
+                .push(JadixTextRenderer::new_sharing_resources(
                     &self.device,
                     &self.queue,
                     &self.config,
-                    font_ptr,
+                    &self.text_renderer,
                 ));
         }
     }

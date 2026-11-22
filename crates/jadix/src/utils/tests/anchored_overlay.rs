@@ -4,6 +4,25 @@ use crate::core::reactivity::{create_render_effect, create_root};
 use crate::layout::layout_tree::ATTR_PORTAL_KEY;
 use crate::utils::popup::{ATTR_FLOATING, ATTR_FLOATING_POINT, ATTR_FLOATING_TRIGGER};
 
+#[test]
+fn pointer_or_keyboard_placement_switches_without_stale_point_geometry() {
+    let (_owner, ()) = create_root(|| {
+        let pos = Signal::new([-1.0, -1.0]);
+        let trigger = Signal::new("keyboard-area".to_string());
+        let placement = Placement::PointOrTrigger { pos, placement: PopupPlacement::BottomStart, gap: 2.0 };
+        let mut panel = Element::new();
+        apply_placement(&mut panel, "context-placement", &placement, trigger, "", false, None, None);
+        assert_eq!(panel.attrs.get(ATTR_FLOATING_TRIGGER).map(String::as_str), Some("keyboard-area"));
+        assert!(!panel.attrs.contains_key(ATTR_FLOATING_POINT));
+        pos.set([130.0, 240.0]);
+        apply_placement(&mut panel, "context-placement", &placement, trigger, "", false, None, None);
+        assert!(panel.attrs.contains_key(ATTR_FLOATING_POINT));
+        pos.set([-1.0, -1.0]);
+        apply_placement(&mut panel, "context-placement", &placement, trigger, "", false, None, None);
+        assert!(!panel.attrs.contains_key(ATTR_FLOATING_POINT));
+    });
+}
+
 fn is_zero_len(el: &Element) -> bool {
     crate::layout::dim_length_px(el.style.size.width).is_some_and(|w| w == 0.0)
         && crate::layout::dim_length_px(el.style.size.height).is_some_and(|h| h == 0.0)

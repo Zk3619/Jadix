@@ -491,6 +491,7 @@ fn underline_offset_survives_tight_text_box_clip() {
 #[test]
 fn decoration_ink_extends_below_the_layout_box() {
     let mut n = crate::layout::layout_tree::TextLayoutInfo {
+        node_id: None,
         text: "Home".into(),
         shape_suffix: None,
         spans: None,

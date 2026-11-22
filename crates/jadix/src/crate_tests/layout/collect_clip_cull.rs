@@ -1615,3 +1615,35 @@ fn gallery_header_offset_sliver_must_not_push_imm() {
          scroll_y={scroll_y} first={first:?}"
     );
 }
+
+#[test]
+fn padded_scroll_area_has_no_phantom_overflow_at_exact_fit_and_after_resize() {
+    crate::core::reactivity::create_root(|| {
+        let mut area = Element::from(
+            scroll_area("exact-fit-scroll")
+                .w(200.0)
+                .h(104.0)
+                .p(4.0)
+                .children((0..3).map(|_| Element::new().h(32.0).flex_shrink(0.0))),
+        );
+        let mut tree = LayoutTree::new();
+        for (height, expected_overflow) in [(104.0, 0.0), (88.0, 16.0), (104.0, 0.0)] {
+            area = area.h(height);
+            let result = tree.build_and_layout(&mut area, 200.0, height, [-1.0, -1.0]);
+            let (_, viewport, maximum, content) = result
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == "exact-fit-scroll")
+                .expect("scroll metrics");
+            assert!((viewport[3] - height).abs() < 0.5, "{viewport:?}");
+            assert!(
+                (maximum[1] - expected_overflow).abs() < 0.5,
+                "height={height} max={maximum:?} content={content:?}"
+            );
+            assert!(
+                maximum[0] < 0.5,
+                "padding must not create horizontal overflow: {maximum:?}"
+            );
+        }
+    });
+}

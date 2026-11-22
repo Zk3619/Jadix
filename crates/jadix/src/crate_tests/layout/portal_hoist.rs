@@ -160,6 +160,89 @@ fn find_by_tid<'a>(node: &'a Element, id: &str) -> Option<&'a Element> {
 }
 
 #[test]
+fn late_floating_attach_uses_current_anchor_geometry_in_the_same_frame() {
+    use crate::app::pointer_events::hit_path;
+    use crate::utils::popup::{
+        mark_floating_with_gap, mount_anchored_overlay, PopupPlacement, ATTR_FLOATING_W,
+    };
+
+    fn panel() -> Element {
+        let mut panel = Element::new()
+            .absolute()
+            .w(120.0)
+            .h(64.0)
+            .template_id("late-follow-panel");
+        mark_floating_with_gap(
+            &mut panel,
+            "late-follow",
+            "late-follow-trigger",
+            PopupPlacement::BottomStart,
+            0.0,
+        );
+        panel.set_attr(ATTR_FLOATING_W, "120");
+        mount_anchored_overlay(panel, 1_000_000)
+    }
+
+    fn model(left: f32, top: f32, open: bool) -> Element {
+        let mut host = Element::new().w(0.0).h(0.0);
+        if open {
+            host.children.push(panel());
+        }
+        Element::new()
+            .child(
+                Element::new()
+                    .absolute()
+                    .w(400.0)
+                    .h(300.0)
+                    .focus_id("late-follow-under")
+                    .on_click(|| {}),
+            )
+            .child(
+                Element::new()
+                    .absolute()
+                    .left(left)
+                    .top(top)
+                    .w(80.0)
+                    .h(24.0)
+                    .focus_id("late-follow-trigger"),
+            )
+            .child(host)
+    }
+
+    for scroll_only in [false, true] {
+        let mut root = model(40.0, 50.0, false);
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 400.0, 300.0, [-1.0; 2]);
+        let rebuilds = tree.full_rebuilds;
+        let page_node = root.children[0].layout_node;
+        root.children[2].children.push(panel());
+        tree.build_and_layout_fast_ex(&mut root, 400.0, 300.0, [-1.0; 2], scroll_only, false, None);
+        assert_eq!(tree.full_rebuilds, rebuilds);
+        assert_eq!(root.children[0].layout_node, page_node);
+        let bounds = find_by_tid(&root, "late-follow-panel")
+            .unwrap()
+            .layout_bounds;
+        assert_eq!(bounds, [40.0, 74.0, 120.0, 64.0]);
+
+        let mut fresh = model(40.0, 50.0, true);
+        LayoutTree::new().build_and_layout(&mut fresh, 400.0, 300.0, [-1.0; 2]);
+        assert_eq!(
+            bounds,
+            find_by_tid(&fresh, "late-follow-panel")
+                .unwrap()
+                .layout_bounds
+        );
+        let path = hit_path(&root, bounds[0] + 60.0, bounds[1] + 32.0);
+        assert!(path
+            .iter()
+            .any(|e| e.floating_id.as_deref() == Some("late-follow")));
+        assert!(path
+            .iter()
+            .all(|e| e.focus_id.as_deref() != Some("late-follow-under")));
+    }
+}
+
+#[test]
 fn persistent_hud_keeps_viewport_edges_after_floating_follow_and_maximize() {
     let hud = crate::utils::viewport_portal_stage(
         "perf",

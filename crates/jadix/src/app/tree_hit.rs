@@ -773,6 +773,17 @@ pub(super) fn session_owned_cursor(
     }
 }
 
+pub(super) fn label_selection_cursor(
+    hit: Option<CursorValue>,
+    selection_dragging: bool,
+) -> Option<CursorValue> {
+    if selection_dragging {
+        Some(CursorKind::Text.into())
+    } else {
+        hit
+    }
+}
+
 pub(super) fn apply_session_cursor(
     window: &dyn winit::window::Window,
     event_loop: Option<&dyn winit::event_loop::ActiveEventLoop>,
@@ -2236,6 +2247,41 @@ pub(super) fn focused_key_handlers(el: &Element, focus_id: &str) -> Option<Focus
         on_click: node.on_click.clone(),
         focusable: node.focusable,
     })
+}
+
+/// Extract under the tree borrow; invoke after releasing it. A lower layer's stale
+/// focus must not consume Escape while another stacked overlay owns the keyboard.
+/// Resolve `panel_z` before borrowing the tree: pruning the stack can rebuild it.
+pub(super) fn focused_escape_handlers(
+    root: &Element,
+    focus_id: &str,
+    panel_z: Option<i32>,
+) -> Option<FocusedKeyHandlers> {
+    if let Some(z) = panel_z {
+        let mut ids = Vec::new();
+        crate::utils::input_hit::collect_focusable_ids_in_portal_z(root, z, &mut ids);
+        if !ids.iter().any(|id| id == focus_id) {
+            return None;
+        }
+    }
+    focused_key_handlers(root, focus_id)
+}
+
+/// A focused control may consume Escape before the top overlay is dismissed.
+pub(super) fn run_focused_escape_or_close_overlay(
+    focused: Option<&FocusedKeyHandlers>,
+    event: &KeyEvent,
+) -> bool {
+    if event.state != ElementState::Pressed
+        || !matches!(
+            event.logical_key,
+            winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+        )
+    {
+        return false;
+    }
+    focused.is_some_and(|handlers| run_focused_keydown_only(handlers, event))
+        || super::portal_overlay::try_close_top()
 }
 
 /// Routes a key through previously extracted [`FocusedKeyHandlers`].

@@ -1,10 +1,12 @@
 //! Precomputed source-coordinate diffs. No diff work happens during painting.
 
+use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use similar::{Algorithm, ChangeTag, TextDiff};
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::TextDocument;
 
@@ -40,6 +42,9 @@ struct DiffSnapshot {
     modified: TextDocument,
     unified: Vec<DiffRow>,
     split: Vec<DiffRow>,
+    original_inline: Vec<Range<usize>>,
+    modified_inline: Vec<Range<usize>>,
+    coarse_inline: bool,
 }
 
 /// O(1) clone. Build on a worker before publishing large comparisons to a view.
@@ -118,12 +123,17 @@ impl DiffDocument {
                 });
             }
         }
+        let (original_inline, modified_inline, coarse_inline) =
+            inline_changes(&original, &modified, &split);
         Self(Arc::new(DiffSnapshot {
             revision: NEXT_DIFF_REVISION.fetch_add(1, Ordering::Relaxed),
             original,
             modified,
             unified,
             split,
+            original_inline,
+            modified_inline,
+            coarse_inline,
         }))
     }
 
@@ -145,11 +155,108 @@ impl DiffDocument {
         }
     }
 
+    /// Precomputed changes within positionally paired replacement lines, in
+    /// absolute UTF-8 source bytes. Ranges never split a grapheme or include CRLF.
+    /// Unpaired insertions/deletions retain their existing whole-line treatment.
+    pub fn original_inline_changes(&self) -> &[Range<usize>] {
+        &self.0.original_inline
+    }
+
+    /// Modified-side counterpart of [`Self::original_inline_changes`].
+    pub fn modified_inline_changes(&self) -> &[Range<usize>] {
+        &self.0.modified_inline
+    }
+
+    /// True if any paired line exceeded the inline work budget and was marked
+    /// as a whole line. This does not describe the separate line-diff timeout.
+    pub fn has_coarse_inline_changes(&self) -> bool {
+        self.0.coarse_inline
+    }
+
     pub fn is_identical(&self) -> bool {
         self.0
             .unified
             .iter()
             .all(|row| row.kind == DiffLineKind::Equal)
+    }
+}
+
+fn inline_changes(
+    original: &TextDocument,
+    modified: &TextDocument,
+    rows: &[DiffRow],
+) -> (Vec<Range<usize>>, Vec<Range<usize>>, bool) {
+    let (mut old_ranges, mut new_ranges, mut coarse) = (Vec::new(), Vec::new(), false);
+    let (mut bytes_left, mut work_left) = (256 * 1024, 1024 * 1024);
+    for row in rows.iter().filter(|row| row.kind == DiffLineKind::Replace) {
+        let old_range = original.line_range(row.original_line.unwrap()).unwrap();
+        let new_range = modified.line_range(row.modified_line.unwrap()).unwrap();
+        let old = &original.text()[old_range.clone()];
+        let new = &modified.text()[new_range.clone()];
+        if old == new {
+            continue; // Only the line ending changed.
+        }
+        let bytes = old.len().saturating_add(new.len());
+        let units = if bytes <= 8192 && bytes <= bytes_left {
+            bytes_left -= bytes;
+            Some((
+                old.graphemes(true).collect::<Vec<_>>(),
+                new.graphemes(true).collect::<Vec<_>>(),
+            ))
+        } else {
+            None
+        };
+        let units = units.filter(|(old, new)| {
+            let work = old
+                .len()
+                .saturating_add(1)
+                .saturating_mul(new.len().saturating_add(1));
+            if work > 65_536 || work > work_left {
+                return false;
+            }
+            work_left -= work;
+            true
+        });
+        // ponytail: positional line pairing with bounded grapheme refinement;
+        // semantic line matching belongs in a separate diff algorithm if needed.
+        let Some((old_units, new_units)) = units else {
+            coarse = true;
+            if !old_range.is_empty() {
+                old_ranges.push(old_range);
+            }
+            if !new_range.is_empty() {
+                new_ranges.push(new_range);
+            }
+            continue;
+        };
+        let diff = TextDiff::configure().diff_slices(&old_units, &new_units);
+        let (mut old_offset, mut new_offset) = (old_range.start, new_range.start);
+        for change in diff.iter_all_changes() {
+            let length = change.value().len();
+            match change.tag() {
+                ChangeTag::Equal => {
+                    old_offset += length;
+                    new_offset += length;
+                }
+                ChangeTag::Delete => {
+                    append_inline_range(&mut old_ranges, old_offset..old_offset + length);
+                    old_offset += length;
+                }
+                ChangeTag::Insert => {
+                    append_inline_range(&mut new_ranges, new_offset..new_offset + length);
+                    new_offset += length;
+                }
+            }
+        }
+    }
+    (old_ranges, new_ranges, coarse)
+}
+
+fn append_inline_range(ranges: &mut Vec<Range<usize>>, range: Range<usize>) {
+    if let Some(last) = ranges.last_mut().filter(|last| last.end == range.start) {
+        last.end = range.end;
+    } else {
+        ranges.push(range);
     }
 }
 

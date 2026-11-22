@@ -313,6 +313,7 @@ fn positive_scale(value: f32) -> f32 {
     }
 }
 
+#[derive(Clone)]
 struct SharedLayout {
     owner: Weak<RefCell<LayoutInner>>,
     parent: Option<taffy::NodeId>,
@@ -323,13 +324,18 @@ struct SharedLayout {
 
 #[derive(Default)]
 pub(crate) struct LayoutRegistry {
+    // Native windows publish handoff geometry only after submitting a surface frame.
     shared: HashMap<String, SharedLayout>,
+    measured: Option<HashMap<String, SharedLayout>>,
     pub(crate) defer_initial: bool,
     pending: Vec<Weak<RefCell<LayoutInner>>>,
 }
 
 impl LayoutRegistry {
     pub(crate) fn commit_presentation(&mut self) {
+        if let Some(measured) = self.measured.take() {
+            self.shared = measured;
+        }
         for motion in self.pending.drain(..).filter_map(|motion| motion.upgrade()) {
             motion.borrow_mut().presented = true;
         }
@@ -384,7 +390,18 @@ impl LayoutRegistry {
                     self.pending.push(Rc::downgrade(&motion.0));
                 }
                 motion.0.borrow_mut().context = context;
-                if let Some(previous) = id.and_then(|id| self.shared.get(id)) {
+                // Repeated layout passes may retarget this owner before presentation.
+                // Adopt once, and always from the last committed frame's geometry.
+                let already_measured = id
+                    .and_then(|id| self.measured.as_ref()?.get(id))
+                    .is_some_and(|previous| {
+                        previous.owner.ptr_eq(&Rc::downgrade(&motion.0))
+                            && previous.parent == parent
+                    });
+                if let Some(previous) = id
+                    .filter(|_| !already_measured)
+                    .and_then(|id| self.shared.get(id))
+                {
                     if !previous.owner.ptr_eq(&Rc::downgrade(&motion.0))
                         || previous.parent != parent
                     {
@@ -456,12 +473,18 @@ impl LayoutRegistry {
                 stack.push((child, child_context, parent_node));
             }
         }
-        for (id, mut previous) in self.shared.drain() {
-            if !counts.contains_key(&id) && previous.missing_frames == 0 {
+        for (id, previous) in &self.shared {
+            if !counts.contains_key(id) && previous.missing_frames == 0 {
+                let mut previous = previous.clone();
                 previous.missing_frames = 1;
-                next.insert(id, previous);
+                next.insert(id.clone(), previous);
             }
         }
-        self.shared = next;
+        if self.defer_initial {
+            self.measured = Some(next);
+        } else {
+            // Standalone layout callers use each collected result as their frame.
+            self.shared = next;
+        }
     }
 }

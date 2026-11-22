@@ -542,6 +542,7 @@ fn fractional_repair_text_covers_every_cleared_pixel() {
 
 fn sample_text(text: &str, x: f32) -> TextLayoutInfo {
     TextLayoutInfo {
+        node_id: None,
         text: text.into(),
         shape_suffix: None,
         spans: None,

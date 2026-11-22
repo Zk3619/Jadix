@@ -27,20 +27,8 @@ fn hard_line_slices(text: &str) -> Vec<(usize, &str)> {
 
 /// `caret` 为 UTF-8 字符边界上的字节下标（插入点）。
 pub fn caret_move_left(s: &str, caret: usize) -> usize {
-    let caret = caret.min(s.len());
-    let caret = s.floor_char_boundary(caret);
-    if caret == 0 {
-        return 0;
-    }
-    let mut prev = 0;
-    for (i, _) in s.char_indices() {
-        if i < caret {
-            prev = i;
-        } else {
-            break;
-        }
-    }
-    prev
+    let caret = s.floor_char_boundary(caret.min(s.len()));
+    s[..caret].char_indices().next_back().map_or(0, |(i, _)| i)
 }
 
 pub fn caret_move_right(s: &str, caret: usize) -> usize {
@@ -55,30 +43,13 @@ pub fn caret_move_right(s: &str, caret: usize) -> usize {
 
 /// ← at hard line start jumps to previous line end (skips `\n` stop).
 pub fn caret_move_left_line_aware(s: &str, caret: usize) -> usize {
-    let caret = s.floor_char_boundary(caret.min(s.len()));
-    if caret == 0 {
-        return 0;
-    }
-    let home = caret_line_home(s, caret);
-    if caret == home && home > 0 {
-        return caret_line_end(s, home - 1);
-    }
+    // A hard newline is one scalar: stepping back already reaches the prior line end.
     caret_move_left(s, caret)
 }
 
 /// → at hard line end jumps to next line start (skips `\n`).
 pub fn caret_move_right_line_aware(s: &str, caret: usize) -> usize {
-    let caret = s.floor_char_boundary(caret.min(s.len()));
-    if caret >= s.len() {
-        return s.len();
-    }
-    let end = caret_line_end(s, caret);
-    if caret >= end {
-        if s[caret..].starts_with('\n') {
-            return (caret + 1).min(s.len());
-        }
-        return s.len();
-    }
+    // Stepping over a hard newline already reaches the next line start.
     caret_move_right(s, caret)
 }
 
@@ -159,20 +130,14 @@ pub fn caret_move_page_vertical(
 
 /// Home：当前 hard 行行首。
 pub fn caret_line_home(s: &str, caret: usize) -> usize {
-    let (line_i, _) = caret_line_and_local(s, caret);
-    hard_line_slices(s)
-        .get(line_i)
-        .map(|(start, _)| *start)
-        .unwrap_or(0)
+    let caret = s.floor_char_boundary(caret.min(s.len()));
+    s[..caret].rfind('\n').map_or(0, |i| i + 1)
 }
 
 /// End：当前 hard 行行尾（不含 `\n`）。
 pub fn caret_line_end(s: &str, caret: usize) -> usize {
-    let (line_i, _) = caret_line_and_local(s, caret);
-    hard_line_slices(s)
-        .get(line_i)
-        .map(|(start, body)| start + body.len())
-        .unwrap_or_else(|| s.len())
+    let caret = s.floor_char_boundary(caret.min(s.len()));
+    s[caret..].find('\n').map_or(s.len(), |i| caret + i)
 }
 
 /// Soft-wrap visual-line Home（`ranges` from [`crate::text::soft_visual_line_byte_ranges`]).

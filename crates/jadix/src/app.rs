@@ -84,8 +84,8 @@ mod hot_reload;
 pub(crate) mod image_registry;
 pub(crate) mod ime_support;
 pub use ime_support::{
-    apply_ime_commit, peek_last_ime_cursor_snapshot, physical_ime_cursor_area,
-    prepare_compose_anchor, take_last_ime_commit, take_last_ime_cursor_snapshot, ImeCursorSnapshot,
+    ImeCursorSnapshot, apply_ime_commit, peek_last_ime_cursor_snapshot, physical_ime_cursor_area,
+    prepare_compose_anchor, take_last_ime_commit, take_last_ime_cursor_snapshot,
 };
 #[cfg(all(test, windows, feature = "native-menu"))]
 #[path = "app/tests/desktop_contract_tests.rs"]
@@ -131,12 +131,12 @@ pub(crate) mod scroll_support;
 mod secondary_input;
 mod secondary_window;
 pub(crate) mod state;
+#[cfg(all(test, feature = "product-tests"))]
+pub(crate) use state::{ScrollbarUpdateMode, update_scrollbar_elements_for_test};
 #[cfg(test)]
 pub(crate) use state::{
     hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,
 };
-#[cfg(all(test, feature = "product-tests"))]
-pub(crate) use state::{update_scrollbar_elements_for_test, ScrollbarUpdateMode};
 #[cfg(all(test, windows))]
 #[path = "app/tests/desktop_window_tests.rs"]
 mod desktop_window_tests;
@@ -170,34 +170,34 @@ pub mod window_keys;
 pub(crate) mod window_lifecycle;
 pub(crate) mod window_scope;
 
-pub use entry::{app, launch, AppBuilder, AppConfig};
-pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
+pub use entry::{AppBuilder, AppConfig, app, launch};
+pub use error_boundary::{error_boundary, error_boundary_with_state, throw_error, throw_resource_error};
 pub use frame_pacing::set_frame_rate_limit;
 pub use icons::AppIcon;
-pub use instance::{set_second_instance_handler, InstanceLaunch, InstancePolicy};
+pub use instance::{InstanceLaunch, InstancePolicy, set_second_instance_handler};
 pub use multi_window::{
-    current_global_cursor_position, current_window, open_secondary_window,
-    open_secondary_window_title_only, open_secondary_window_with, shared_slot, windows,
-    InputRegionRect, PointerPassthrough, WindowHandle,
+    InputRegionRect, PointerPassthrough, WindowHandle, current_global_cursor_position,
+    current_window, open_secondary_window, open_secondary_window_title_only,
+    open_secondary_window_with, shared_slot, windows,
 };
 pub use portal_overlay::{
-    page_scroll_locked, parse_scroll_freeze, set_page_scroll_locked, set_scroll_freeze,
-    ScrollFreeze,
+    ScrollFreeze, page_scroll_locked, parse_scroll_freeze, set_page_scroll_locked,
+    set_scroll_freeze,
 };
 pub use resource::{
-    create_async_resource, create_resource, create_resource_on, suspense, Resource, ResourceState,
+    Resource, ResourceState, create_async_resource, create_resource, create_resource_on, suspense,
 };
 pub use router::Router;
 pub use tasks::TaskScope;
-pub use tray::{system_tray_native, tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
+pub use tray::{TrayIcon, TrayIconBuilder, TrayMenuItem, system_tray_native, tray_icon};
 pub use ui_bridge::{request_exit, run_on_ui_thread, spawn_blocking};
 pub use window_chrome::{
-    close_window, set_window_fullscreen, set_window_maximized, set_window_minimized,
-    start_window_drag, toggle_window_fullscreen, toggle_window_maximized, window_is_fullscreen,
-    window_is_maximized, window_is_resizable, ScreenOrientations, WindowBackdrop, WindowOptions,
-    PRIMARY_WINDOW_LABEL,
+    PRIMARY_WINDOW_LABEL, ScreenOrientations, WindowBackdrop, WindowOptions, close_window,
+    set_window_fullscreen, set_window_maximized, set_window_minimized, start_window_drag,
+    toggle_window_fullscreen, toggle_window_maximized, window_is_fullscreen, window_is_maximized,
+    window_is_resizable,
 };
-pub use window_lifecycle::{set_window_lifecycle_hook, WindowLifecycleHook};
+pub use window_lifecycle::{WindowLifecycleHook, set_window_lifecycle_hook};
 
 use crate::utils::drag_reorder::DragReorderState;
 use scroll_support::ScrollbarDragState;
@@ -330,8 +330,8 @@ struct App {
     input_drag_multi_base: Vec<(usize, usize)>,
     /// Stable key for static selectable-text drag (`focus_id` / `template_id`).
     label_drag_key: Option<String>,
-    /// Static text drag-selection anchor (UTF-8 bytes).
-    label_drag_anchor: usize,
+    /// Static text anchor and click granularity, shared by every window.
+    label_drag_anchor: crate::utils::text_selection::TextSelectionAnchor,
     /// Jump-mode wheel deltas merged until the next redraw.
     scroll_accum: std::collections::HashMap<String, [f32; 2]>,
     /// Last wheel viewport; reused while the pointer stays put and the rest can still move.

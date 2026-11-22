@@ -2,7 +2,7 @@
 fn accessibility_bounds_follow_layout_projection() {
     use crate::core::tree::Element;
     use crate::motion::{LayoutAnimation, LayoutMotion};
-    use crate::style::{TimingFunction, ValueDriver, tick_animations};
+    use crate::style::{tick_animations, TimingFunction, ValueDriver};
 
     let motion = LayoutMotion::new(LayoutAnimation::Both)
         .transition(ValueDriver::tween(100.0, TimingFunction::Linear));

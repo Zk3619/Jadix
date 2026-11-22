@@ -1637,10 +1637,15 @@ impl AppState {
             return false;
         }
         a.iter().zip(b.iter()).all(|(x, y)| {
-            x.text == y.text
+            x.node_id == y.node_id
+                && x.text == y.text
                 && x.shape_suffix == y.shape_suffix
                 && x.template_id == y.template_id
                 && x.style == y.style
+                && x.spans == y.spans
+                && x.glyph_fx == y.glyph_fx
+                && x.shimmer == y.shimmer
+                && x.glyph_raster == y.glyph_raster
                 && Self::approx_clip_eq(x.clip_bounds, y.clip_bounds, POS_EPS)
                 && Self::approx_eq(x.x, y.x, POS_EPS)
                 && Self::approx_eq(x.y, y.y, POS_EPS)
@@ -4821,6 +4826,8 @@ impl AppState {
             if new_el.template_id != old_el.template_id
                 || new_el.style != old_el.style
                 || new_el.text_style != old_el.text_style
+                || new_el.text_spans != old_el.text_spans
+                || new_el.text_shape_suffix != old_el.text_shape_suffix
                 || new_el.image_texture != old_el.image_texture
                 || new_el.children.len() != old_el.children.len()
             {
@@ -4910,6 +4917,8 @@ impl AppState {
             if new_el.template_id != old_el.template_id
                 || new_el.style != old_el.style
                 || new_el.text_style != old_el.text_style
+                || new_el.text_spans != old_el.text_spans
+                || new_el.text_shape_suffix != old_el.text_shape_suffix
                 || new_el.image_texture != old_el.image_texture
                 || (!in_button && new_el.text != old_el.text)
             {
@@ -5046,6 +5055,13 @@ impl AppState {
         }
 
         let mut status = if new_el.text != old_el.text
+            // Spans can change font metrics and a composition suffix changes
+            // shaping even when the visible source string stays identical.
+            || !crate::style::TextSpan::layout_eq(
+                new_el.text_spans.as_deref(),
+                old_el.text_spans.as_deref(),
+            )
+            || new_el.text_shape_suffix != old_el.text_shape_suffix
             || new_el.style != old_el.style
             || new_el.image_texture != old_el.image_texture
         {
@@ -5053,7 +5069,7 @@ impl AppState {
                 dirty.push(n);
             }
             LayoutStatus::LayoutChanged
-        } else if new_el.text_style != old_el.text_style {
+        } else if new_el.text_style != old_el.text_style || new_el.text_spans != old_el.text_spans {
             LayoutStatus::StyleChanged
         } else {
             LayoutStatus::Clean
@@ -6704,6 +6720,10 @@ impl AppState {
         let scaled_input_chrome = std::mem::take(&mut render_result.input_chrome_instances);
         self.num_instances = scaled_instances.len() as u32;
         self.text_nodes = render_result.text_nodes;
+        self.text_renderer
+            .text_links
+            .borrow_mut()
+            .retain_nodes(&self.text_nodes);
         if self
             .text_nodes
             .iter()

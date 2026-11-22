@@ -554,6 +554,7 @@ fn rich_shape_identity_hash(base: u64, spans: Option<&[crate::style::TextSpan]>)
         span.monospace.hash(&mut hash);
         span.underline.hash(&mut hash);
         span.strikethrough.hash(&mut hash);
+        span.href.is_some().hash(&mut hash);
         span.background.hash(&mut hash);
         std::mem::discriminant(&span.kind).hash(&mut hash);
     }
@@ -749,6 +750,7 @@ fn correct_bidi_ink_spill(
     height_opt: Option<f32>,
     wrap_w: f32,
     nowrap: bool,
+    preserve_rich_text: bool,
     force_fast: bool,
     text_style: &crate::style::TextStyle,
 ) -> f32 {
@@ -765,6 +767,14 @@ fn correct_bidi_ink_spill(
     let horizontal_spill = max_ink > soft_w_target + 1.0;
     let vertical_spill = (runs as f32 * line_height) > scaled_h + 1.0;
     if !horizontal_spill && !vertical_spill {
+        return wrap_w;
+    }
+    // Plain-text fitting rebuilds the buffer and discards span attributes.
+    // Rich text already wraps at its declared width using the shaped metrics.
+    if preserve_rich_text {
+        if vertical_spill {
+            crate::text::note_fit_needs_relayout();
+        }
         return wrap_w;
     }
     if force_fast {
@@ -2995,6 +3005,7 @@ pub fn prepare_text_frame_at(
         // Wrap: FIT_CACHE hit always. Fast miss → leaf (smooth resize). Settle miss →
         // one glyphon_fit (bidi/emoji ink must not paint past the leaf).
         // BiDi/WJ prewrap uses floor-8 buckets (≤ leaf) so Wrap::None paint cannot reflow.
+        let has_rich_spans = info.spans.as_ref().is_some_and(|spans| !spans.is_empty());
         let fit_lookup_w = {
             if crate::text::needs_logical_prewrap(info.text.as_str()) {
                 crate::text::layout_wrap_target_prewrap(layout_w)
@@ -3005,7 +3016,7 @@ pub fn prepare_text_frame_at(
             }
         };
         let resolve_paint_wrap = || -> f32 {
-            if nowrap {
+            if nowrap || has_rich_spans {
                 return soft_w_target;
             }
             // Prewrap hard-breaks are sized for the leaf; do not shrink buffer below leaf
@@ -3070,6 +3081,7 @@ pub fn prepare_text_frame_at(
                 scroll_fast_skips_input_reshape(force_fast_mode, true, st.input_caret.is_some())
             } else if force_fast_mode {
                 nowrap
+                    || has_rich_spans
                     || !crate::text::needs_logical_prewrap(info.text.as_str())
                     || bidi_prewrap_applied(
                         &entry.buffer,
@@ -3163,6 +3175,7 @@ pub fn prepare_text_frame_at(
                                 buffer_height_opt,
                                 wrap_w,
                                 nowrap,
+                                has_rich_spans,
                                 force_fast_mode,
                                 st,
                             );
@@ -3177,6 +3190,7 @@ pub fn prepare_text_frame_at(
                             }
                         }
                     } else if !nowrap
+                        && !has_rich_spans
                         && crate::text::needs_logical_prewrap(info.text.as_str())
                         && !bidi_prewrap_applied(
                             &entry.buffer,
@@ -3227,6 +3241,7 @@ pub fn prepare_text_frame_at(
                                 buffer_height_opt,
                                 wrap_w,
                                 nowrap,
+                                has_rich_spans,
                                 force_fast_mode,
                                 st,
                             );
@@ -3249,6 +3264,7 @@ pub fn prepare_text_frame_at(
                 // BiDi/WJ prewrap is width-dependent → re-Miss when wrap target moves OR
                 // when the buffer still has raw text from a fast WordOrGlyph Miss.
                 let logical_prewrap = !nowrap
+                    && !has_rich_spans
                     && st.max_lines.is_none()
                     && !is_input_text
                     && crate::text::needs_logical_prewrap(info.text.as_str());
@@ -3302,6 +3318,7 @@ pub fn prepare_text_frame_at(
                         buffer_height_opt,
                         wrap_w,
                         nowrap,
+                        has_rich_spans,
                         force_fast_mode,
                         st,
                     );
@@ -3353,6 +3370,7 @@ pub fn prepare_text_frame_at(
                             buffer_height_opt,
                             wrap_w,
                             nowrap,
+                            has_rich_spans,
                             force_fast_mode,
                             st,
                         );
@@ -3395,6 +3413,7 @@ pub fn prepare_text_frame_at(
                     glyphon::Metrics::new(scaled_size.max(1.0), line_height.max(1.0)),
                 );
                 let logical_prewrap = !nowrap
+                    && !has_rich_spans
                     && st.max_lines.is_none()
                     && !is_input_text
                     && crate::text::needs_logical_prewrap(info.text.as_str());
@@ -3482,6 +3501,7 @@ pub fn prepare_text_frame_at(
                             a = a.family(glyphon::Family::Monospace);
                         }
                         if span.background.is_some()
+                            || span.href.is_some()
                             || span.underline
                             || span.strikethrough
                             || matches!(span.kind, TextSpanKind::Chip | TextSpanKind::Mention)
@@ -3568,6 +3588,7 @@ pub fn prepare_text_frame_at(
                     buffer_height_opt,
                     buffer_soft_w,
                     nowrap,
+                    has_rich_spans,
                     force_fast_mode,
                     st,
                 );
@@ -3951,6 +3972,23 @@ pub fn prepare_text_frame_at(
     let mut underline_instances: Vec<InstanceInput> = Vec::new();
     let caret_instances: Vec<InstanceInput> = Vec::new();
 
+    // Cache unclipped local advances. Capture/band clips must not erase the rest
+    // of a link, and scrolling/paint transforms must not require reshaping it.
+    for (i, info) in text_nodes.iter().enumerate() {
+        if let Some(tb) = frame_meta.get(i).and_then(|meta| meta.as_ref()) {
+            text_renderer.text_links.borrow_mut().record(
+                info,
+                &text_renderer.shaped_cache[i].buffer,
+                text_renderer.shaped_cache[i].key_hash,
+                ui_scale,
+                [
+                    (tb.x / ui_scale - info.x) / tb.paint_scale,
+                    (tb.y / ui_scale - info.y + tb.dy / ui_scale) / tb.paint_scale,
+                ],
+            );
+        }
+    }
+
     // Chip/Mention backgrounds (`jadix_chip` Attrs.metadata = span_index+1). Drawn under glyphs.
     for (i, info) in text_nodes.iter().enumerate() {
         let Some(spans) = info.spans.as_ref().filter(|s| !s.is_empty()) else {
@@ -4013,12 +4051,13 @@ pub fn prepare_text_frame_at(
                     };
                     if let Some(bg) = span.background {
                         let pad = span.padding_x * ui_scale;
-                        let bh = line_height.max(1.0) * ps;
+                        let [top, bottom] = span.background_outsets().map(|v| v * ui_scale);
+                        let bh = (line_height + top + bottom).max(1.0) * ps;
                         let radius = (bh * 0.25).min(6.0 * ui_scale * ps);
                         push_rect(
                             [
                                 tb.x + (min_x - pad) * ps,
-                                tb.y + line_top * ps,
+                                tb.y + (line_top - top) * ps,
                                 (max_x - min_x + 2.0 * pad) * ps,
                                 bh,
                             ],

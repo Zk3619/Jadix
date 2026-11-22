@@ -29,6 +29,7 @@ pub mod present_retain;
 pub mod resources;
 pub mod text;
 pub mod text_hit;
+pub(crate) mod text_links;
 pub(crate) mod text_prepare_debug;
 pub mod text_xform;
 pub mod textured_pipeline;

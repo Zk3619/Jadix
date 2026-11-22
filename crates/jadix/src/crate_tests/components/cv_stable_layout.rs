@@ -110,12 +110,14 @@ fn cv_tabs_layout_nonzero_bounds() {
                     TabsTrigger(TabsTriggerProps {
                         value: Some("one".into()),
                         disabled: None,
+                        accessibility_description: None,
                         children: Some(Element::new().text("One")),
                         base: None,
                     }),
                     TabsTrigger(TabsTriggerProps {
                         value: Some("two".into()),
                         disabled: None,
+                        accessibility_description: None,
                         children: Some(Element::new().text("Two")),
                         base: None,
                     }),

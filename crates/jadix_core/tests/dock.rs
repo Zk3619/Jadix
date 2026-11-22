@@ -23,6 +23,33 @@ fn dock() -> Dock {
 }
 
 #[test]
+fn split_gestures_have_one_undo_step_and_cancel_preserves_redo() {
+    let mut model = dock();
+    model.relocate(2, DropLocation::Split { stack: 1, edge: Edge::Right }).unwrap();
+    let split = model.surfaces()[0].root.key();
+    let original = model.to_json().unwrap();
+    model.begin_resize(split).unwrap();
+    for step in 0..1000 { model.resize_split(split, 0.5 + step as f64 / 2500.).unwrap(); }
+    assert!(model.finish_resize(false).unwrap());
+    let resized = model.to_json().unwrap();
+    model.undo().unwrap();
+    assert_eq!(model.to_json().unwrap(), original);
+    model.begin_resize(split).unwrap();
+    model.resize_split(split, 0.2).unwrap();
+    assert!(model.finish_resize(true).unwrap());
+    assert_eq!(model.to_json().unwrap(), original);
+    assert!(model.redo().unwrap());
+    assert_eq!(model.to_json().unwrap(), resized);
+    model.begin_resize(split).unwrap();
+    model.resize_split(split, 0.3).unwrap();
+    model.activate(3).unwrap(); // An independent command closes the gesture.
+    model.undo().unwrap();
+    assert!(matches!(model.surfaces()[0].root, DockNode::Split { ratio, .. } if ratio == 0.3));
+    model.undo().unwrap();
+    assert_eq!(model.to_json().unwrap(), resized);
+}
+
+#[test]
 fn split_move_float_close_and_undo_keep_unique_business_keys_and_monotonic_layout_ids() {
     let mut model = dock();
     model

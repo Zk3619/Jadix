@@ -191,18 +191,33 @@ fn content_scroll_paint_only(
 
 impl super::App {
     pub(super) fn cancel_pointer_session(&mut self) {
-        crate::utils::drag::runtime::cancel();
-        crate::utils::drag::routing::finish_all();
-        crate::utils::drag::pointer::clear_all();
-        crate::app::release_pointer_capture();
+        super::pointer_events::cancel_pointer_gestures();
         self.left_button_down = false;
         self.mouse_buttons = 0;
         self.click_press_path = None;
+        self.click_press_scrolled = false;
+        self.outside_dismiss_on_down = false;
         self.scrollbar_drag = None;
         self.content_scroll_drag = None;
         self.textarea_resize_drag = None;
+        // Cancellation must not apply a release edit or collapse the selection.
+        self.input_drag_rest = None;
+        self.input_drag_multi = false;
+        self.input_drag_multi_base.clear();
+        self.label_drag_key = None;
         self.drag_reorder = None;
         self.long_press = None;
+    }
+
+    /// Discard updates prepared before a handler handed pointer ownership to the OS.
+    pub(super) fn finish_native_pointer_handoff(&mut self) -> bool {
+        if !super::pointer_events::take_native_pointer_handoff() {
+            return false;
+        }
+        self.cancel_pointer_session();
+        self.force_redraw_count = self.force_redraw_count.max(1);
+        super::runtime::request_redraw();
+        true
     }
 
     pub(super) fn bind_pointer_window(&mut self, id: WindowId) {
@@ -300,6 +315,7 @@ impl super::App {
         // guard would reinstate a prior secondary token and leave portal/focus routing
         // stuck on the secondary after every primary click.
         super::window_scope::force_primary();
+        self.finish_native_pointer_handoff();
         Some(f(self))
     }
 
@@ -563,17 +579,30 @@ impl super::App {
                     .map(|s| s.window.scale_factor() as f32)
                     .unwrap_or(1.0)
             };
-            let x = self.cursor_pos.x as f32 / scale.max(1.0);
-            let y = self.cursor_pos.y as f32 / scale.max(1.0);
-            let (cursor_pick, window) = {
+            let [x, y] = if self.cursor_inside_window {
+                [
+                    self.cursor_pos.x as f32 / scale.max(1.0),
+                    self.cursor_pos.y as f32 / scale.max(1.0),
+                ]
+            } else {
+                [f32::NEG_INFINITY; 2]
+            };
+            let (cursor_pick, link_hover_path, window) = {
                 let secs = self.secondaries.borrow();
                 let Some(sec) = secs.get(&id) else {
                     return;
                 };
-                (
+                let (cursor, path) = sec.text_renderer.text_links.borrow().resolve_cursor(
+                    &sec.root_element,
+                    &sec.text_nodes,
+                    [x, y],
+                    scale,
                     super::tree_hit::pick_cursor(&sec.root_element, x, y, [0.0, 0.0]),
-                    sec.window.clone(),
-                )
+                    self.last_mouse_path
+                        .as_ref()
+                        .is_some_and(|p| p.iter().any(|e| e.text_link.is_some())),
+                );
+                (cursor, path, sec.window.clone())
             };
             super::tree_hit::apply_cursor(
                 window.as_ref(),
@@ -581,6 +610,9 @@ impl super::App {
                 &mut self.custom_cursors,
                 cursor_pick,
             );
+            if let Some(path) = link_hover_path {
+                self.refresh_text_link_hover(&path, x, y);
+            }
         }
     }
 
@@ -1269,7 +1301,7 @@ impl super::App {
             window,
             event_loop,
             &mut self.custom_cursors,
-            hit,
+            super::tree_hit::label_selection_cursor(hit, self.label_drag_key.is_some()),
             self.textarea_resize_drag.is_some(),
             (self.drag_reorder.is_some() && self.left_button_down)
                 || crate::utils::drag::runtime::is_dragging()
@@ -1346,6 +1378,31 @@ impl super::App {
         let mut ev = self.build_mouse_event(x, y, button, detail, event_type, related_target);
         super::pointer_events::dispatch_pointer(path, &mut ev, kind);
         ev
+    }
+
+    // Called only after releasing the primary/secondary state borrow. Geometry
+    // changes also reconcile enter/leave ownership, but never synthesize a move.
+    fn refresh_text_link_hover(
+        &mut self,
+        path: &[super::pointer_events::HitPathEntry],
+        x: f32,
+        y: f32,
+    ) {
+        use super::pointer_events::{MouseButton, PointerKind};
+        let [x, y] = if x.is_finite() && y.is_finite() {
+            [x, y]
+        } else {
+            self.last_client_pos.unwrap_or([0.0; 2])
+        };
+        self.sync_mouse_enter_leave(x, y, path, MouseButton::Left);
+        let mut event = self.build_mouse_event(x, y, MouseButton::Left, 0, "linkhover", None);
+        if super::pointer_capture_id().is_some()
+            || crate::utils::drag::runtime::is_dragging()
+            || crate::utils::anchored_overlay::is_floating_panel_dragging()
+        {
+            event.buttons |= 1;
+        }
+        super::pointer_events::dispatch_pointer(path, &mut event, PointerKind::LinkHover);
     }
 
     pub(super) fn sync_mouse_enter_leave(
@@ -1447,6 +1504,7 @@ impl super::App {
         id: WindowId,
         event_loop: &dyn ActiveEventLoop,
     ) {
+        self.finish_native_pointer_handoff();
         if !self.cursor_move_pending {
             return;
         }
@@ -1486,11 +1544,17 @@ impl super::App {
         // under the cursor and keep its hover signal set while we remain inside.
         let overlay_dragging = crate::utils::drag::runtime::is_dragging()
             || crate::utils::anchored_overlay::is_floating_panel_dragging();
-        let mouse_path = if overlay_dragging {
+        let mut mouse_path = if overlay_dragging {
             Vec::new()
         } else {
             super::pointer_events::hit_path(&state.root_element, x, y)
         };
+        state.text_renderer.text_links.borrow().annotate_path(
+            &state.text_nodes,
+            &mut mouse_path,
+            [x, y],
+            scale,
+        );
         let captured_move_path = super::pointer_events::captured_path(&state.root_element);
         let pointer_path_unchanged = super::pointer_events::hit_path_identity_eq(
             self.last_mouse_path.as_deref().unwrap_or(&[]),
@@ -1606,8 +1670,7 @@ impl super::App {
                             &style,
                             ui_scale,
                         );
-                        let lo = self.label_drag_anchor.min(ix);
-                        let hi = self.label_drag_anchor.max(ix);
+                        let (lo, hi) = self.label_drag_anchor.range_to(&display_el, ix);
                         Some((key.clone(), lo, hi, ix))
                     } else {
                         None
@@ -1653,11 +1716,16 @@ impl super::App {
             }
         }
 
-        let cursor_pick = if overlay_dragging || pointer_path_unchanged {
+        let cursor_pick = if overlay_dragging {
             None
         } else {
             super::pointer_events::path_resolved_cursor(&mouse_path)
         };
+        let cursor_changed = !pointer_path_unchanged
+            || cursor_pick
+                != super::pointer_events::path_resolved_cursor(
+                    self.last_mouse_path.as_deref().unwrap_or(&[]),
+                );
         let mut to_run = Vec::new();
         if !overlay_dragging && !pointer_path_unchanged {
             let prev_path = self.last_mouse_path.as_deref().unwrap_or(&[]);
@@ -1672,12 +1740,15 @@ impl super::App {
         // otherwise gallery scrollbar Pointer cursors stick through the mask.
         // Drag overlay is pointer-events none — lock grabbing so redraw/move cannot flicker
         // Default ↔ Grabbing (Windows 默认指针 ↔ 移动指针).
-        if !pointer_path_unchanged {
+        if cursor_changed {
             super::tree_hit::apply_session_cursor(
                 window.as_ref(),
                 Some(event_loop),
                 &mut self.custom_cursors,
-                cursor_pick.clone(),
+                super::tree_hit::label_selection_cursor(
+                    cursor_pick.clone(),
+                    self.label_drag_key.is_some(),
+                ),
                 self.textarea_resize_drag.is_some(),
                 (self.drag_reorder.is_some() && self.left_button_down)
                     || crate::utils::drag::runtime::is_dragging()
@@ -1738,6 +1809,9 @@ impl super::App {
         }
         self.note_long_press_move(phys_x, phys_y);
         self.sync_mouse_enter_leave(x, y, &mouse_path, MouseButton::Left);
+        if self.finish_native_pointer_handoff() {
+            return;
+        }
         // Canvas ink: keep dispatching to the press target so the stroke follows the pointer
         // even if hit-test leaves the leaf (fast flicks / 1px miss).
         let canvas_press_path = (self.mouse_buttons & 1 != 0)
@@ -1759,6 +1833,9 @@ impl super::App {
             None,
         );
         self.last_client_pos = Some([x, y]);
+        if self.finish_native_pointer_handoff() {
+            return;
+        }
 
         let product_dragging = product_drag_move.dispatch();
         let floating_panel_dragging =
@@ -1979,7 +2056,7 @@ impl super::App {
         if crate::primitives::interactive::take_hover_paint_dirty() {
             window.request_redraw();
         }
-        if !pointer_path_unchanged {
+        if cursor_changed {
             self.apply_hover_cursor(window.as_ref(), Some(event_loop), cursor_pick);
         }
     }
@@ -1993,6 +2070,7 @@ impl super::App {
         let window = state.window.clone();
         drop(state_borrow);
 
+        self.cancel_pointer_session();
         self.cursor_inside_window = false;
         self.cursor_move_pending = false;
         self.clear_primary_hovers_out_of_window();
@@ -2068,7 +2146,7 @@ impl super::App {
         }
 
         let mut input_drag: Option<(String, usize, String, Option<(usize, usize)>)> = None;
-        let mut label_drag: Option<(String, usize, Option<(usize, usize)>)> = None;
+        let mut label_drag = None;
         if element_state == ElementState::Pressed {
             if let Some((rest, bounds, display_el, style, leaf_scroll, focus_id)) =
                 super::tree_hit::find_input_text_at(&state.root_element, None, x, y, [0.0, 0.0])
@@ -2172,12 +2250,12 @@ impl super::App {
                     &style,
                     ui_scale,
                 );
-                let paragraph = (self.click_count >= 3)
-                    .then(|| {
-                        crate::utils::text_selection::selectable_paragraph_range(&display_el, ix)
-                    })
-                    .flatten();
-                label_drag = Some((key, ix, paragraph));
+                let anchor = crate::utils::text_selection::TextSelectionAnchor::new(
+                    &display_el,
+                    ix,
+                    self.click_count,
+                );
+                label_drag = Some((key, anchor, anchor.range_to(&display_el, ix)));
             }
         }
 
@@ -2427,7 +2505,7 @@ impl super::App {
             }
 
             let capture = super::pointer_capture_id();
-            let path = if let Some(ref id) = capture {
+            let mut path = if let Some(ref id) = capture {
                 super::tree_hit::captured_pointer_hit(&state.root_element, id.as_str()).map_or_else(
                     || super::pointer_events::hit_path(&state.root_element, x, y),
                     |e| vec![e],
@@ -2435,6 +2513,12 @@ impl super::App {
             } else {
                 super::pointer_events::hit_path(&state.root_element, x, y)
             };
+            state.text_renderer.text_links.borrow().annotate_path(
+                &state.text_nodes,
+                &mut path,
+                [x, y],
+                state.window.scale_factor() as f32,
+            );
             crate::utils::drag::runtime::refresh_geometry(&state.root_element);
             drop(state_borrow);
             let focus_visible =
@@ -2452,6 +2536,9 @@ impl super::App {
                 &mut pev,
                 super::pointer_events::PointerKind::Down,
             );
+            if self.finish_native_pointer_handoff() {
+                return;
+            }
             // The touch-content pan is armed before dispatch so it can inspect
             // the same hit path. Resize handles claim the event during
             // dispatch; drop the provisional pan in that case.
@@ -2690,12 +2777,12 @@ impl super::App {
                 // FALLBACK — Poll if dropping WaitUntil is not enough (chrome still frozen).
                 // super::input_controller::arm_text_edit_force_immediate();
                 // self.force_redraw_count = self.force_redraw_count.max(2);
-            } else if let Some((key, caret_ix, paragraph)) = label_drag {
+            } else if let Some((key, anchor, range)) = label_drag {
                 let sk = crate::utils::text_selection::label_selection_signal_key(&key);
                 crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
-                    .set(paragraph.or(Some((caret_ix, caret_ix))));
-                self.label_drag_key = paragraph.is_none().then_some(key);
-                self.label_drag_anchor = caret_ix;
+                    .set(Some(range));
+                self.label_drag_key = Some(key);
+                self.label_drag_anchor = anchor;
                 self.input_drag_rest = None;
                 self.input_drag_multi = false;
                 self.input_drag_multi_base.clear();
@@ -2853,6 +2940,8 @@ impl super::App {
         max_y: f32,
         wheel: bool,
     ) {
+        crate::core::scroll_viewport::cancel_scroll_end_x(&rest);
+        crate::core::scroll_viewport::cancel_scroll_end_y(&rest);
         self.note_user_scroll_after_press();
         // Keep the I-beam solid across page scroll (Gallery 图二). Strip blit may
         // copy a blink-OFF retain; restarting before the next collect forces chrome ON
@@ -3311,7 +3400,8 @@ impl super::App {
                     can_move_x || can_move_y
                 }
                 ScrollAction::Absolute(tx, ty) => {
-                    (tx - bx).abs() > 0.5
+                    matches!(&event.logical_key, Key::Named(NamedKey::End))
+                        || (tx - bx).abs() > 0.5
                         || (ty - by).abs() > 0.5
                         || (tx > 0.5 && bx < tx)
                         || (ty > 0.5 && by < ty)
@@ -3363,6 +3453,12 @@ impl super::App {
                     let smooth = super::scroll_support::apply_scroll_navigation_absolute(
                         &rest, tx, ty, max_x, max_y,
                     );
+                    if matches!(&event.logical_key, Key::Named(NamedKey::End)) {
+                        if (tx - max_x).abs() <= 0.5 {
+                            crate::core::scroll_viewport::request_scroll_end_x(&rest, max_x);
+                        }
+                        crate::core::scroll_viewport::request_scroll_end_y(&rest, max_y);
+                    }
                     self.note_user_scroll_after_press();
                     if smooth {
                         crate::authoring::input::set_geometry_changing(true);
@@ -3887,6 +3983,12 @@ impl super::App {
                 rest,
                 if my.is_finite() { my.max(0.0) } else { 0.0 },
             );
+            let current_sx =
+                crate::core::scroll_viewport::reconcile_scroll_end_x(rest, raw_max_x, old_sx)
+                    .unwrap_or(old_sx);
+            let current_sy =
+                crate::core::scroll_viewport::reconcile_scroll_end_y(rest, raw_max_y, old_sy)
+                    .unwrap_or(old_sy);
             let lp = self
                 .scroll_max_lowpass
                 .entry(rest.clone())
@@ -3911,10 +4013,12 @@ impl super::App {
             } else {
                 0.0
             };
-            let (sx_clamped, tx_clamped) =
-                super::scroll_support::clamp_scroll_offset_and_target(old_sx, tx_raw, raw_max_x);
-            let (sy_clamped, ty_clamped) =
-                super::scroll_support::clamp_scroll_offset_and_target(old_sy, ty_raw, raw_max_y);
+            let (sx_clamped, tx_clamped) = super::scroll_support::clamp_scroll_offset_and_target(
+                current_sx, tx_raw, raw_max_x,
+            );
+            let (sy_clamped, ty_clamped) = super::scroll_support::clamp_scroll_offset_and_target(
+                current_sy, ty_raw, raw_max_y,
+            );
             if (tx.peek() - tx_clamped).abs() > 0.01 {
                 tx.set_silent(tx_clamped);
             }
@@ -3962,7 +4066,9 @@ impl super::App {
                 }
                 // Nested ScrollArea: skip work for areas already at target (outer idle while inner scrolls).
                 let idle_eps = (1.0 / ui_scale.max(0.01)) * 0.51;
-                if (target_x - old_sx).abs() < idle_eps && (target_y - old_sy).abs() < idle_eps {
+                if (target_x - current_sx).abs() < idle_eps
+                    && (target_y - current_sy).abs() < idle_eps
+                {
                     self.smooth_scroll_motion.remove(rest);
                     // Idle, but still clamp offset into max (stale offset after max shrink).
                     pre_render_data.push((
@@ -3982,16 +4088,16 @@ impl super::App {
                     .or_insert_with(|| {
                         (
                             [
-                                super::scroll_support::SmoothScrollAxis::new(old_sx),
-                                super::scroll_support::SmoothScrollAxis::new(old_sy),
+                                super::scroll_support::SmoothScrollAxis::new(current_sx),
+                                super::scroll_support::SmoothScrollAxis::new(current_sy),
                             ],
                             now,
                         )
                     });
                 let chase_dt = now.saturating_duration_since(*last_tick).as_secs_f32();
                 *last_tick = now;
-                let (cur_x, ax) = motion[0].step(old_sx, target_x, chase_dt, ui_scale);
-                let (cur_y, ay) = motion[1].step(old_sy, target_y, chase_dt, ui_scale);
+                let (cur_x, ax) = motion[0].step(current_sx, target_x, chase_dt, ui_scale);
+                let (cur_y, ay) = motion[1].step(current_sy, target_y, chase_dt, ui_scale);
                 if ax || ay {
                     smooth_scroll_animating = true;
                 }
@@ -4270,6 +4376,17 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     &mut hover_to_run,
                     scroll_paint_only,
                 );
+                let (hover_cursor_pick, link_hover_path) =
+                    state.text_renderer.text_links.borrow().resolve_cursor(
+                        &state.root_element,
+                        &state.text_nodes,
+                        [hx, hy],
+                        state.ui_scale(),
+                        hover_cursor_pick,
+                        self.last_mouse_path
+                            .as_ref()
+                            .is_some_and(|p| p.iter().any(|e| e.text_link.is_some())),
+                    );
 
                 // Never reset the OS cursor from a primary redraw while the pointer lives on
                 // another window — that would wipe secondary I-beam / Pointer mid-hover.
@@ -4847,6 +4964,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 for (cb, is_hover) in hover_to_run {
                     (*cb.borrow_mut())(is_hover);
                 }
+                if pointer_on_primary {
+                    if let Some(path) = link_hover_path {
+                        self.refresh_text_link_hover(&path, hx, hy);
+                    }
+                }
                 crate::app::reactive::drain_deferred_view_remounts();
                 crate::utils::modal_motion::drain_pending_modal_unmounts();
                 crate::utils::floating_motion::drain_pending_floating_unmounts();
@@ -5165,13 +5287,21 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let x = self.cursor_pos.x as f32 / scale.max(1.0);
                     let y = self.cursor_pos.y as f32 / scale.max(1.0);
                     let capture = super::pointer_capture_id();
-                    let (path, click_path, cb_to_run, label_for_focus, on_exclusive, on_trigger) = {
+                    let (
+                        path,
+                        click_path,
+                        cb_to_run,
+                        label_for_focus,
+                        on_exclusive,
+                        on_trigger,
+                        text_link,
+                    ) = {
                         let state_borrow = self.state.borrow();
                         let state = match state_borrow.as_ref() {
                             Some(s) if s.window.id() == id => s,
                             _ => return,
                         };
-                        let path = if let Some(ref cap_id) = capture {
+                        let mut path = if let Some(ref cap_id) = capture {
                             super::tree_hit::captured_pointer_hit(&state.root_element, cap_id)
                                 .map_or_else(
                                     || super::pointer_events::hit_path(&state.root_element, x, y),
@@ -5180,9 +5310,25 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         } else {
                             super::pointer_events::hit_path(&state.root_element, x, y)
                         };
+                        state.text_renderer.text_links.borrow().annotate_path(
+                            &state.text_nodes,
+                            &mut path,
+                            [x, y],
+                            state.window.scale_factor() as f32,
+                        );
+                        let mut text_link = None;
                         let click_path = match self.click_press_path.take() {
                             Some(down) => {
                                 let scrolled = std::mem::take(&mut self.click_press_scrolled);
+                                text_link = super::pointer_events::activated_text_link(
+                                    &down,
+                                    &path,
+                                    super::pointer_events::click_pointer_moved(
+                                        self.last_click_pos,
+                                        [self.cursor_pos.x as f32, self.cursor_pos.y as f32],
+                                    ),
+                                    scrolled,
+                                );
                                 super::pointer_events::click_gesture_path(
                                     &down,
                                     &path,
@@ -5212,16 +5358,23 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             cb_resolved.1,
                             on_exclusive,
                             on_trigger,
+                            text_link,
                         )
                     };
                     let detail = self.click_count.max(1);
                     let mut pev =
                         self.build_mouse_event(x, y, MouseButton::Left, detail, "mouseup", None);
+                    if detail == 1 && !pev.shift_key {
+                        pev.text_link = text_link;
+                    }
                     super::pointer_events::dispatch_pointer(
                         &path,
                         &mut pev,
                         super::pointer_events::PointerKind::Up,
                     );
+                    if self.finish_native_pointer_handoff() {
+                        return;
+                    }
                     if detail >= 2 && !pev.is_consumed() && !click_path.is_empty() {
                         let mut pev2 = self.build_mouse_event(
                             x,
@@ -5236,6 +5389,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             &mut pev2,
                             super::pointer_events::PointerKind::DoubleClick,
                         );
+                        if self.finish_native_pointer_handoff() {
+                            return;
+                        }
                     }
                     // Legacy `on_click` / Label `for`: fire on pointer up (DOM click timing).
                     if !pev.is_consumed() {
@@ -5248,6 +5404,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         }
                         if let Some(cb) = cb_to_run {
                             (*cb.borrow_mut())();
+                            if self.finish_native_pointer_handoff() {
+                                return;
+                            }
                         }
                         crate::app::reactive::drain_deferred_view_remounts();
                     }
@@ -5299,6 +5458,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         &mut down,
                         super::pointer_events::PointerKind::Down,
                     );
+                    if self.finish_native_pointer_handoff() {
+                        return;
+                    }
                     if !down.is_consumed() {
                         let mut pev = self.build_mouse_event(
                             x,
@@ -5313,6 +5475,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             &mut pev,
                             super::pointer_events::PointerKind::ContextMenu,
                         );
+                        if self.finish_native_pointer_handoff() {
+                            return;
+                        }
                     }
                 } else {
                     let mut up =
@@ -5322,6 +5487,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         &mut up,
                         super::pointer_events::PointerKind::Up,
                     );
+                    if self.finish_native_pointer_handoff() {
+                        return;
+                    }
                     // ContextMenu opens on right-press; arm dismiss so the next outside
                     // left-click can close (primary mouseup is the usual arm path).
                     crate::utils::popup::arm_underlay_close();
@@ -5352,6 +5520,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 };
                 let mut ev = self.build_mouse_event(x, y, button, 1, ty, None);
                 super::pointer_events::dispatch_pointer(&path, &mut ev, kind);
+                if self.finish_native_pointer_handoff() {
+                    return;
+                }
             }
         }
     }

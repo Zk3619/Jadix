@@ -86,7 +86,7 @@ fn i18n_watch_loop() {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        crate::app::ui_bridge::run_on_ui_thread(move || {
+        super::hooks::dispatch(Box::new(move || {
             let Some(root) = reload else {
                 return;
             };
@@ -94,6 +94,6 @@ fn i18n_watch_loop() {
             if let Err(err) = super::load::reload(&root) {
                 log::warn!("i18n watch reload failed for {}: {err}", root.display());
             }
-        });
+        }));
     }
 }

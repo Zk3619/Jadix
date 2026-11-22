@@ -205,6 +205,7 @@ pub struct Dock {
     drag: Option<DragToken>,
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
+    resize: Option<(u64, Snapshot)>,
 }
 
 impl Dock {
@@ -253,6 +254,7 @@ impl Dock {
             drag: None,
             undo: Vec::new(),
             redo: Vec::new(),
+            resize: None,
         })
     }
 
@@ -418,6 +420,7 @@ impl Dock {
 
     fn commit(&mut self, state: Snapshot) -> Result<bool, DockError> {
         let (next_node, next_surface) = Self::validate(&state, self.limits)?;
+        self.finish_resize(false)?;
         if state == self.state {
             return Ok(false);
         }
@@ -540,7 +543,43 @@ impl Dock {
             return Err(DockError::UnknownSplit);
         };
         *current = ratio;
+        if self.resize.as_ref().is_some_and(|(active, _)| *active == key) {
+            if state == self.state { return Ok(false); }
+            self.revision = self.revision.checked_add(1).ok_or(DockError::IdentityExhausted)?;
+            self.state = state;
+            return Ok(true);
+        }
         self.commit(state)
+    }
+
+    /// Coalesce live split previews into one undo step. Other commands end it.
+    pub fn begin_resize(&mut self, key: u64) -> Result<(), DockError> {
+        if self.drag.is_some() || self.resize.is_some() { return Err(DockError::DragBusy); }
+        if !matches!(Self::find_mut(&mut self.state, key), Some(DockNode::Split { .. })) {
+            return Err(DockError::UnknownSplit);
+        }
+        self.resize = Some((key, self.state.clone()));
+        Ok(())
+    }
+
+    pub fn finish_resize(&mut self, cancel: bool) -> Result<bool, DockError> {
+        let Some((_, previous)) = self.resize.as_ref() else { return Ok(false); };
+        let changed = *previous != self.state;
+        let revision = if cancel && changed {
+            self.revision.checked_add(1).ok_or(DockError::IdentityExhausted)?
+        } else { self.revision };
+        let (_, previous) = self.resize.take().expect("active resize");
+        if changed {
+            if cancel { self.state = previous; self.revision = revision; }
+            else {
+                if self.limits.history != 0 {
+                    if self.undo.len() == self.limits.history { self.undo.remove(0); }
+                    self.undo.push(previous);
+                }
+                self.redo.clear();
+            }
+        }
+        Ok(changed)
     }
 
     pub fn set_bounds(&mut self, surface: u64, bounds: Bounds) -> Result<bool, DockError> {
@@ -636,6 +675,7 @@ impl Dock {
     }
 
     pub fn undo(&mut self) -> Result<bool, DockError> {
+        self.finish_resize(false)?;
         if self.undo.is_empty() {
             return Ok(false);
         }
@@ -651,6 +691,7 @@ impl Dock {
     }
 
     pub fn redo(&mut self) -> Result<bool, DockError> {
+        self.finish_resize(false)?;
         if self.redo.is_empty() {
             return Ok(false);
         }
@@ -666,6 +707,7 @@ impl Dock {
     }
 
     pub fn begin_drag(&mut self, pane: u64) -> Result<DragToken, DockError> {
+        self.finish_resize(false)?;
         self.stack_of(pane).ok_or(DockError::UnknownPane)?;
         if self.drag.is_some() {
             return Err(DockError::DragBusy);

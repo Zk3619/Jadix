@@ -8,6 +8,33 @@ mod description_tests {
     use super::*;
 
     #[test]
+    fn text_projection_retains_native_extras_and_later_shared_metric_changes() {
+        use jadix_core::presentation::style::{FontVariant, TextAppearance, TextTransform};
+        let mut element = Element::new().text("straße").text_appearance(TextAppearance {
+            italic: true,
+            transform: TextTransform::Uppercase,
+            variants: vec![FontVariant::SmallCaps, FontVariant::TabularNumbers],
+            vertical_align_fraction: Some(0.75),
+            line_height: Some(24.0),
+            letter_spacing: 2.0,
+            caret_color: Some([10, 20, 30, 255]),
+            ..Default::default()
+        });
+        element.text_style.line_height_px = Some(32.0);
+        element.text_style.letter_spacing = 3.0;
+        let snapshot = ElementProjection::new(RootId::new()).snapshot(&mut element).unwrap();
+        assert_eq!(snapshot.descriptor.content, NodeContent::Text("straße".into()));
+        let text = snapshot.descriptor.style.text.unwrap();
+        assert!(text.italic);
+        assert_eq!(text.transform, TextTransform::Uppercase);
+        assert_eq!(text.variants, vec![FontVariant::SmallCaps, FontVariant::TabularNumbers]);
+        assert_eq!(text.vertical_align_fraction, Some(0.75));
+        assert_eq!(text.line_height, Some(32.0));
+        assert_eq!(text.letter_spacing, 3.0);
+        assert_eq!(text.caret_color, Some([10, 20, 30, 255]));
+    }
+
+    #[test]
     fn native_description_precedence_and_clear_preserve_name_content_and_identity() {
         let mut element = Element::new().text("Visible");
         element.set_attr("aria-label", "Name");
@@ -50,13 +77,11 @@ mod description_tests {
                 .active_descendant,
             None
         );
-        assert!(
-            unresolved
-                .descriptor
-                .accessibility_relations
-                .controls
-                .is_empty()
-        );
+        assert!(unresolved
+            .descriptor
+            .accessibility_relations
+            .controls
+            .is_empty());
 
         let mut choice = Element::new();
         choice.set_attr("id", "choice");
@@ -387,6 +412,7 @@ fn content(element: &Element) -> Result<NodeContent, ProjectionError> {
                 || element.on_context_menu.is_some()
                 || element.on_double_click.is_some()
                 || element.on_mousemove.is_some()
+                || element.on_text_link_hover.is_some()
                 || element.on_mouseover.is_some()
                 || element.on_mouseout.is_some()
                 || element.on_mouseenter.is_some()
@@ -451,7 +477,8 @@ fn snapshot(
     paths.insert(identity.node, path.clone());
     let content = content(element)?;
     let mut children = Vec::new();
-    if content.accepts_children() {
+    // Legacy GPU authoring has already flattened registered button captions.
+    if content.accepts_children() && !matches!(content, NodeContent::Button { .. }) {
         for (index, child) in element.children.iter_mut().enumerate() {
             if child.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID) {
                 if !child.children.is_empty() {
@@ -468,11 +495,24 @@ fn snapshot(
     Ok(PresentationNode {
         id: identity.node,
         descriptor: NodeDescriptor {
+            interaction: jadix_core::presentation::interaction::InteractionPolicy {
+                hit_slop: element.hit_slop_edges().edges().map(f64::from),
+                pointer_events: match element.pointer_events_mode() {
+                    crate::core::tree::PointerEvents::None => jadix_core::presentation::interaction::PointerEvents::None,
+                    crate::core::tree::PointerEvents::BoxNone => jadix_core::presentation::interaction::PointerEvents::BoxNone,
+                    _ => jadix_core::presentation::interaction::PointerEvents::Auto,
+                },
+                ..Default::default()
+            },
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
             content,
             frame,
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility: accessibility::Accessibility::from_attributes(|name| element.get_attr(name).map(String::as_str))
+            .map_err(ProjectionError::Unsupported)?,
             accessibility_relations: AccessibilityRelations {
                 active_descendant: element
                     .get_attr("aria-activedescendant")
@@ -507,6 +547,26 @@ fn snapshot(
                     .unwrap_or_else(|| String::from("system-ui")),
                 font_size: element.text_style.size.unwrap_or(16.0),
                 font_weight: element.text_style.weight.unwrap_or(400),
+                text: Some({
+                    let mut text = element.text_style.presentation_appearance();
+                    if let Some(extra) = element.authoring_state
+                        .get::<jadix_core::presentation::style::TextAppearance>() {
+                        text.italic = extra.italic;
+                        text.vertical_align = extra.vertical_align;
+                        text.vertical_align_fraction = extra.vertical_align_fraction;
+                        text.transform = extra.transform;
+                        text.variants = extra.variants.clone();
+                        text.placeholder_color = extra.placeholder_color;
+                        text.selection_color = extra.selection_color;
+                        text.caret_color = extra.caret_color;
+                        text.selectable = extra.selectable.or(text.selectable);
+                    }
+                    if let Some(paint) = &element.input_paint_sync {
+                        text.caret_color = paint.caret_color.or(text.caret_color);
+                        text.selection_color = paint.selection_bg.or(text.selection_color);
+                    }
+                    text
+                }),
                 ..Default::default()
             },
         },

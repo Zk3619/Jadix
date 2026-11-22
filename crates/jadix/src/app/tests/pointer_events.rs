@@ -2,6 +2,216 @@ use super::*;
 use crate::core::tree::Element;
 
 #[test]
+fn inline_link_cursor_changes_within_one_node_and_preserves_authored_cursors() {
+    use crate::style::{CursorKind, CursorUrl, CursorValue};
+    let mut node = Element::new();
+    node.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+    let plain = hit_path(&node, 10.0, 10.0);
+    let mut link = plain.clone();
+    link.last_mut().unwrap().text_link = Some(TextLinkHit {
+        href: "https://example.com".into(),
+        span_index: 0,
+    });
+    assert!(hit_path_identity_eq(&plain, &link));
+    assert_eq!(path_resolved_cursor(&plain), None);
+    assert_eq!(
+        path_resolved_cursor(&link),
+        Some(CursorKind::Pointer.into())
+    );
+    for kind in [CursorKind::Auto, CursorKind::Text, CursorKind::NotAllowed] {
+        link.last_mut().unwrap().cursor = Some(kind.into());
+        assert_eq!(
+            path_resolved_cursor(&link),
+            Some(
+                if kind == CursorKind::Auto {
+                    CursorKind::Pointer
+                } else {
+                    kind
+                }
+                .into()
+            )
+        );
+    }
+    let custom = CursorValue {
+        images: vec![CursorUrl {
+            src: "cursor.png".into(),
+            hotspot: None,
+        }],
+        kind: CursorKind::Auto,
+    };
+    link.last_mut().unwrap().cursor = Some(custom.clone());
+    assert_eq!(path_resolved_cursor(&link), Some(custom));
+    assert_eq!(
+        crate::app::tree_hit::label_selection_cursor(path_resolved_cursor(&link), true),
+        Some(CursorKind::Text.into())
+    );
+}
+
+#[test]
+fn text_link_release_requires_same_painted_span_and_respects_event_cancellation() {
+    let calls = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut root = Element::new().on_text_link({
+        let calls = calls.clone();
+        move |event| {
+            calls
+                .borrow_mut()
+                .push(event.text_link.as_ref().unwrap().href.clone())
+        }
+    });
+    root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+    let mut child = Element::new();
+    child.layout_bounds = [0.0, 0.0, 100.0, 30.0];
+    child.layout_node = Some(taffy::NodeId::from(42_u64));
+    root.children.push(child);
+    let mut down = hit_path(&root, 8.0, 8.0);
+    down.last_mut().unwrap().text_link = Some(TextLinkHit {
+        href: "#section".into(),
+        span_index: 1,
+    });
+    for scenario in 0..7 {
+        let mut up = down.clone();
+        match scenario {
+            1 => {
+                up.last_mut()
+                    .unwrap()
+                    .text_link
+                    .as_mut()
+                    .unwrap()
+                    .span_index = 2
+            }
+            2 => up.last_mut().unwrap().text_link = None,
+            3 => up.last_mut().unwrap().node_id = Some(taffy::NodeId::from(43_u64)),
+            _ => {}
+        }
+        let hit = activated_text_link(&down, &up, scenario == 4, scenario == 5);
+        assert_eq!(hit.is_some(), scenario == 0 || scenario == 6);
+        let mut event = PointerEvent::new(8.0, 8.0, MouseButton::Left, 1);
+        event.text_link = hit;
+        if scenario == 6 {
+            event.prevent_default();
+        }
+        dispatch_pointer(&up, &mut event, PointerKind::Up);
+    }
+    assert_eq!(
+        &*calls.borrow(),
+        &["#section".to_owned()],
+        "one bubble activation, never capture or cancelled release"
+    );
+    root.children[0] =
+        std::mem::take(&mut root.children[0]).on_mouseup(|event| event.stop_propagation());
+    let path = hit_path(&root, 8.0, 8.0);
+    let mut event = PointerEvent::new(8.0, 8.0, MouseButton::Left, 1);
+    event.text_link = down.last().unwrap().text_link.clone();
+    dispatch_pointer(&path, &mut event, PointerKind::Up);
+    assert_eq!(calls.borrow().len(), 1);
+}
+
+#[test]
+fn painted_link_hover_deduplicates_moves_and_clears_without_activation() {
+    let calls = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let chained = Rc::new(Cell::new(0));
+    let mut root = Element::new()
+        .on_mousemove({
+            let chained = chained.clone();
+            move |_| chained.set(chained.get() + 1)
+        })
+        .on_text_link_hover({
+            let calls = calls.clone();
+            move |event| {
+                assert!(event.text_link.is_none());
+                calls.borrow_mut().push(event.hovered_text_link.clone());
+            }
+        })
+        .on_text_link(|_| panic!("hover must not activate"));
+    root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+    let mut child = Element::new();
+    child.layout_bounds = root.layout_bounds;
+    root.children.push(child);
+    let mut linked = hit_path(&root, 8.0, 8.0);
+    let link = TextLinkHit {
+        href: "#section".into(),
+        span_index: 1,
+    };
+    linked.last_mut().unwrap().text_link = Some(link.clone());
+    let send = |path: &[HitPathEntry], kind, buttons, prevent| {
+        let mut event = MouseEvent::new(8.0, 8.0, MouseButton::Left, 0);
+        event.buttons = buttons;
+        if prevent {
+            event.prevent_default();
+        }
+        dispatch_pointer(path, &mut event, kind);
+    };
+    send(&linked, PointerKind::Move, 0, true);
+    assert!(calls.borrow().is_empty());
+    send(&linked, PointerKind::Move, 0, false);
+    send(&linked, PointerKind::Move, 0, false);
+    assert_eq!(
+        chained.get(),
+        6,
+        "existing handler still runs in both phases"
+    );
+    send(&linked, PointerKind::Down, 1, false);
+    send(&linked, PointerKind::Move, 1, false);
+    send(&linked, PointerKind::Move, 0, false);
+    send(&linked[..1], PointerKind::Leave, 0, false);
+    send(&linked, PointerKind::Move, 0, false);
+    let plain = hit_path(&root, 8.0, 8.0);
+    send(&plain, PointerKind::Move, 0, false);
+    assert_eq!(
+        &*calls.borrow(),
+        &[
+            Some(link.clone()),
+            None,
+            Some(link.clone()),
+            None,
+            Some(link),
+            None
+        ]
+    );
+    root.children[0] =
+        std::mem::take(&mut root.children[0]).on_mousemove(|event| event.stop_propagation());
+    let mut blocked = hit_path(&root, 8.0, 8.0);
+    blocked.last_mut().unwrap().text_link = linked.last().unwrap().text_link.clone();
+    send(&blocked, PointerKind::Move, 0, false);
+    assert_eq!(calls.borrow().len(), 6);
+    send(&linked, PointerKind::Move, 0, false);
+    let mut other_node = linked.clone();
+    other_node.last_mut().unwrap().node_id = Some(taffy::NodeId::from(42_u64));
+    send(&other_node, PointerKind::Move, 0, false);
+    assert_eq!(
+        calls.borrow().len(),
+        8,
+        "identical links in distinct nodes refresh"
+    );
+    other_node.last_mut().unwrap().bounds[1] += 10.0;
+    send(&other_node, PointerKind::Move, 0, false);
+    send(&other_node, PointerKind::Move, 0, false);
+    assert_eq!(calls.borrow().len(), 9, "changed geometry refreshes once");
+    let moves = chained.get();
+    other_node
+        .last_mut()
+        .unwrap()
+        .text_link
+        .as_mut()
+        .unwrap()
+        .href = "#replacement".into();
+    send(&other_node, PointerKind::LinkHover, 0, false);
+    send(&other_node, PointerKind::LinkHover, 0, false);
+    assert_eq!(
+        calls.borrow().len(),
+        10,
+        "redraw refreshes the destination once"
+    );
+    send(&other_node, PointerKind::LinkHover, 1, false);
+    assert_eq!(
+        calls.borrow().last(),
+        Some(&None),
+        "dragging dismisses hover"
+    );
+    assert_eq!(chained.get(), moves, "redraw must not synthesize mousemove");
+}
+
+#[test]
 fn rapid_clicks_activate_once_per_release_without_double_click_bubbling() {
     let activations = Rc::new(Cell::new(0));
     let mut control = Element::new().on_click({
@@ -674,4 +884,36 @@ fn user_scroll_after_press_cancels_click_even_if_pointer_still() {
         "wheel / pan after mousedown must not fire on_click"
     );
     assert_eq!(n.get(), 0);
+}
+
+#[test]
+fn primary_press_activation_retains_focus_and_does_not_repeat_on_release() {
+    let count = Rc::new(std::cell::Cell::new(0));
+    let activated = count.clone();
+    let mut option = Element::new().on_click(move || activated.set(activated.get() + 1)).activate_on_press();
+    option.layout_bounds = [0., 0., 100., 40.];
+    let mut decoration = Element::new();
+    decoration.layout_bounds = [0., 0., 40., 20.];
+    option.children.push(decoration);
+    let path = hit_path(&option, 10., 10.);
+    let mut secondary = PointerEvent::new(10., 10., MouseButton::Right, 1);
+    dispatch_pointer(&path, &mut secondary, PointerKind::Down);
+    assert_eq!(count.get(), 0);
+    let mut primary = PointerEvent::new(10., 10., MouseButton::Left, 1);
+    dispatch_pointer(&path, &mut primary, PointerKind::Down);
+    assert_eq!(count.get(), 1);
+    assert!(primary.default_prevented());
+    assert!(primary.is_consumed());
+    assert!(resolve_click_from_path(&option, &path).0.is_none());
+    assert!(resolve_click_with_capture(&option, 10., 10., None).is_none());
+    let mut release = PointerEvent::new(10., 10., MouseButton::Left, 1);
+    dispatch_pointer(&path, &mut release, PointerKind::Click);
+    assert_eq!(count.get(), 1);
+    // Accessibility/programmatic activation continues using the ordinary action.
+    option.on_click.as_ref().unwrap().borrow_mut()();
+    assert_eq!(count.get(), 2);
+    option.on_mousedown = Some(Rc::new(RefCell::new(|event: &PointerEvent| event.prevent_default())));
+    let mut cancelled = PointerEvent::new(10., 10., MouseButton::Left, 1);
+    dispatch_pointer(&hit_path(&option, 10., 10.), &mut cancelled, PointerKind::Down);
+    assert_eq!(count.get(), 2);
 }

@@ -301,3 +301,112 @@ fn expand_idle_keeps_last_max_height() {
         );
     });
 }
+
+#[test]
+#[cfg(feature = "animation-base")]
+fn physical_reveal_preserves_velocity_and_unmounts_only_after_settling() {
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    let (_owner, ()) = create_root(|| {
+        let p = use_collapse_panel_presence("physical-reveal");
+        p.set_reveal_spring(Some(SpringPhysics {
+            stiffness: 25.0,
+            damping: 4.0,
+            mass: 1.0,
+        }));
+        sync_collapse_panel_presence(&p, true);
+        let mut el = Element::new();
+        el.layout_bounds = [0.0, 0.0, 200.0, 160.0];
+        let bounds = el.layout_bounds;
+        el.used_layout.stamp_border_box(bounds, false);
+        let mut tree = LayoutTree::new();
+        let keys = CollapseKeyframes::ACCORDION;
+        apply_collapse_motion(&mut el, &mut tree, &p, keys);
+        sync_collapse_panel_presence(&p, false);
+        apply_collapse_motion(&mut el, &mut tree, &p, keys);
+        crate::style::set_css_transition_timeline_ms(300.0);
+        apply_collapse_motion(&mut el, &mut tree, &p, keys);
+        drain_pending_unmounts();
+        assert!(
+            p.mounted().peek(),
+            "200 ms keyframe deadline must not remove a spring"
+        );
+        assert_eq!(p.phase(), PresencePhase::Exiting);
+        let height = crate::layout::dim_length_px(el.style.max_size.height).unwrap();
+        let velocity = p
+            .cell
+            .borrow()
+            .run
+            .as_ref()
+            .unwrap()
+            .spring
+            .next(300.0)
+            .velocity;
+        assert!(height > 0.0 && height < 160.0 && velocity < 0.0);
+        sync_collapse_panel_presence(&p, true);
+        apply_collapse_motion(&mut el, &mut tree, &p, keys);
+        let after = crate::layout::dim_length_px(el.style.max_size.height).unwrap();
+        assert!((height - after).abs() < 0.001);
+        assert!(
+            (p.cell
+                .borrow()
+                .run
+                .as_ref()
+                .unwrap()
+                .spring
+                .next(0.0)
+                .velocity
+                - velocity)
+                .abs()
+                < 0.01
+        );
+        crate::style::set_css_transition_timeline_ms(320.0);
+        apply_collapse_motion(&mut el, &mut tree, &p, keys);
+        assert!(
+            crate::layout::dim_length_px(el.style.max_size.height).unwrap() < height,
+            "reversal retains closing momentum before accelerating open"
+        );
+        crate::style::set_css_transition_timeline_ms(6000.0);
+        apply_collapse_motion(&mut el, &mut tree, &p, keys);
+        assert!(max_height_is_auto(&el));
+        assert!(p.cell.borrow().run.is_none());
+        sync_collapse_panel_presence(&p, false);
+        apply_collapse_motion(&mut el, &mut tree, &p, keys);
+        crate::style::set_css_transition_timeline_ms(6300.0);
+        apply_collapse_motion(&mut el, &mut tree, &p, keys);
+        assert_eq!(p.phase(), PresencePhase::Exiting);
+        crate::style::set_css_transition_timeline_ms(12000.0);
+        apply_collapse_motion(&mut el, &mut tree, &p, keys);
+        assert_eq!(p.phase(), PresencePhase::Absent);
+        drain_pending_unmounts();
+        assert!(!p.mounted().peek());
+    });
+    crate::style::set_css_transition_virtual_timeline(false);
+}
+
+#[test]
+fn physical_reveal_reduced_motion_and_invalid_physics_finish_without_waiting() {
+    crate::style::set_prefers_reduced_motion(Some(true));
+    let (_owner, ()) = create_root(|| {
+        let p = use_collapse_panel_presence("physical-reduced");
+        p.set_reveal_spring(Some(SpringPhysics {
+            stiffness: f32::NAN,
+            damping: 0.0,
+            mass: -1.0,
+        }));
+        assert_eq!(p.cell.borrow().spring, Some(SpringPhysics::default_css()));
+        sync_collapse_panel_presence(&p, false);
+        sync_collapse_panel_presence(&p, true);
+        let mut el = Element::new(); // No measured content: reduced motion must still finish.
+        let mut tree = LayoutTree::new();
+        apply_collapse_motion(&mut el, &mut tree, &p, CollapseKeyframes::COLLAPSIBLE);
+        assert!(!p.needs_enter());
+        assert!(!el.attrs.contains_key("jadix_collapse_measuring"));
+        assert!(p.cell.borrow().run.is_none());
+        sync_collapse_panel_presence(&p, false);
+        apply_collapse_motion(&mut el, &mut tree, &p, CollapseKeyframes::COLLAPSIBLE);
+        drain_pending_unmounts();
+        assert!(!p.mounted().peek());
+    });
+    crate::style::set_prefers_reduced_motion(None);
+}

@@ -110,6 +110,26 @@ impl Document {
             .collect()
     }
 
+    /// Replace a UTF-8 range with a structured fragment in one transaction.
+    /// Both documents must use rich-text coordinates. Paragraph joins retain the
+    /// destination block kind; subsequent imported blocks retain their own kind.
+    #[cfg(feature = "document-editing")]
+    pub fn replace_fragment(
+        &self,
+        range: Range<usize>,
+        fragment: &Document,
+    ) -> Result<Self, DocumentEditError> {
+        if self.format() != DocumentFormat::RichText
+            || fragment.format() != DocumentFormat::RichText
+        {
+            return Err(DocumentEditError::InvalidRange);
+        }
+        let source = self
+            .source()
+            .replace(range.clone(), fragment.source().text())?;
+        Ok(replace_rich_fragment(self, source, range, fragment))
+    }
+
     pub fn with_inline_style(
         &self,
         range: Range<usize>,
@@ -214,6 +234,32 @@ pub(super) fn replace_rich(
     range: Range<usize>,
     insert: &str,
 ) -> Document {
+    replace_rich_inner(document, source, range, insert, None)
+}
+
+#[cfg(feature = "document-editing")]
+fn replace_rich_fragment(
+    document: &Document,
+    source: TextDocument,
+    range: Range<usize>,
+    fragment: &Document,
+) -> Document {
+    replace_rich_inner(
+        document,
+        source,
+        range,
+        fragment.source().text(),
+        Some(fragment),
+    )
+}
+
+fn replace_rich_inner(
+    document: &Document,
+    source: TextDocument,
+    range: Range<usize>,
+    insert: &str,
+    fragment: Option<&Document>,
+) -> Document {
     let delta = insert.len() as isize - range.len() as isize;
     let mut runs = Vec::new();
     let mut inserted_style = DocumentInlineStyle::default();
@@ -247,7 +293,25 @@ pub(super) fn replace_rich(
             }
         }
     }
-    if !insert.is_empty() {
+    if let Some(fragment) = fragment {
+        let at_block_start = document
+            .blocks()
+            .iter()
+            .any(|block| block.source.start == range.start);
+        for current in fragment.blocks() {
+            let start = range.start + current.source.start;
+            if current.source.start > 0 || at_block_start {
+                kinds.insert(start, current.kind.clone());
+            }
+            for inline in current.inlines.iter() {
+                runs.push((
+                    start + inline.source.start..start + inline.source.end,
+                    inline.style.clone(),
+                    inline.kind.clone(),
+                ));
+            }
+        }
+    } else if !insert.is_empty() {
         runs.push((
             range.start..range.start + insert.len(),
             inserted_style,
@@ -282,27 +346,37 @@ pub(super) fn replace_rich(
             });
         if matches!(
             kind,
-            DocumentBlockKind::Math
+            DocumentBlockKind::Code { .. }
+                | DocumentBlockKind::Math
                 | DocumentBlockKind::Chemistry
                 | DocumentBlockKind::Html
                 | DocumentBlockKind::Molecule { .. }
         ) {
-            full.end = kinds
+            let next_block = kinds
                 .range((
                     std::ops::Bound::Excluded(full.start),
                     std::ops::Bound::Unbounded,
                 ))
                 .next()
-                .map(|(start, _)| *start)
-                .unwrap_or(source.len());
-            body.end = full.start
-                + source.text()[full.clone()]
-                    .trim_end_matches(['\r', '\n'])
-                    .len();
-            line = source
-                .line_at_byte(full.end)
-                .unwrap_or(source.line_count())
-                .max(line + 1);
+                .map(|(start, _)| *start);
+            full.end = next_block.unwrap_or(source.len());
+            body.end = if matches!(kind, DocumentBlockKind::Code { .. }) {
+                // Rich blocks are separated by one LF; whitespace inside pre/code is data.
+                full.end - usize::from(next_block.is_some())
+            } else {
+                full.start
+                    + source.text()[full.clone()]
+                        .trim_end_matches(['\r', '\n'])
+                        .len()
+            };
+            line = if next_block.is_none() {
+                source.line_count()
+            } else {
+                source
+                    .line_at_byte(full.end)
+                    .unwrap_or(source.line_count())
+                    .max(line + 1)
+            };
         } else {
             line += 1;
         }

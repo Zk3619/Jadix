@@ -1,6 +1,228 @@
 use super::*;
 
 #[test]
+fn deferred_paste_fences_late_results_and_preserves_atomic_rich_history() {
+    fn request(state: &DocumentEditorState, text: &str) -> DocumentPasteRequest {
+        state
+            .defer_paste(DocumentPasteContent::Text(text.into()), &[], &[])
+            .unwrap()
+    }
+    let (owner, state) = crate::core::reactivity::create_root(|| {
+        let original = Document::from_html_fragment("<p><b>中ab</b></p><p>cd文</p>").unwrap();
+        let state = DocumentEditorState::new(original.clone());
+        let selection = DocumentSelection {
+            anchor: 8,
+            caret: 3,
+        };
+        state.set_selection(selection).unwrap();
+        let first = request(&state, "late");
+        let newest = request(&state, "new");
+        assert!(!first.is_current());
+        assert!(!first.accept().unwrap());
+        assert!(newest.is_current());
+        assert!(!state.can_undo());
+        let fragment = Document::from_html_fragment("<p><i>异步</i></p>").unwrap();
+        assert!(newest
+            .complete(DocumentPasteContent::RichText(fragment))
+            .unwrap());
+        assert_eq!(state.document().source().text(), "中异步文");
+        assert!(state.document().rich_text_blocks()[0]
+            .spans
+            .iter()
+            .any(|span| span.style.italic));
+        assert!(state.undo());
+        assert_eq!(
+            state.document().rich_text_blocks(),
+            original.rich_text_blocks()
+        );
+        assert_eq!(state.selection(), selection);
+        assert!(!state.can_undo());
+        assert!(state.redo());
+        assert!(state.undo());
+
+        let moved = request(&state, "late selection");
+        state.set_selection(DocumentSelection::caret(0)).unwrap();
+        assert!(!moved.accept().unwrap());
+        let edited = request(&state, "late edit");
+        state.replace_selection("x").unwrap();
+        assert!(!edited.accept().unwrap());
+        let undone = request(&state, "late undo");
+        assert!(state.undo());
+        assert!(!undone.accept().unwrap());
+        let changed = request(&state, "late mode");
+        state.set_mode(DocumentEditMode::Preview);
+        assert!(!changed.accept().unwrap());
+        assert!(state
+            .defer_paste(DocumentPasteContent::Text("read only".into()), &[], &[])
+            .is_none());
+        state.set_mode(DocumentEditMode::LivePreview);
+        let cancelled = request(&state, "cancelled");
+        state.cancel_pending_paste();
+        assert!(!cancelled.accept().unwrap());
+        let superseded = request(&state, "old");
+        // A newer consumed request still fences the old one.
+        drop(request(&state, "consumed"));
+        assert!(!superseded.accept().unwrap());
+        let superseded = request(&state, "old");
+        assert!(!state.paste_text("", &[]).unwrap());
+        assert!(!superseded.accept().unwrap());
+        let nested_state = state.clone();
+        let transform: DocumentPasteTransform = Rc::new(move |_, text| {
+            drop(request(&nested_state, "new pending"));
+            Some(text)
+        });
+        assert!(!state.paste_text("stale stage", &[transform]).unwrap());
+        assert_eq!(state.document().source().text(), original.source().text());
+        state
+    });
+    let disposed = request(&state, "late disposal");
+    owner.dispose();
+    assert!(!disposed.is_current());
+    assert!(!disposed.accept().unwrap());
+    let dropped = {
+        let state = DocumentEditorState::new("");
+        request(&state, "late session")
+    };
+    assert!(!dropped.accept().unwrap());
+}
+
+#[test]
+fn global_copy_cut_preserves_formats_history_and_rejects_failed_or_stale_writes() {
+    let original = Document::from_html_fragment("<p><b>中ab</b></p><p>cd文</p>").unwrap();
+    let state = DocumentEditorState::new(original.clone());
+    let selection = DocumentSelection {
+        anchor: 8,
+        caret: 3,
+    };
+    state.set_selection(selection).unwrap();
+    let epoch = state.snapshot().epoch;
+    assert!(state
+        .transfer_selection(false, |text, html| {
+            assert_eq!(text, "ab\ncd");
+            let exported = Document::from_html_fragment(html.unwrap()).unwrap();
+            assert_eq!(exported.source().text(), text);
+            assert!(exported.rich_text_blocks()[0].spans[0].style.bold);
+            true
+        })
+        .unwrap());
+    assert_eq!(state.snapshot().epoch, epoch);
+    assert!(!state.can_undo());
+    assert!(!state.transfer_selection(true, |_, _| false).unwrap());
+    assert_eq!(state.selection(), selection);
+    assert_eq!(state.document().source().text(), original.source().text());
+    assert!(state
+        .transfer_selection(true, |text, html| {
+            assert_eq!(text, "ab\ncd");
+            assert!(html.is_some());
+            true
+        })
+        .unwrap());
+    assert_eq!(state.document().source().text(), "中文");
+    assert!(state.undo());
+    assert_eq!(
+        state.document().rich_text_blocks(),
+        original.rich_text_blocks()
+    );
+    assert_eq!(state.selection(), selection);
+    assert!(!state.can_undo());
+    assert!(state.redo());
+    assert_eq!(state.document().source().text(), "中文");
+    assert!(state.undo());
+    let stale = state.clone();
+    assert!(!state
+        .transfer_selection(true, |_, _| {
+            stale.set_selection(DocumentSelection::caret(0)).unwrap();
+            true
+        })
+        .unwrap());
+    assert_eq!(
+        state.document().rich_text_blocks(),
+        original.rich_text_blocks()
+    );
+    assert!(!state
+        .transfer_selection(false, |_, _| panic!("empty selection"))
+        .unwrap());
+    state.set_selection(selection).unwrap();
+    state.set_mode(DocumentEditMode::Preview);
+    assert!(!state
+        .transfer_selection(true, |_, _| panic!("read only cut"))
+        .unwrap());
+    assert!(state
+        .transfer_selection(false, |_, html| html.is_some())
+        .unwrap());
+    state.set_mode(DocumentEditMode::Source);
+    assert!(state
+        .transfer_selection(false, |_, html| html.is_none())
+        .unwrap());
+    let plain = DocumentEditorState::new("one\ntwo");
+    plain
+        .set_selection(DocumentSelection {
+            anchor: 0,
+            caret: 7,
+        })
+        .unwrap();
+    assert!(plain
+        .transfer_selection(false, |text, html| text == "one\ntwo" && html.is_none())
+        .unwrap());
+}
+
+#[test]
+fn structured_paste_is_atomic_undoable_and_rejects_stale_plugin_results() {
+    let original = Document::rich_text([super::super::RichTextBlock::paragraph([
+        super::super::RichTextSpan::new("before 中 after"),
+    ])]);
+    let state = DocumentEditorState::new(original.clone());
+    state
+        .set_selection(DocumentSelection {
+            anchor: 7,
+            caret: 10,
+        })
+        .unwrap();
+    let before = state.selection();
+    let fragment =
+        Document::from_html_fragment("<b>你好</b><a href='https://example.test'>link</a>").unwrap();
+    let stages: Vec<DocumentFragmentTransform> = vec![Rc::new(|snapshot, fragment| {
+        assert_eq!(snapshot.selection.range(), 7..10);
+        assert!(fragment.blocks()[0].inlines[0].style.bold);
+        Some(fragment)
+    })];
+    assert!(state.paste_document(fragment.clone(), &stages).unwrap());
+    assert_eq!(state.document().source().text(), "before 你好link after");
+    let pasted = state.document().rich_text_blocks();
+    assert!(pasted[0]
+        .spans
+        .iter()
+        .any(|span| span.style.link.as_deref() == Some("https://example.test")));
+    assert!(state.undo());
+    assert_eq!(
+        state.document().rich_text_blocks(),
+        original.rich_text_blocks()
+    );
+    assert_eq!(state.selection(), before);
+    assert!(!state.can_undo());
+    assert!(state.redo());
+    assert_eq!(state.document().rich_text_blocks(), pasted);
+    let stale = state.clone();
+    assert!(!state
+        .paste_document(
+            fragment.clone(),
+            &[Rc::new(move |_, fragment| {
+                stale.set_selection(DocumentSelection::caret(0)).unwrap();
+                Some(fragment)
+            })]
+        )
+        .unwrap());
+    assert_eq!(state.document().rich_text_blocks(), pasted);
+    assert!(!state
+        .paste_document(fragment.clone(), &[Rc::new(|_, _| None)])
+        .unwrap());
+    state.set_mode(DocumentEditMode::Preview);
+    assert!(!state
+        .paste_document(fragment, &[Rc::new(|_, _| panic!("read-only"))])
+        .unwrap());
+}
+
+#[test]
 fn unicode_selection_edit_and_history_use_document_bytes() {
     let state = DocumentEditorState::new("one\n\u{4e2d}\u{6587}\nthree");
     state

@@ -11,7 +11,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use web_time::Instant;
 
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::{Signal, use_signal};
 
 /// Shared UTF-16 admission limit. Controlled values and undo history are preserved.
 pub fn input_max_length_signal_key(id: &str) -> String {
@@ -923,12 +923,54 @@ pub fn bind_controlled_value(field_id: &str, external: Signal<String>) {
     let store = use_signal(&input_value_signal_key(field_id), String::new);
     if let Some(ev) = external.try_peek() {
         if store.peek() != ev {
+            super::text_annotations::reset(field_id, &ev);
             store.set(ev);
         }
         CONTROLLED_VALUES.with(|m| {
             m.borrow_mut().insert(field_id.to_string(), external);
         });
     }
+}
+
+/// Bind an application's query to a committed text store in the computed phase.
+/// Install once in the component owner, outside any query-driven view. Unlike
+/// paint-only controlled input sync, this wakes filtering before rendering and
+/// survives a search field's temporary unmount. Owner disposal releases the effect.
+///
+/// Initial mounting seeds the store. Later external writes wait for blur and an
+/// empty IME preedit; a local commit (including a session reset or selected label)
+/// wins over a pending external write. Batched local/external writes also prefer
+/// the local commit. Silent paint writes are not query edits.
+pub fn bind_text_query_signal(field_id: &str, external: Signal<String>) {
+    let Some(initial) = external.try_peek() else {
+        return;
+    };
+    let store = use_signal(&input_value_signal_key(field_id), String::new);
+    commit_value_sig(field_id, store, initial.clone());
+    let focus = use_signal("__jadix_button_focus_id", String::new);
+    let focus_id = input_focus_id(field_id);
+    let preedit = use_signal(&input_preedit_signal_key(field_id), String::new);
+    let field_id = field_id.to_string();
+    let mut previous = initial;
+    crate::core::reactivity::create_computed(move || {
+        let (Some(value), Some(query), Some(focused), Some(composing)) = (
+            store.try_get(),
+            external.try_get(),
+            focus.try_get(),
+            preedit.try_get(),
+        ) else {
+            return;
+        };
+        if value != previous {
+            previous = value.clone();
+            if value != query {
+                external.set(value);
+            }
+        } else if value != query && focused != focus_id && composing.is_empty() {
+            previous = query.clone();
+            commit_value_sig(&field_id, store, query);
+        }
+    });
 }
 
 /// Drop controlled pairing so paint sync stops pulling an external Signal into the store.
@@ -963,6 +1005,7 @@ pub(crate) fn attach_text_edit_field_lifecycle(
             crate::utils::text_edit_history::reset(&fid);
         }
         unbind_controlled_value(&fid);
+        super::text_annotations::remove(&fid);
         let blur_key = format!("__jadix_selection_blur_effect_{fid}");
         if let Some(effect) =
             use_signal(&blur_key, || None::<crate::core::reactivity::EffectId>).peek()
@@ -979,6 +1022,7 @@ pub(crate) fn attach_text_edit_field_lifecycle(
 pub fn wipe_text_edit_named_slots(field_id: &str) {
     crate::utils::text_edit_history::reset(field_id);
     unbind_controlled_value(field_id);
+    super::text_annotations::remove(field_id);
     let keys = [
         input_value_signal_key(field_id),
         input_max_length_signal_key(field_id),
@@ -1032,6 +1076,7 @@ pub fn commit_value_with_policy(
     policy: crate::utils::text_edit_history::SetTextUndoPolicy,
 ) {
     let store = use_signal(&input_value_signal_key(field_id), String::new);
+    super::text_annotations::reset(field_id, &value);
     commit_value_sig_with_policy(field_id, store, value, policy);
 }
 
@@ -1059,7 +1104,9 @@ fn commit_value_sig_with_policy(
         }
     }
     crate::utils::text_edit_history::with_internal_sync(field_id, || {
-        if store.peek() != value {
+        let before = store.peek();
+        if before != value {
+            super::text_annotations::value_changed(field_id, &before, &value);
             store.set(value.clone());
         }
         mirror_store_to_controlled(field_id, &value);
@@ -1102,6 +1149,7 @@ pub fn pull_controlled_into_store(
     }
     crate::utils::text_edit_history::with_internal_sync(field_id, || {
         let store = use_signal(&input_value_signal_key(field_id), String::new);
+        super::text_annotations::reset(field_id, &ev);
         store.set_silent(ev.clone());
     });
     Some(ev)

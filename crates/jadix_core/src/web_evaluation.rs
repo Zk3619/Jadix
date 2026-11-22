@@ -103,6 +103,8 @@ impl EvaluationReply {
     }
 }
 pub struct EvaluationWork {
+    /// Cleanup remains executable after the reply capability expires.
+    pub cleanup: bool,
     pub script: String,
     pub reply: EvaluationReply,
 }
@@ -112,6 +114,7 @@ pub struct EvaluationBatch {
     wakers: Vec<Waker>,
 }
 impl EvaluationBatch {
+    pub fn needs_wake(&self) -> bool { !self.wakers.is_empty() }
     /// Call after releasing the session/host borrow; custom wakers may reenter.
     pub fn wake(self) {
         for waker in self.wakers {
@@ -132,6 +135,7 @@ pub struct WebEvaluationSession {
     pending: BTreeMap<u64, Pending>,
 }
 impl WebEvaluationSession {
+    pub fn pending_count(&self) -> usize { self.pending.len() }
     pub fn is_pending(&self) -> bool {
         !self.pending.is_empty()
     }
@@ -158,6 +162,7 @@ impl WebEvaluationSession {
         let state = Arc::new(Mutex::new(FutureState::default()));
         let reply = Arc::new(Mutex::new(None));
         let work = EvaluationWork {
+            cleanup: false,
             script: include_str!("web_evaluation.js")
                 .replace("__JADIX_TOKEN__", &serde_json::to_string(&key).unwrap())
                 .replace("__JADIX_SOURCE__", &serde_json::to_string(script).unwrap()),
@@ -207,13 +212,13 @@ impl WebEvaluationSession {
                 } else { None };
             if let Some(answer) = answer {
                 settle(pending, answer, &mut batch);
-                batch.work.push(EvaluationWork { script: format!("delete globalThis[{}]", serde_json::to_string(&pending.key).unwrap()), reply: EvaluationReply::default() });
+                batch.work.push(EvaluationWork { cleanup: true, script: format!("delete globalThis[{}]", serde_json::to_string(&pending.key).unwrap()), reply: EvaluationReply::default() });
                 false
             } else {
                 if pending.next_poll.is_some_and(|deadline| deadline <= now) {
                     pending.next_poll = None;
                     let key = serde_json::to_string(&pending.key).unwrap();
-                    batch.work.push(EvaluationWork { script: format!("(()=>{{const c=globalThis[{key}];return c?c.result:{{status:'error',code:'aborted'}};}})()"), reply: EvaluationReply { state: Arc::downgrade(&pending.reply) } });
+                    batch.work.push(EvaluationWork { cleanup: false, script: format!("(()=>{{const c=globalThis[{key}];return c?c.result:{{status:'error',code:'aborted'}};}})()"), reply: EvaluationReply { state: Arc::downgrade(&pending.reply) } });
                 }
                 true
             }
@@ -225,7 +230,7 @@ impl WebEvaluationSession {
         for (_, pending) in std::mem::take(&mut self.pending) {
             settle(&pending, Err(WebEvaluationError::Aborted), &mut batch);
             batch.work.push(EvaluationWork {
-                script: format!(
+                cleanup: true,                script: format!(
                     "delete globalThis[{}]",
                     serde_json::to_string(&pending.key).unwrap()
                 ),
@@ -245,7 +250,7 @@ fn settle(pending: &Pending, answer: Answer, batch: &mut EvaluationBatch) {
         let mut state = state.lock().unwrap();
         state.answer = Some(answer);
         if let Some(waker) = state.waker.take() {
-            batch.wakers.push(waker);
+            if !waker.will_wake(Waker::noop()) { batch.wakers.push(waker); }
         }
     }
 }

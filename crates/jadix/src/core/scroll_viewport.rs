@@ -296,6 +296,92 @@ pub fn scroll_target_y_signal_key(id: &str) -> String {
     format!("__jadix_scroll_target_y_{}", id)
 }
 
+fn scroll_end_signal_key(id: &str, horizontal: bool) -> String {
+    let axis = if horizontal { "x" } else { "y" };
+    format!("__jadix_scroll_end_{axis}_{id}")
+}
+
+/// Keep an explicit End request attached to the measured bottom until another
+/// navigation supersedes it. Repeating End does not queue another animation.
+fn request_scroll_end(id: &str, max: f32, horizontal: bool) {
+    if max.is_finite() {
+        use_signal(&scroll_end_signal_key(id, horizontal), || None::<f32>)
+            .set_silent(Some(max.max(0.0)));
+    }
+}
+
+fn cancel_scroll_end(id: &str, horizontal: bool) {
+    use_signal(&scroll_end_signal_key(id, horizontal), || None::<f32>).set_silent(None);
+}
+
+/// Reconcile End after virtual content measurement. `rebased_offset` preserves
+/// the caller's visible anchor while a smooth chase is still in flight.
+/// Returns the offset to mount, or None when no End request owns this viewport.
+/// An independently changed target (focus reveal, scrollbar or application)
+/// cancels ownership instead of pulling the user back down.
+fn reconcile_scroll_end(id: &str, max: f32, rebased_offset: f32, horizontal: bool) -> Option<f32> {
+    let intent = use_signal(&scroll_end_signal_key(id, horizontal), || None::<f32>);
+    let previous = intent.peek()?;
+    let offset_key = if horizontal {
+        scroll_offset_x_signal_key(id)
+    } else {
+        scroll_offset_y_signal_key(id)
+    };
+    let target_key = if horizontal {
+        scroll_target_x_signal_key(id)
+    } else {
+        scroll_target_y_signal_key(id)
+    };
+    let offset = use_signal(&offset_key, || 0.0_f32);
+    let target = use_signal(&target_key, || offset.peek());
+    if !max.is_finite() || !target.peek().is_finite() || (target.peek() - previous).abs() > 1.0 {
+        intent.set_silent(None);
+        return None;
+    }
+    let max = max.max(0.0);
+    let behavior = use_signal(&scroll_behavior_signal_key(id), || {
+        DEFAULT_SCROLL_BEHAVIOR.to_string()
+    });
+    let next =
+        if scroll_behavior_is_jump(&behavior.peek()) || (offset.peek() - previous).abs() <= 0.5 {
+            max
+        } else if rebased_offset.is_finite() {
+            rebased_offset.clamp(0.0, max)
+        } else {
+            0.0
+        };
+    offset.set_silent(next);
+    target.set_silent(max);
+    intent.set_silent(Some(max));
+    Some(next)
+}
+
+/// Attach End to the measured X extent until superseded by navigation.
+pub fn request_scroll_end_x(id: &str, max: f32) {
+    request_scroll_end(id, max, true);
+}
+/// Release End ownership on X.
+pub fn cancel_scroll_end_x(id: &str) {
+    cancel_scroll_end(id, true);
+}
+/// Update the X End target while preserving an in-flight visible anchor.
+pub fn reconcile_scroll_end_x(id: &str, max: f32, rebased_offset: f32) -> Option<f32> {
+    reconcile_scroll_end(id, max, rebased_offset, true)
+}
+
+/// Attach End to the measured Y extent until superseded by navigation.
+pub fn request_scroll_end_y(id: &str, max: f32) {
+    request_scroll_end(id, max, false);
+}
+/// Release End ownership on Y.
+pub fn cancel_scroll_end_y(id: &str) {
+    cancel_scroll_end(id, false);
+}
+/// Update the Y End target while preserving an in-flight visible anchor.
+pub fn reconcile_scroll_end_y(id: &str, max: f32, rebased_offset: f32) -> Option<f32> {
+    reconcile_scroll_end(id, max, rebased_offset, false)
+}
+
 pub fn scroll_behavior_signal_key(id: &str) -> String {
     format!("__jadix_scroll_behavior_{}", id)
 }
@@ -377,6 +463,8 @@ pub fn remove_scroll_viewport_signals(rest: &str) {
     remove_named_signal(keys.offset_y.as_str());
     remove_named_signal(keys.target_x.as_str());
     remove_named_signal(keys.target_y.as_str());
+    remove_named_signal(scroll_end_signal_key(rest, false).as_str());
+    remove_named_signal(scroll_end_signal_key(rest, true).as_str());
     remove_named_signal(keys.viewport_w.as_str());
     remove_named_signal(keys.viewport_h.as_str());
     remove_named_signal(keys.content_w.as_str());

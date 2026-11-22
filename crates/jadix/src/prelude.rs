@@ -104,7 +104,7 @@ pub use crate::{component, ui};
 pub use crate::app::invalidation::{
     bust_caches, invalidation_stats, node, rebuild_all, request_frame, InvalidationStats, UiNode,
 };
-pub use crate::app::pointer_events::{MouseEvent, PointerEvent};
+pub use crate::app::pointer_events::{MouseEvent, PointerEvent, TextLinkHit};
 pub use crate::app::props::{children, resolve_children, Children, ChildrenAccessor, MergeProps};
 pub use crate::app::reactive::immediate_region;
 pub use crate::app::reactive::{for_keyed_reactive, index_reactive};
@@ -116,7 +116,7 @@ pub use crate::app::tasks::{
 pub use crate::app::with_ui_build_stack;
 pub use crate::app::{
     app, create_async_resource, create_resource, create_resource_on, current_window,
-    error_boundary, launch, open_secondary_window_with, page_scroll_locked, parse_scroll_freeze,
+    error_boundary, error_boundary_with_state, launch, open_secondary_window_with, page_scroll_locked, parse_scroll_freeze,
     set_page_scroll_locked, set_scroll_freeze, set_second_instance_handler, set_window_fullscreen,
     suspense, throw_error, throw_resource_error, toggle_window_fullscreen, window_is_fullscreen,
     windows, AppBuilder, AppConfig, AppIcon, InstanceLaunch, InstancePolicy, Resource,
@@ -125,7 +125,7 @@ pub use crate::app::{
 };
 pub use crate::app::{run_with_startup, StartupHandle, StartupHost};
 pub use crate::core::reactivity::{
-    batch, component_root, create_context, create_memo, create_signal, isolate_reads, on_app_quit,
+    batch, component_root, create_context, create_memo, create_signal, isolate_reads, on_app_quit, on_quit_request,
     provide_context, untrack, use_context, use_scoped_signal, use_signal, with_child_owner, Signal,
 };
 pub use crate::core::store::{create_store, store_field, ReadStore, Store, StoreField};
@@ -166,13 +166,13 @@ pub use crate::primitives::{
     PathBuilder, SvgBuilder,
 };
 pub use crate::primitives::{
-    boxed, canvas, div, effect_wrap, gstack, hstack, icon, interactive, portal, r#box, scene3d,
-    shader, text, vstack, BlendMode, BoxBuilder, Brush2D, Canvas2D, CanvasBuilder,
+    boxed, canvas, div, effect_wrap, gstack, hstack, icon, interactive, link, portal, r#box,
+    scene3d, shader, text, vstack, BlendMode, BoxBuilder, Brush2D, Canvas2D, CanvasBuilder,
     CanvasImageSource, CanvasPath2D, CanvasSize, CompositeMode, EffectWrapBuilder, ExtendMode,
     Font2D, FontError, FontMetrics2D, GlyphRun, GradientAlpha, GradientError, GradientStops,
     Image2D, ImageSampling, InteractiveBuilder, LayerFilter, LayerOptions, LineCap, LineJoin,
-    Morphology, PortalBuilder, PositionedGlyph, Scene3dBuilder, Scene3dCamera, Scene3dLight,
-    Scene3dMaterial, ShaderBuilder, TextBuilder, VectorGradient,
+    LinkBuilder, Morphology, PortalBuilder, PositionedGlyph, Scene3dBuilder, Scene3dCamera,
+    Scene3dLight, Scene3dMaterial, ShaderBuilder, TextBuilder, VectorGradient,
 };
 
 #[cfg(feature = "macros")]
@@ -243,7 +243,8 @@ pub use crate::components::dock::{DockLayout, DockOrientation, DockPlacement, Do
 #[cfg(feature = "document-editing")]
 #[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::document_editor::{
-    document_editor, DocumentEditor, DocumentEditorBuilder, DocumentEditorProps,
+    document_editor, DocumentDeferredPasteHandler, DocumentEditor, DocumentEditorBuilder,
+    DocumentEditorProps,
 };
 #[cfg(feature = "document")]
 #[cfg(all(test, feature = "product-tests"))]
@@ -761,6 +762,8 @@ pub use crate::components::{
     use_toggle_group,
     use_tree_view,
     use_tree_view_item,
+    virtual_grid,
+    virtual_wrap,
     virtual_list,
     virtual_masonry,
     window_drag_region,
@@ -1092,6 +1095,8 @@ pub use crate::components::{
     LineChart,
     LineChartBuilder,
     LineChartProps,
+    Link,
+    LinkProps,
     List,
     ListBuilder,
     ListDescription,
@@ -1538,6 +1543,11 @@ pub use crate::components::{
     TreeViewItem,
     TreeViewItemCtx,
     TreeViewVariant,
+    GridViewport,
+    UniformGridWindow,
+    VirtualGridBuilder,
+    VirtualGridHandle,
+    VirtualWrapBuilder,
     VirtualListBuilder,
     VirtualMasonryBuilder,
     WindowDragRegion,
@@ -1556,7 +1566,9 @@ pub use crate::text::{
 };
 #[cfg(feature = "document-editing")]
 pub use crate::text::{
-    DocumentEditMode, DocumentEditorSnapshot, DocumentEditorState, DocumentMark, DocumentSelection,
+    DocumentEditMode, DocumentEditorSnapshot, DocumentEditorState, DocumentFragmentTransform,
+    DocumentMark, DocumentPasteContent, DocumentPasteRequest, DocumentPasteTransform,
+    DocumentSelection,
 };
 #[cfg(feature = "document")]
 pub use crate::text::{DocumentHeightIndex, DocumentScrollAnchor};

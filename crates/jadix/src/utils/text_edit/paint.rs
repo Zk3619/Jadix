@@ -1,17 +1,17 @@
 //! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
 
 use super::field::{
-    effective_invalid, map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder,
-    set_adornment_visible, InputType,
+    InputType, effective_invalid, map_byte_index_to_masked, map_byte_range_to_masked,
+    resolve_placeholder, set_adornment_visible,
 };
-use super::strings::{compose_text_edit_strings, finish_selection_draw, TextEditStringsInput};
+use super::strings::{TextEditStringsInput, compose_text_edit_strings, finish_selection_draw};
 use crate::core::reactivity::use_signal;
-use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, LayoutStatus};
+use crate::core::tree::{Element, InputPaintSync, LayoutStatus, parse_color, parse_text_color};
 use crate::layout::layout_tree::LayoutTree;
 use crate::style::{
-    apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
-    focus_ring_destructive_color, focus_ring_params_for, focus_ring_shadow_matches_color,
-    InputCaretDraw, TRANSPARENT,
+    InputCaretDraw, TRANSPARENT, apply_focus_ring_shadow_color, focus_ring_border_color,
+    focus_ring_color, focus_ring_destructive_color, focus_ring_params_for,
+    focus_ring_shadow_matches_color,
 };
 use crate::tokens;
 use crate::utils::text_field::{
@@ -366,6 +366,19 @@ fn sync_one_text_edit_paint(
             // scroll). Promoting this to LayoutChanged FullClears the gallery.
             text_style = true;
         }
+        let mut preedit_ranges = extra_preedit_underlines.clone();
+        preedit_ranges.extend(preedit_underline);
+        preedit_ranges.sort_unstable();
+        preedit_ranges.dedup();
+        if crate::utils::text_annotations::sync(
+            &desc.base_id,
+            text_el,
+            &display_text,
+            &preedit_ranges,
+            mask || show_placeholder,
+        ) {
+            text_layout = true;
+        }
         let want_suffix = None;
         if text_el.text_shape_suffix != want_suffix {
             text_el.text_shape_suffix = want_suffix;
@@ -665,11 +678,7 @@ fn sync_one_text_edit_paint(
             let soft = desc.wrap_mode.soft_wrap();
             let avail = if soft {
                 let w = text_el.layout_bounds[2];
-                if w > 1.0 {
-                    w
-                } else {
-                    320.0
-                }
+                if w > 1.0 { w } else { 320.0 }
             } else {
                 10_000.0
             };
@@ -812,7 +821,7 @@ fn sync_one_text_edit_paint(
             };
             let ch_eff = content_h_text.max(text_h_layout);
             let _ = ch; // post-render metrics own content_h; do not raise the signal here —
-                        // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
+            // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
             if vh_eff > 1.0 && (vh - vh_eff).abs() > 0.5 {
                 use_signal(&vh_key, || 0.0_f32).set_silent(vh_eff);
             }

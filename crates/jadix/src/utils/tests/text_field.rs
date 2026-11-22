@@ -2,6 +2,53 @@ use super::*;
 use crate::core::reactivity::create_root;
 
 #[test]
+fn query_signal_sync_orders_edits_guards_composition_and_dies_with_owner() {
+    use crate::core::reactivity::{Signal, batch, create_effect};
+    let field = "tf_reactive_query";
+    use std::rc::Rc;
+    let (external_owner, (external, owner, store, focus, preedit, observed)) = create_root(|| {
+        let external = Signal::new("seed".to_owned());
+        let (owner, ()) = create_root(|| bind_text_query_signal(field, external));
+        let store = use_signal(&input_value_signal_key(field), String::new);
+        let focus = use_signal("__jadix_button_focus_id", String::new);
+        let preedit = use_signal(&input_preedit_signal_key(field), String::new);
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        create_effect({
+            let observed = observed.clone();
+            move || observed.borrow_mut().push((external.get(), store.get()))
+        });
+        (external, owner, store, focus, preedit, observed)
+    });
+    external.set("remote".into());
+    assert_eq!(store.peek(), "remote");
+    assert!(observed.borrow().iter().all(|(a, b)| a == b));
+    focus.set(input_focus_id(field));
+    external.set("pending".into());
+    assert_eq!(store.peek(), "remote");
+    commit_value(field, "typed".into());
+    assert_eq!(external.peek(), "typed");
+    external.set("after-blur".into());
+    preedit.set("ni".into());
+    focus.set(String::new());
+    assert_eq!(store.peek(), "typed");
+    preedit.set(String::new());
+    assert_eq!(store.peek(), "after-blur");
+    batch(|| {
+        external.set("competing-remote".into());
+        commit_value(field, "local-wins".into());
+    });
+    assert_eq!(external.peek(), "local-wins");
+    assert_eq!(store.peek(), "local-wins");
+    owner.dispose();
+    external.set("disposed".into());
+    commit_value(field, "detached".into());
+    assert_eq!(external.peek(), "disposed");
+    assert_eq!(store.peek(), "detached");
+    external_owner.dispose();
+    wipe_text_edit_named_slots(field);
+}
+
+#[test]
 fn cjk_chrome_band_pads_ideograph_equally() {
     // Microsoft YaHei hhea + U+4E2D ink (font units / 2048).
     let fs = 14.0_f32;
@@ -48,9 +95,9 @@ fn cjk_probe_band_is_symmetric_when_face_present() {
     let gap_above = ink_top - y;
     let gap_below = (y + h) - ink_bot;
     assert!(
-            (gap_above - gap_below).abs() < 0.05,
-            "probed gaps {gap_above} vs {gap_below} ascent={ascent} descent={descent} above={above} below={below}"
-        );
+        (gap_above - gap_below).abs() < 0.05,
+        "probed gaps {gap_above} vs {gap_below} ascent={ascent} descent={descent} above={above} below={below}"
+    );
     assert!(y >= -0.01 && y + h <= lh + 0.01);
     assert!(h < lh - 0.5, "probed band should trim the line box, h={h}");
 }

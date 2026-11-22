@@ -22,6 +22,7 @@ impl super::App {
     ) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
+        self.finish_native_pointer_handoff();
         self.cursor_pos = position;
         self.cursor_inside_window = true;
 
@@ -119,8 +120,7 @@ impl super::App {
                         &style,
                         ui_scale,
                     );
-                    let lo = self.label_drag_anchor.min(ix);
-                    let hi = self.label_drag_anchor.max(ix);
+                    let (lo, hi) = self.label_drag_anchor.range_to(&display_el, ix);
                     Some((key.clone(), lo, hi, ix, false))
                 } else {
                     None
@@ -149,9 +149,15 @@ impl super::App {
             let Some(sec) = secs.get_mut(&id) else {
                 return;
             };
-            let path = super::pointer_events::hit_path(&sec.root_element, x, y);
+            let mut path = super::pointer_events::hit_path(&sec.root_element, x, y);
+            sec.text_renderer.text_links.borrow().annotate_path(
+                &sec.text_nodes,
+                &mut path,
+                [x, y],
+                sec.window.scale_factor() as f32,
+            );
             let captured_move_path = super::pointer_events::captured_path(&sec.root_element);
-            let cursor_pick = super::tree_hit::pick_cursor(&sec.root_element, x, y, [0.0, 0.0]);
+            let cursor_pick = super::pointer_events::path_resolved_cursor(&path);
             let mut hover_cbs = Vec::new();
             super::tree_hit::update_hovers(&sec.root_element, x, y, [0.0, 0.0], &mut hover_cbs);
             let window = sec.window.clone();
@@ -199,12 +205,18 @@ impl super::App {
             (*cb.borrow_mut())(is_hover);
         }
         self.sync_mouse_enter_leave(x, y, &path, MouseButton::Left);
+        if self.finish_native_pointer_handoff() {
+            return;
+        }
         let mut pev = self.build_mouse_event(x, y, MouseButton::Left, 0, "mousemove", None);
         super::pointer_events::dispatch_pointer(
             captured_move_path.as_deref().unwrap_or(&path),
             &mut pev,
             super::pointer_events::PointerKind::Move,
         );
+        if self.finish_native_pointer_handoff() {
+            return;
+        }
         self.last_client_pos = Some([x, y]);
 
         let mut need_redraw = input_drag_active;
@@ -240,6 +252,8 @@ impl super::App {
     ) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
+        self.finish_native_pointer_handoff();
+        self.cancel_pointer_session();
         self.cursor_inside_window = false;
         self.cursor_move_pending = false;
         let mut hover_cbs = Vec::new();
@@ -288,6 +302,7 @@ impl super::App {
     ) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
+        self.finish_native_pointer_handoff();
         self.update_mouse_buttons(button, element_state);
 
         let scale = {
@@ -342,10 +357,16 @@ impl super::App {
                     let (path, input_drag, label_drag) = {
                         let mut secs = self.secondaries.borrow_mut();
                         let sec = secs.get_mut(&id).unwrap();
-                        let path = super::pointer_events::captured_path(&sec.root_element)
+                        let mut path = super::pointer_events::captured_path(&sec.root_element)
                             .unwrap_or_else(|| {
                                 super::pointer_events::hit_path(&sec.root_element, x, y)
                             });
+                        sec.text_renderer.text_links.borrow().annotate_path(
+                            &sec.text_nodes,
+                            &mut path,
+                            [x, y],
+                            sec.window.scale_factor() as f32,
+                        );
                         let input_drag = super::tree_hit::find_input_text_at(
                             &sec.root_element,
                             None,
@@ -464,14 +485,13 @@ impl super::App {
                                         &style,
                                         ui_scale,
                                     );
-                                    let paragraph = (click_count >= 3)
-                                        .then(|| {
-                                            crate::utils::text_selection::selectable_paragraph_range(
-                                                &display_el, ix,
-                                            )
-                                        })
-                                        .flatten();
-                                    (key, ix, paragraph)
+                                    let anchor =
+                                        crate::utils::text_selection::TextSelectionAnchor::new(
+                                            &display_el,
+                                            ix,
+                                            click_count,
+                                        );
+                                    (key, anchor, anchor.range_to(&display_el, ix))
                                 },
                             )
                         } else {
@@ -489,6 +509,9 @@ impl super::App {
                         &mut down,
                         super::pointer_events::PointerKind::Down,
                     );
+                    if self.finish_native_pointer_handoff() {
+                        return;
+                    }
 
                     if crate::utils::drag::runtime::is_dragging() {
                         let update = {
@@ -655,12 +678,11 @@ impl super::App {
                         }
                         self.label_drag_key = None;
                         self.left_button_down = true;
-                    } else if let Some((key, caret_ix, paragraph)) = label_drag {
+                    } else if let Some((key, anchor, range)) = label_drag {
                         let sk = crate::utils::text_selection::label_selection_signal_key(&key);
-                        use_signal(&sk, || None::<(usize, usize)>)
-                            .set(paragraph.or(Some((caret_ix, caret_ix))));
-                        self.label_drag_key = paragraph.is_none().then_some(key);
-                        self.label_drag_anchor = caret_ix;
+                        use_signal(&sk, || None::<(usize, usize)>).set(Some(range));
+                        self.label_drag_key = Some(key);
+                        self.label_drag_anchor = anchor;
                         self.input_drag_rest = None;
                         self.input_drag_multi = false;
                         self.input_drag_multi_base.clear();
@@ -743,18 +765,34 @@ impl super::App {
                 }
 
                 if element_state == ElementState::Released {
-                    let (path, click_path, cb, label_for, on_exclusive, on_trigger) = {
+                    let (path, click_path, cb, label_for, on_exclusive, on_trigger, text_link) = {
                         let secs = self.secondaries.borrow();
                         let Some(sec) = secs.get(&id) else {
                             return;
                         };
-                        let path = super::pointer_events::captured_path(&sec.root_element)
+                        let mut path = super::pointer_events::captured_path(&sec.root_element)
                             .unwrap_or_else(|| {
                                 super::pointer_events::hit_path(&sec.root_element, x, y)
                             });
+                        sec.text_renderer.text_links.borrow().annotate_path(
+                            &sec.text_nodes,
+                            &mut path,
+                            [x, y],
+                            sec.window.scale_factor() as f32,
+                        );
+                        let mut text_link = None;
                         let click_path = match self.click_press_path.take() {
                             Some(down) => {
                                 let scrolled = std::mem::take(&mut self.click_press_scrolled);
+                                text_link = super::pointer_events::activated_text_link(
+                                    &down,
+                                    &path,
+                                    super::pointer_events::click_pointer_moved(
+                                        self.last_click_pos,
+                                        [self.cursor_pos.x as f32, self.cursor_pos.y as f32],
+                                    ),
+                                    scrolled,
+                                );
                                 super::pointer_events::click_gesture_path(
                                     &down,
                                     &path,
@@ -777,17 +815,31 @@ impl super::App {
                             &sec.root_element,
                             &path,
                         );
-                        (path, click_path, cb, label_for, on_exclusive, on_trigger)
+                        (
+                            path,
+                            click_path,
+                            cb,
+                            label_for,
+                            on_exclusive,
+                            on_trigger,
+                            text_link,
+                        )
                     };
 
                     let detail = self.click_count.max(1);
                     let mut pev =
                         self.build_mouse_event(x, y, MouseButton::Left, detail, "mouseup", None);
+                    if detail == 1 && !pev.shift_key {
+                        pev.text_link = text_link;
+                    }
                     super::pointer_events::dispatch_pointer(
                         &path,
                         &mut pev,
                         super::pointer_events::PointerKind::Up,
                     );
+                    if self.finish_native_pointer_handoff() {
+                        return;
+                    }
                     let drag_end = self
                         .secondaries
                         .borrow()
@@ -804,6 +856,9 @@ impl super::App {
                             // Callbacks must run without borrowing `secondaries` (may open Dialog /
                             // reconcile into this secondary via window_scope).
                             (*cb.borrow_mut())();
+                            if self.finish_native_pointer_handoff() {
+                                return;
+                            }
                         }
                     }
                     let _ = click_path;
@@ -848,6 +903,9 @@ impl super::App {
                         &mut down,
                         super::pointer_events::PointerKind::Down,
                     );
+                    if self.finish_native_pointer_handoff() {
+                        return;
+                    }
                 }
             }
             _ => {}
@@ -953,6 +1011,7 @@ impl super::App {
     pub(super) fn handle_secondary_mouse_wheel(&mut self, id: WindowId, delta: MouseScrollDelta) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
+        self.finish_native_pointer_handoff();
 
         let mut secs = self.secondaries.borrow_mut();
         let Some(sec) = secs.get_mut(&id) else {
@@ -1019,6 +1078,7 @@ impl super::App {
     pub(super) fn handle_secondary_keyboard(&mut self, id: WindowId, event: KeyEvent) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
+        self.finish_native_pointer_handoff();
         #[cfg(all(debug_assertions, feature = "devtools"))]
         if super::devtools::is_detached_window(id)
             && super::devtools::try_toggle_from_key(&event, self.modifiers)
@@ -1029,6 +1089,7 @@ impl super::App {
             return;
         }
 
+        crate::utils::roving::resume_keyboard_focus();
         if self.dispatch_window_shortcuts(&event) {
             if let Some(sec) = self.secondaries.borrow().get(&id) {
                 sec.window.request_redraw();
@@ -1036,13 +1097,18 @@ impl super::App {
             return;
         }
 
-        if matches!(event.logical_key, Key::Named(NamedKey::Escape))
-            && super::portal_overlay::try_close_top()
-        {
-            if let Some(sec) = self.secondaries.borrow().get(&id) {
-                sec.window.request_redraw();
+        if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
+            let panel_z = super::portal_overlay::top_stacked_panel_z();
+            let fid = use_signal("__jadix_button_focus_id", String::new).peek();
+            let handlers = self.secondaries.borrow().get(&id).and_then(|sec| {
+                super::tree_hit::focused_escape_handlers(&sec.root_element, &fid, panel_z)
+            });
+            if super::tree_hit::run_focused_escape_or_close_overlay(handlers.as_ref(), &event) {
+                if let Some(sec) = self.secondaries.borrow().get(&id) {
+                    sec.window.request_redraw();
+                }
+                return;
             }
-            return;
         }
 
         if matches!(event.logical_key, Key::Named(NamedKey::Tab)) && !event.repeat {
@@ -1065,7 +1131,6 @@ impl super::App {
             }
             if !ids.is_empty() {
                 let focused = use_signal("__jadix_button_focus_id", String::new);
-                let focus_visible = use_signal("__jadix_focus_visible", || false);
                 let current = focused.peek();
                 let shift = self.modifiers.shift_key();
                 let idx = ids.iter().position(|i| i == &current);
@@ -1080,8 +1145,7 @@ impl super::App {
                         None => 0,
                     }
                 };
-                focus_visible.set(true);
-                focused.set(ids[next_idx].clone());
+                crate::utils::roving::focus_by_id(ids[next_idx].clone());
                 if let Some(sec) = self.secondaries.borrow().get(&id) {
                     sec.window.request_redraw();
                 }
@@ -1091,7 +1155,9 @@ impl super::App {
 
         // Focused widget key handlers (Select / Combobox list) — secondary tree only.
         let fid = use_signal("__jadix_button_focus_id", String::new).peek();
-        let key_handlers = {
+        let key_handlers = if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
+            None // Already dispatched above, even if the focused callback returned false.
+        } else {
             let secs = self.secondaries.borrow();
             secs.get(&id)
                 .and_then(|sec| super::tree_hit::focused_key_handlers(&sec.root_element, &fid))

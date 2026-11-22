@@ -12,6 +12,8 @@ pub enum ScrollItemAlign {
     Start,
     Center,
     End,
+    /// Reveal only the clipped edge, preserving an already visible target.
+    Nearest,
 }
 
 /// When to apply a pending align.
@@ -38,6 +40,7 @@ impl ScrollItemAlign {
             "" | "none" | "false" | "0" => None,
             "start" | "top" | "left" => Some(Self::Start),
             "end" | "bottom" | "right" => Some(Self::End),
+            "nearest" => Some(Self::Nearest),
             _ => Some(Self::Center),
         }
     }
@@ -280,6 +283,9 @@ pub(crate) fn apply_pending_scroll_align(
                 .then_some(viewport_h)
         });
     let Some(effective_vh) = effective_vh else {
+        if pending.align == ScrollItemAlign::Nearest {
+            return false;
+        }
         pending.clip_waits = pending.clip_waits.saturating_add(1);
         if pending.clip_waits < 36 {
             PENDING_SCROLL_ITEM_ALIGN.with(|m| {
@@ -299,6 +305,15 @@ pub(crate) fn apply_pending_scroll_align(
                 ScrollItemAlign::Start => (*index as f32 * item_h).clamp(0.0, max_sy),
                 ScrollItemAlign::End => {
                     (*index as f32 * item_h + item_h - effective_vh).clamp(0.0, max_sy)
+                }
+                ScrollItemAlign::Nearest => {
+                    let current = crate::core::reactivity::use_signal(
+                        &crate::core::scroll_viewport::scroll_offset_y_signal_key(rest),
+                        || 0.0_f32,
+                    )
+                    .peek();
+                    let top = *index as f32 * item_h;
+                    nearest_scroll_offset(top, item_h, current, effective_vh).clamp(0.0, max_sy)
                 }
             };
             (0.0, sy)
@@ -381,6 +396,10 @@ pub(crate) fn scroll_offset_to_align_rect(
             content_x + target[2] - viewport[2],
             content_y + target[3] - viewport[3],
         ),
+        ScrollItemAlign::Nearest => (
+            nearest_scroll_offset(content_x, target[2], current[0], viewport[2]),
+            nearest_scroll_offset(content_y, target[3], current[1], viewport[3]),
+        ),
     };
     [
         dx.clamp(0.0, max_scroll[0].max(0.0)),
@@ -388,8 +407,29 @@ pub(crate) fn scroll_offset_to_align_rect(
     ]
 }
 
+fn nearest_scroll_offset(start: f32, size: f32, current: f32, viewport: f32) -> f32 {
+    let end = start + size;
+    if start < current && end < current + viewport {
+        if size > viewport {
+            end - viewport
+        } else {
+            start
+        }
+    } else if start > current && end > current + viewport {
+        if size > viewport {
+            start
+        } else {
+            end - viewport
+        }
+    } else {
+        current
+    }
+}
+
 fn node_matches_scroll_target(el: &Element, target: &str) -> bool {
-    el.focus_id.as_deref() == Some(target) || el.template_id.as_deref() == Some(target)
+    el.focus_id.as_deref() == Some(target)
+        || el.template_id.as_deref() == Some(target)
+        || el.attrs.get("jadix_scroll_target").map(String::as_str) == Some(target)
 }
 
 fn find_scroll_target_bounds(
@@ -1049,6 +1089,8 @@ pub(crate) fn set_scroll_offset_with_behavior(
     target_y: f32,
     immediate: bool,
 ) {
+    crate::core::scroll_viewport::cancel_scroll_end_x(rest);
+    crate::core::scroll_viewport::cancel_scroll_end_y(rest);
     let sx_key = crate::core::scroll_viewport::scroll_offset_x_signal_key(rest);
     let sy_key = crate::core::scroll_viewport::scroll_offset_y_signal_key(rest);
     let tx_key = crate::core::scroll_viewport::scroll_target_x_signal_key(rest);
@@ -1139,6 +1181,8 @@ pub(crate) fn apply_scroll_navigation_delta(
     max_x: f32,
     max_y: f32,
 ) -> bool {
+    crate::core::scroll_viewport::cancel_scroll_end_x(rest);
+    crate::core::scroll_viewport::cancel_scroll_end_y(rest);
     let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(rest);
     let behavior = crate::core::reactivity::use_signal(keys.behavior.as_str(), || {
         crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
@@ -1177,6 +1221,8 @@ pub(crate) fn apply_scroll_navigation_absolute(
     max_x: f32,
     max_y: f32,
 ) -> bool {
+    crate::core::scroll_viewport::cancel_scroll_end_x(rest);
+    crate::core::scroll_viewport::cancel_scroll_end_y(rest);
     let tx = target_x.clamp(0.0, max_x.max(0.0));
     let ty = target_y.clamp(0.0, max_y.max(0.0));
     let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(rest);

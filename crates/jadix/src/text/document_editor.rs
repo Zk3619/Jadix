@@ -1,9 +1,9 @@
 //! Document-coordinate editing, selection, search, formatting and bounded delta history.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ops::Range;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use super::{Document, DocumentEditError, DocumentFormat, DocumentInlineStyle};
 use crate::core::reactivity::Signal;
@@ -81,6 +81,76 @@ pub struct DocumentEditorSnapshot {
     pub typing_style: Option<DocumentInlineStyle>,
 }
 
+/// A synchronous paste stage. Stages run in registration order; `None` consumes
+/// the paste (for example after an application handles it itself).
+pub type DocumentPasteTransform = Rc<dyn Fn(&DocumentEditorSnapshot, String) -> Option<String>>;
+
+/// Schema-aware paste stages. Applications may inspect, replace or consume an
+/// imported rich-text fragment before it becomes one undoable edit.
+pub type DocumentFragmentTransform =
+    Rc<dyn Fn(&DocumentEditorSnapshot, Document) -> Option<Document>>;
+
+/// Clipboard content after the host has chosen literal text or imported rich text.
+#[derive(Clone, Debug)]
+pub enum DocumentPasteContent {
+    Text(String),
+    RichText(Document),
+}
+
+/// A one-shot, UI-thread completion for application-owned asynchronous paste work.
+/// Dropping it consumes the paste. It does not keep the editor session alive.
+/// Edits, selection/mode changes, a newer paste or explicit cancellation fence
+/// late results. Call `accept` or `complete` on the UI thread after the work ends.
+pub struct DocumentPasteRequest {
+    session: Weak<Session>,
+    snapshot: DocumentEditorSnapshot,
+    generation: u64,
+    content: DocumentPasteContent,
+    text_transforms: Vec<DocumentPasteTransform>,
+    fragment_transforms: Vec<DocumentFragmentTransform>,
+}
+
+impl DocumentPasteRequest {
+    pub fn snapshot(&self) -> &DocumentEditorSnapshot {
+        &self.snapshot
+    }
+
+    pub fn content(&self) -> &DocumentPasteContent {
+        &self.content
+    }
+
+    pub fn is_current(&self) -> bool {
+        self.session.upgrade().is_some_and(|session| {
+            session.snapshot.is_alive()
+                && session.paste_generation.get() == self.generation
+                && session.snapshot.peek().epoch == self.snapshot.epoch
+        })
+    }
+
+    /// Replace the clipboard content, then apply the registered synchronous stages.
+    pub fn complete(mut self, content: DocumentPasteContent) -> Result<bool, DocumentEditError> {
+        self.content = content;
+        self.accept()
+    }
+
+    /// Apply the original content as one undoable edit, if the request is still live.
+    pub fn accept(self) -> Result<bool, DocumentEditError> {
+        if !self.is_current() {
+            return Ok(false);
+        }
+        let Some(session) = self.session.upgrade() else {
+            return Ok(false);
+        };
+        let state = DocumentEditorState(session);
+        match self.content {
+            DocumentPasteContent::Text(text) => state.paste_text(&text, &self.text_transforms),
+            DocumentPasteContent::RichText(fragment) => {
+                state.paste_document(fragment, &self.fragment_transforms)
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Edit {
     start: usize,
@@ -110,6 +180,7 @@ struct History {
 struct Session {
     snapshot: Signal<DocumentEditorSnapshot>,
     history: RefCell<History>,
+    paste_generation: Cell<u64>,
     max_bytes: usize,
     max_entries: usize,
 }
@@ -145,6 +216,7 @@ impl DocumentEditorState {
                 typing_style: None,
             }),
             history: RefCell::new(History::default()),
+            paste_generation: Cell::new(0),
             max_bytes: bytes,
             max_entries: entries,
         }))
@@ -233,6 +305,171 @@ impl DocumentEditorState {
 
     pub fn replace_selection(&self, insert: &str) -> Result<(), DocumentEditError> {
         self.replace(self.selection().range(), insert)
+    }
+
+    /// Fence pending paste completions without changing the document or history.
+    /// Hosts call this when their editing surface unmounts or is replaced.
+    pub fn cancel_pending_paste(&self) {
+        self.0
+            .paste_generation
+            .set(self.0.paste_generation.get().wrapping_add(1));
+    }
+
+    /// Hand off a paste for later completion. No executor or background thread is
+    /// created. Stages are retained and run only when the application completes
+    /// the request; a new request supersedes the previous one, even if cancelled.
+    pub fn defer_paste(
+        &self,
+        content: DocumentPasteContent,
+        text_transforms: &[DocumentPasteTransform],
+        fragment_transforms: &[DocumentFragmentTransform],
+    ) -> Option<DocumentPasteRequest> {
+        if !self.signal().is_alive() {
+            return None;
+        }
+        self.cancel_pending_paste();
+        let snapshot = self.snapshot();
+        if snapshot.mode == DocumentEditMode::Preview {
+            return None;
+        }
+        Some(DocumentPasteRequest {
+            session: Rc::downgrade(&self.0),
+            snapshot,
+            generation: self.0.paste_generation.get(),
+            content,
+            text_transforms: text_transforms.to_vec(),
+            fragment_transforms: fragment_transforms.to_vec(),
+        })
+    }
+
+    /// Copy or cut the global selection through a host-provided clipboard writer.
+    /// Rich text includes safe HTML outside source mode; unsupported HTML export
+    /// falls back to plain text. A failed write or a stale cut never deletes text.
+    /// Successful cuts form one undoable edit, preserving rich-text history.
+    pub fn transfer_selection(
+        &self,
+        cut: bool,
+        write: impl FnOnce(&str, Option<&str>) -> bool,
+    ) -> Result<bool, DocumentEditError> {
+        if !self.signal().is_alive() {
+            return Ok(false);
+        }
+        let snapshot = self.snapshot();
+        let range = snapshot.selection.range();
+        if range.is_empty() || (cut && snapshot.mode == DocumentEditMode::Preview) {
+            return Ok(false);
+        }
+        let html = (snapshot.mode != DocumentEditMode::Source
+            && snapshot.document.format() == DocumentFormat::RichText)
+            .then(|| snapshot.document.html_fragment(range.clone()).ok())
+            .flatten();
+        if !write(
+            &snapshot.document.source().text()[range.clone()],
+            html.as_deref(),
+        ) {
+            return Ok(false);
+        }
+        if cut {
+            if !self.signal().is_alive() || self.snapshot().epoch != snapshot.epoch {
+                return Ok(false);
+            }
+            self.replace(range, "")?;
+        }
+        Ok(true)
+    }
+
+    /// Transform a paste and insert it as one undoable document edit.
+    ///
+    /// Callbacks receive document coordinates, not the currently mounted line.
+    /// A callback that changes the document, selection or mode consumes the old
+    /// request: remaining stages and default insertion must not use stale state.
+    /// Returns `false` for an empty, consumed, stale or read-only request.
+    pub fn paste_text(
+        &self,
+        text: &str,
+        transforms: &[DocumentPasteTransform],
+    ) -> Result<bool, DocumentEditError> {
+        self.cancel_pending_paste();
+        let generation = self.0.paste_generation.get();
+        if !self.signal().is_alive() || text.is_empty() {
+            return Ok(false);
+        }
+        let snapshot = self.snapshot();
+        if snapshot.mode == DocumentEditMode::Preview {
+            return Ok(false);
+        }
+        let mut text = text.to_string();
+        for transform in transforms {
+            let Some(next) = transform(&snapshot, text) else {
+                return Ok(false);
+            };
+            if !self.signal().is_alive()
+                || self.0.paste_generation.get() != generation
+                || self.snapshot().epoch != snapshot.epoch
+            {
+                return Ok(false);
+            }
+            text = next;
+        }
+        if text.is_empty() {
+            return Ok(false);
+        }
+        self.replace(snapshot.selection.range(), &text)?;
+        Ok(true)
+    }
+
+    /// Paste a rich-text fragment without flattening its styles or links.
+    /// Both documents must be rich text. Stages run in order; a callback that
+    /// changes editor state consumes the request, as in [`Self::paste_text`].
+    pub fn paste_document(
+        &self,
+        mut fragment: Document,
+        transforms: &[DocumentFragmentTransform],
+    ) -> Result<bool, DocumentEditError> {
+        self.cancel_pending_paste();
+        let generation = self.0.paste_generation.get();
+        if !self.signal().is_alive() {
+            return Ok(false);
+        }
+        let mut snapshot = self.snapshot();
+        if snapshot.mode == DocumentEditMode::Preview {
+            return Ok(false);
+        }
+        for transform in transforms {
+            let Some(next) = transform(&snapshot, fragment) else {
+                return Ok(false);
+            };
+            if !self.signal().is_alive()
+                || self.0.paste_generation.get() != generation
+                || self.snapshot().epoch != snapshot.epoch
+            {
+                return Ok(false);
+            }
+            fragment = next;
+        }
+        if fragment.source().is_empty() {
+            return Ok(false);
+        }
+        let range = snapshot.selection.range();
+        let document = snapshot
+            .document
+            .replace_fragment(range.clone(), &fragment)?;
+        let after = DocumentSelection::caret(range.start + fragment.source().len());
+        self.record(Edit {
+            start: range.start,
+            removed: String::new(),
+            inserted: String::new(),
+            before: snapshot.selection,
+            after,
+            documents: Some((snapshot.document.clone(), document.clone())),
+        });
+        snapshot.document = document;
+        snapshot.selection = after;
+        snapshot.typing_style = None;
+        snapshot.editing = true;
+        snapshot.epoch += 1;
+        self.publish(snapshot, false);
+        Ok(true)
     }
 
     pub fn insert_newline(&self) -> Result<(), DocumentEditError> {

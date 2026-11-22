@@ -21,9 +21,35 @@ use super::tree_hit;
 pub const ATTR_ACTIVATE_FOR: &str = "data-jadix-activate-for";
 
 thread_local! {
+    static NATIVE_POINTER_HANDOFF: Cell<bool> = const { Cell::new(false) };
     static LAST_POINTER_CLIENT: Cell<[f32; 2]> = const { Cell::new([-1.0, -1.0]) };
     static LAST_HOVER_TARGET_BOUNDS: Cell<[f32; 4]> = const { Cell::new([0.0; 4]) };
     static LAST_HOVER_SAMPLE_VALID: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A native move/resize may consume MouseUp. End the UI gesture before entering
+/// the OS modal loop; the event dispatcher clears App-owned state on return.
+/// Called on the UI thread from a pointer handler, like the native window APIs.
+pub(super) fn begin_native_pointer_handoff() {
+    NATIVE_POINTER_HANDOFF.set(true);
+    cancel_pointer_gestures();
+}
+
+pub(super) fn native_pointer_handoff_pending() -> bool {
+    NATIVE_POINTER_HANDOFF.get()
+}
+
+pub(super) fn take_native_pointer_handoff() -> bool {
+    NATIVE_POINTER_HANDOFF.replace(false)
+}
+
+pub(super) fn cancel_pointer_gestures() {
+    crate::utils::drag::runtime::cancel();
+    crate::utils::drag::routing::finish_all();
+    crate::utils::drag::pointer::clear_all();
+    crate::app::release_pointer_capture();
+    crate::utils::text_field::set_text_drag_select_active(false);
+    crate::utils::text_sel_move::cancel();
 }
 
 pub(crate) fn note_pointer_client(x: f32, y: f32) {
@@ -85,6 +111,12 @@ pub fn buttons_mask_bit(button: MouseButton) -> u16 {
 /// [`PointerEvent`] is a compatibility alias.
 #[derive(Debug)]
 pub struct MouseEvent {
+    /// Validated single-click activation of an inline text link, on `mouseup`.
+    pub text_link: Option<TextLinkHit>,
+    /// Painted inline link under an unpressed pointer on motion or redraw.
+    /// This is hover information, never permission to activate a destination.
+    pub hovered_text_link: Option<TextLinkHit>,
+    pub(crate) text_link_hover_target: Option<(Option<taffy::NodeId>, [f32; 4])>,
     /// [`MouseEvent.clientX`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/clientX) (logical px).
     pub x: f32,
     /// [`MouseEvent.clientY`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/clientY) (logical px).
@@ -135,6 +167,9 @@ pub type PointerEvent = MouseEvent;
 impl MouseEvent {
     pub fn new(x: f32, y: f32, button: MouseButton, detail: u8) -> Self {
         Self {
+            text_link: None,
+            hovered_text_link: None,
+            text_link_hover_target: None,
             x,
             y,
             button,
@@ -225,6 +260,28 @@ pub type PointerHandler = Rc<RefCell<dyn FnMut(&PointerEvent)>>;
 
 pub type WheelHandler = Rc<RefCell<dyn FnMut([f32; 2]) -> bool>>;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextLinkHit {
+    pub href: String,
+    pub span_index: usize,
+}
+
+pub(crate) fn activated_text_link(
+    down: &[HitPathEntry],
+    up: &[HitPathEntry],
+    moved: bool,
+    scrolled: bool,
+) -> Option<TextLinkHit> {
+    if moved || scrolled {
+        return None;
+    }
+    let (down, up) = (down.last()?, up.last()?);
+    if down.node_id.is_none() || down.node_id != up.node_id || down.text_link != up.text_link {
+        return None;
+    }
+    up.text_link.clone()
+}
+
 pub fn dispatch_wheel(path: &[HitPathEntry], delta: [f32; 2]) -> bool {
     path.iter().rev().any(|entry| {
         entry
@@ -237,16 +294,20 @@ pub fn dispatch_wheel(path: &[HitPathEntry], delta: [f32; 2]) -> bool {
 /// One node on the hit path (root → … → leaf).
 #[derive(Clone, Default)]
 pub struct HitPathEntry {
+    pub node_id: Option<taffy::NodeId>,
+    pub text_link: Option<TextLinkHit>,
     pub focus_id: Option<String>,
     /// Label `attrs["for"]`（Solid `for`）→ 转发点击到匹配 `focus_id` 的控件。
     pub label_for: Option<String>,
     pub on_mousedown: Option<PointerHandler>,
     pub on_mouseup: Option<PointerHandler>,
     pub on_click: Option<Rc<RefCell<dyn FnMut()>>>,
+    pub activation_on_press: bool,
     pub on_wheel: Option<WheelHandler>,
     pub on_context_menu: Option<PointerHandler>,
     pub on_double_click: Option<PointerHandler>,
     pub on_mousemove: Option<PointerHandler>,
+    pub(crate) on_text_link_hover: Option<PointerHandler>,
     pub on_mouseover: Option<PointerHandler>,
     pub on_mouseout: Option<PointerHandler>,
     pub on_mouseenter: Option<PointerHandler>,
@@ -284,6 +345,8 @@ impl HitPathEntry {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
         Self {
+            node_id: el.layout_node_id(),
+            text_link: None,
             focus_id: el.focus_id.clone(),
             label_for: el
                 .attrs
@@ -294,10 +357,12 @@ impl HitPathEntry {
             on_mousedown: el.on_mousedown.clone(),
             on_mouseup: el.on_mouseup.clone(),
             on_click: el.on_click.clone(),
+            activation_on_press: el.attrs.get("jadix_activate_on_press").is_some_and(|v| v == "1"),
             on_wheel: el.on_wheel.clone(),
             on_context_menu: el.on_context_menu.clone(),
             on_double_click: el.on_double_click.clone(),
             on_mousemove: el.on_mousemove.clone(),
+            on_text_link_hover: el.on_text_link_hover.clone(),
             on_mouseover: el.on_mouseover.clone(),
             on_mouseout: el.on_mouseout.clone(),
             on_mouseenter: el.on_mouseenter.clone(),
@@ -380,14 +445,19 @@ pub fn same_hit_node(a: &HitPathEntry, b: &HitPathEntry) -> bool {
             return true;
         }
     }
+    if let (Some(ha), Some(hb)) = (&a.on_text_link_hover, &b.on_text_link_hover) {
+        return Rc::ptr_eq(ha, hb);
+    }
     bounds_close(a.bounds, b.bounds)
         && a.label_for == b.label_for
         && a.region == b.region
         && a.hoisted_portal == b.hoisted_portal
+        && a.activation_on_press == b.activation_on_press
         && a.on_click.is_none() == b.on_click.is_none()
         && a.on_mousedown.is_none() == b.on_mousedown.is_none()
         && a.on_mouseenter.is_none() == b.on_mouseenter.is_none()
         && a.on_mouseleave.is_none() == b.on_mouseleave.is_none()
+        && a.on_text_link_hover.is_none() == b.on_text_link_hover.is_none()
 }
 
 /// Number of shared root-to-leaf nodes between two pointer paths.
@@ -428,9 +498,18 @@ pub fn path_deepest_scroll_area_rest(path: &[HitPathEntry]) -> Option<&str> {
     })
 }
 
-/// Deepest explicit `cursor`. Same bubble as `pick_cursor`.
+/// Deepest explicit cursor; a painted link supplies the `auto` default.
 pub fn path_resolved_cursor(path: &[HitPathEntry]) -> Option<crate::style::CursorValue> {
-    path.iter().rev().find_map(|e| e.cursor.clone())
+    let explicit = path.iter().rev().find_map(|e| e.cursor.clone());
+    if path.last().is_some_and(|e| e.text_link.is_some())
+        && explicit
+            .as_ref()
+            .is_none_or(|c| c.images.is_empty() && c.kind == crate::style::CursorKind::Auto)
+    {
+        Some(crate::style::CursorKind::Pointer.into())
+    } else {
+        explicit
+    }
 }
 
 pub fn path_has_on_hover(path: &[HitPathEntry]) -> bool {
@@ -706,6 +785,19 @@ fn find_by_template_id_exact<'a>(el: &'a Element, id: &str) -> Option<&'a Elemen
 ///   (DOM-like click), unless a capture/target handler already called
 ///   [`PointerEvent::stop_propagation`] on that gesture.
 pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: PointerKind) {
+    event.hovered_text_link =
+        if matches!(kind, PointerKind::Move | PointerKind::LinkHover) && event.buttons == 0 {
+            path.last().and_then(|entry| entry.text_link.clone())
+        } else {
+            None
+        };
+    event.text_link_hover_target = event
+        .hovered_text_link
+        .as_ref()
+        .and_then(|_| path.last().map(|entry| (entry.node_id, entry.bounds)));
+    if stop_for_native_handoff(event) {
+        return;
+    }
     // The same hit path skips hover reconciliation. Keep the client sample
     // current so reactive chart sync cannot restore the previous frame's pose.
     if matches!(kind, PointerKind::Move) {
@@ -722,7 +814,7 @@ pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: P
         event.current_bounds = entry.bounds;
         event.region = entry.region.clone();
         fire_handler(entry, event, kind);
-        if event.is_consumed() {
+        if stop_for_native_handoff(event) || event.is_consumed() {
             return;
         }
     }
@@ -733,7 +825,7 @@ pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: P
     event.current_bounds = target.bounds;
     event.region = target.region.clone();
     fire_handler(target, event, kind);
-    if event.is_consumed() {
+    if stop_for_native_handoff(event) || event.is_consumed() {
         return;
     }
 
@@ -743,10 +835,30 @@ pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: P
         event.current_bounds = entry.bounds;
         event.region = entry.region.clone();
         fire_handler(entry, event, kind);
-        if event.is_consumed() {
+        if stop_for_native_handoff(event) || event.is_consumed() {
             return;
         }
     }
+    // Default activation follows capture/target/bubble cancellation. Decorative
+    // children can be hit, but a nested independent control owns its own action.
+    if kind == PointerKind::Down && event.button == MouseButton::Left && !event.default_prevented() {
+        if let Some(entry) = path.iter().rev().find(|entry| entry.on_click.is_some()) {
+            if entry.activation_on_press {
+                event.prevent_default();
+                event.stop_propagation();
+                if let Some(callback) = &entry.on_click { callback.borrow_mut()(); }
+            }
+        }
+    }
+}
+
+fn stop_for_native_handoff(event: &PointerEvent) -> bool {
+    if !native_pointer_handoff_pending() {
+        return false;
+    }
+    event.prevent_default();
+    event.stop_propagation();
+    true
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -757,6 +869,8 @@ pub enum PointerKind {
     ContextMenu,
     DoubleClick,
     Move,
+    /// Reconcile painted links after layout without synthesizing mousemove.
+    LinkHover,
     Over,
     Out,
     Enter,
@@ -790,6 +904,7 @@ fn fire_handler(entry: &HitPathEntry, event: &PointerEvent, kind: PointerKind) {
         PointerKind::Move => {
             fire_mouse(&entry.on_mousemove, event);
         }
+        PointerKind::LinkHover => {}
         PointerKind::Over => {
             fire_mouse(&entry.on_mouseover, event);
         }
@@ -808,12 +923,18 @@ fn fire_handler(entry: &HitPathEntry, event: &PointerEvent, kind: PointerKind) {
         PointerKind::Click => {
             // Legacy on_click: only at target (deepest with handler) — fire once when we
             // reach the deepest entry that has on_click during target/bubble from leaf.
-            if event.phase == EventPhase::Target {
+            if event.phase == EventPhase::Target && !entry.activation_on_press {
                 if let Some(cb) = &entry.on_click {
                     (*cb.borrow_mut())();
                 }
             }
         }
+    }
+    if matches!(
+        kind,
+        PointerKind::Move | PointerKind::LinkHover | PointerKind::Leave | PointerKind::Down
+    ) {
+        fire_mouse(&entry.on_text_link_hover, event);
     }
 }
 
@@ -826,10 +947,10 @@ pub fn resolve_click_with_capture(
 ) -> Option<Rc<RefCell<dyn FnMut()>>> {
     if let Some(id) = capture_id {
         if let Some(el) = find_by_focus_id(root, id) {
-            return el.on_click.clone();
+            return if el.attrs.get("jadix_activate_on_press").is_some_and(|v| v == "1") { None } else { el.on_click.clone() };
         }
     }
-    tree_hit::find_click(root, x, y, [0.0, 0.0])
+    resolve_click_from_path(root, &hit_path(root, x, y)).0
 }
 
 /// 从 hit path 解析最终 `on_click`：优先 Label `for` → 目标控件，否则最深节点自身 handler。
@@ -851,7 +972,7 @@ pub fn resolve_click_from_path(
     }
     for entry in path.iter().rev() {
         if let Some(cb) = entry.on_click.clone() {
-            return (Some(cb), None);
+            return (if entry.activation_on_press { None } else { Some(cb) }, None);
         }
     }
     (None, None)

@@ -2,6 +2,46 @@ use super::*;
 
 use crate::renderer::font_loader::create_font_system;
 
+#[test]
+fn family_stack_preserves_quoted_commas_escapes_and_named_generics() {
+    clear_resolve_family_cache();
+    let fs = create_font_system();
+    let mut db = Database::new();
+    let mut face = fs.db().faces().next().expect("bundled UI font").clone();
+    face.families = vec![(
+        "ACME, \"Display\" \\ UI".into(),
+        glyphon::fontdb::Language::English_UnitedStates,
+    )];
+    db.push_face_info(face.clone());
+    face.families[0].0 = "serif".into();
+    db.push_face_info(face);
+    let stack = r#"missing, 'ACME, \"Display\" \\ UI', monospace"#;
+    for _ in 0..2 {
+        assert!(matches!(
+            resolve_family(&db, stack),
+            Family::Name("ACME, \"Display\" \\ UI")
+        ));
+        assert!(matches!(
+            resolve_family(&db, "'serif', monospace"),
+            Family::Name("serif")
+        ));
+        assert!(matches!(resolve_family(&db, "serif"), Family::Serif));
+        assert!(matches!(
+            resolve_family(&db, "'missing, family', monospace"),
+            Family::Monospace
+        ));
+    }
+    assert_eq!(
+        first_concrete_family_in_list(&db, stack),
+        Some("ACME, \"Display\" \\ UI")
+    );
+    let joined = join_css_stack(Some(stack.into()), &["Segoe UI"], &["sans-serif"]);
+    assert_eq!(
+        font_families(&joined).nth(1).unwrap().0,
+        "ACME, \"Display\" \\ UI"
+    );
+}
+
 #[cfg(feature = "product-tests")]
 #[test]
 fn lucide_resolves_after_font_load_despite_early_miss_cache() {

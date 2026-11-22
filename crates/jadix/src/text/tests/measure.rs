@@ -1,6 +1,104 @@
 use super::*;
 
 #[test]
+fn rich_measure_matches_shaping_for_italic_and_monospace_spans() {
+    use crate::style::{TextSpan, TextSpanKind};
+
+    let mut db = glyphon::fontdb::Database::new();
+    db.load_font_data(
+        include_bytes!("../../../../../crates/jadix_cosmic_text/fonts/Inter-Regular.ttf").to_vec(),
+    );
+    db.load_font_data(
+        include_bytes!("../../../../../crates/jadix_cosmic_text/fonts/InterVariable.ttf").to_vec(),
+    );
+    db.load_font_data(
+        include_bytes!("../../../../../crates/jadix_cosmic_text/fonts/InterVariable-Italic.ttf")
+            .to_vec(),
+    );
+    db.load_font_data(
+        include_bytes!("../../../../../crates/jadix_cosmic_text/fonts/FiraMono-Medium.ttf")
+            .to_vec(),
+    );
+    db.set_sans_serif_family("Inter");
+    db.set_monospace_family("Fira Mono");
+    LAYOUT_FONT_SYSTEM.with(|slot| {
+        *slot.borrow_mut() = LayoutFsSlot::Owned(Box::new(FontSystem::new_with_locale_and_db(
+            "en-US".into(),
+            db,
+        )));
+    });
+    invalidate_prepare_cache();
+
+    for requested_family in [None, Some("Inter Variable"), Some("Fira Mono")] {
+        // Revisit normal and italic after warming both tables to catch cache aliasing.
+        for (italic, monospace) in [
+            (false, false),
+            (true, false),
+            (false, true),
+            (true, true),
+            (false, false),
+            (true, false),
+        ] {
+            for kind in [
+                TextSpanKind::Text,
+                TextSpanKind::Chip,
+                TextSpanKind::Mention,
+            ] {
+                for text in ["Wiilarge42&", "café"] {
+                    let mut span = TextSpan::new(text).size(20.0).weight(500).padding_x(3.0);
+                    span.italic = italic;
+                    span.monospace = monospace;
+                    span.kind = kind;
+                    let expected = with_layout_font_system(|fs| {
+                        let family = if monospace {
+                            Family::Monospace
+                        } else if let Some(name) = requested_family {
+                            crate::utils::font::resolve_family(fs.db(), name)
+                        } else {
+                            crate::renderer::text_hit::best_font_family(fs)
+                        };
+                        let attrs = Attrs::new()
+                            .family(family)
+                            .weight(glyphon::fontdb::Weight(500))
+                            .style(if italic {
+                                glyphon::Style::Italic
+                            } else {
+                                glyphon::Style::Normal
+                            });
+                        let mut buffer = Buffer::new(fs, Metrics::new(20.0, 30.0));
+                        buffer.set_size(Some(16_384.0), Some(60.0));
+                        buffer.set_text(
+                            text,
+                            &attrs,
+                            if text.is_ascii() {
+                                Shaping::Basic
+                            } else {
+                                Shaping::Advanced
+                            },
+                            None,
+                        );
+                        buffer.shape_until_scroll(fs, false);
+                        buffer
+                            .layout_runs()
+                            .map(|run| run.line_w)
+                            .fold(0.0_f32, f32::max)
+                            + if kind == TextSpanKind::Text { 0.0 } else { 6.0 }
+                    });
+                    let measured = if requested_family.is_none() {
+                        prepare_rich(&[span], 16.0, 400, 24.0)
+                    } else {
+                        prepare_rich_with_family(&[span], 16.0, 400, 24.0, requested_family)
+                    };
+                    assert!((measured.max_segment_width - expected).abs() < 0.01,
+                    "{text:?} family={requested_family:?} italic={italic} monospace={monospace} kind={kind:?}: measured={}, shaped={expected}", measured.max_segment_width);
+                }
+            }
+        }
+    }
+    shutdown_layout_text();
+}
+
+#[test]
 fn ascii_measure_keeps_existing_zero_line_height_contract() {
     invalidate_prepare_cache();
     let prepared = prepare("numeric 42", 16.0, 400, 0.0);

@@ -1,19 +1,23 @@
-//! Solid-style [`error_boundary`] MVP — catch child-reported errors and render fallback.
+//! Renderer adapter for the shared owner-scoped error boundary.
 
 #[cfg(any(debug_assertions, test))]
 use std::cell::Cell;
+#[cfg(test)]
 use std::cell::RefCell;
+#[cfg(test)]
 use std::rc::Rc;
 
 use crate::core::tree::Element;
 
 use super::reactive::reactive_view;
 
+#[cfg(test)]
 pub(crate) struct ErrorFrame {
     pub(crate) error: RefCell<Option<String>>,
 }
 
 thread_local! {
+    #[cfg(test)]
     static ERROR_STACK: RefCell<Vec<Rc<ErrorFrame>>> = const { RefCell::new(Vec::new()) };
     #[cfg(any(debug_assertions, test))]
     static ORPHAN_THROW_WARNED: Cell<bool> = const { Cell::new(false) };
@@ -21,6 +25,7 @@ thread_local! {
     static ORPHAN_THROW_WARN_COUNT: Cell<u32> = const { Cell::new(0) };
 }
 
+#[cfg(test)]
 pub(crate) fn push_error_frame() -> Rc<ErrorFrame> {
     let frame = Rc::new(ErrorFrame {
         error: RefCell::new(None),
@@ -29,6 +34,7 @@ pub(crate) fn push_error_frame() -> Rc<ErrorFrame> {
     frame
 }
 
+#[cfg(test)]
 pub(crate) fn pop_error_frame() {
     ERROR_STACK.with(|stack| {
         let _ = stack.borrow_mut().pop();
@@ -36,8 +42,10 @@ pub(crate) fn pop_error_frame() {
 }
 
 /// Pops the TLS frame even if `children()` panics (does **not** catch the panic).
+#[cfg(test)]
 struct ErrorFrameGuard;
 
+#[cfg(test)]
 impl Drop for ErrorFrameGuard {
     fn drop(&mut self) {
         pop_error_frame();
@@ -50,14 +58,16 @@ impl Drop for ErrorFrameGuard {
 /// when the owning error boundary has already been removed.
 pub fn throw_error(message: impl Into<String>) {
     let message = message.into();
-    ERROR_STACK.with(|stack| {
+    if jadix_core::error_boundary::throw_error(message.clone()) { return; }
+    #[cfg(test)]
+    if ERROR_STACK.with(|stack| {
         if let Some(frame) = stack.borrow().last() {
-            *frame.error.borrow_mut() = Some(message);
-        } else {
-            #[cfg(any(debug_assertions, test))]
-            warn_orphan_throw(&message);
-        }
-    });
+            *frame.error.borrow_mut() = Some(message.clone());
+            true
+        } else { false }
+    }) { return; }
+    #[cfg(any(debug_assertions, test))]
+    warn_orphan_throw(&message);
 }
 
 #[cfg(any(debug_assertions, test))]
@@ -119,14 +129,22 @@ where
             s
         }
     };
+    error_boundary_with_state(id, jadix_core::error_boundary::ErrorBoundary::new(), fallback, children)
+}
+
+/// Share the same reset handle with menus, retry buttons and native adapters.
+pub fn error_boundary_with_state(
+    id: impl Into<String>,
+    state: jadix_core::error_boundary::ErrorBoundary,
+    fallback: impl Fn(String) -> Element + 'static,
+    children: impl Fn() -> Element + 'static,
+) -> Element {
     reactive_view(id, move || {
-        let frame = push_error_frame();
-        let _guard = ErrorFrameGuard;
-        let child = children();
-        let err = frame.error.borrow().clone();
-        match err {
-            Some(msg) => fallback(msg),
-            None => child,
+        state.generation();
+        if let Some(error) = state.error() { return fallback(error); }
+        match state.run(&children) {
+            Some(child) => child,
+            None => fallback(state.error().unwrap_or_else(|| "content unavailable".into())),
         }
     })
 }

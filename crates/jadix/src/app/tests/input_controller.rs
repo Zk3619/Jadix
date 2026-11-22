@@ -3,6 +3,125 @@ use super::*;
 #[cfg(target_os = "windows")]
 #[test]
 #[ignore = "native event loop; run in a separate process"]
+fn pointer_cancellation_ends_text_gestures_without_editing_selection() {
+    use crate::core::reactivity::{create_root, use_signal};
+    use crate::utils::{text_field, text_sel_move};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    let mut builder = winit::event_loop::EventLoop::builder();
+    builder.with_any_thread(true);
+    let event_loop = builder.build().unwrap();
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let mut app = crate::app::lifecycle::create_app(
+        crate::app::WindowOptions::new(),
+        crate::core::tree::Element::new,
+        event_loop.create_proxy(),
+        receiver,
+    );
+    let (_owner, ()) = create_root(|| {
+        let rest = "cancel-text-gesture";
+        let value = use_signal(&text_field::input_value_signal_key(rest), || {
+            "seed".to_string()
+        });
+        let selection = use_signal(&text_field::input_selection_signal_key(rest), || {
+            Some((0, 4))
+        });
+        for cancellation in 0..5 {
+            app.bind_pointer_window(WindowId::from_raw(10));
+            app.input_drag_rest = Some(rest.into());
+            app.input_drag_multi = true;
+            app.input_drag_multi_base = vec![(0, 4)];
+            app.label_drag_key = Some("label-selection".into());
+            app.left_button_down = true;
+            app.mouse_buttons = 1;
+            text_field::set_text_drag_select_active(true);
+            text_sel_move::begin_potential(
+                rest,
+                (0, 4),
+                "seed".into(),
+                2,
+                (10.0, 10.0),
+                14.0,
+                400,
+                [0; 4],
+                20.0,
+            );
+            crate::app::set_pointer_capture(format!("input:{rest}"));
+            match cancellation {
+                0 => app.cancel_pointer_session(),
+                1 => app.bind_pointer_window(WindowId::from_raw(11)),
+                _ => {
+                    use crate::app::pointer_events::{
+                        EventPhase, MouseButton, PointerEvent, PointerKind, dispatch_pointer,
+                        hit_path,
+                    };
+                    use std::cell::Cell;
+                    use std::rc::Rc;
+                    let handoff_phase = match cancellation {
+                        2 => EventPhase::Capture,
+                        3 => EventPhase::Target,
+                        _ => EventPhase::Bubble,
+                    };
+                    let calls = Rc::new(Cell::new(0));
+                    let armed = Rc::new(Cell::new(true));
+                    let handler = || {
+                        let calls = calls.clone();
+                        let armed = armed.clone();
+                        move |event: &PointerEvent| {
+                            calls.set(calls.get() + 1);
+                            if armed.get() && event.phase == handoff_phase {
+                                crate::app::pointer_events::begin_native_pointer_handoff();
+                                assert!(!text_field::text_drag_select_active());
+                                assert!(!text_sel_move::is_active());
+                                assert!(crate::app::pointer_capture_id().is_none());
+                            }
+                        }
+                    };
+                    let mut root = crate::core::tree::Element::new().on_mousedown(handler());
+                    root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+                    let mut child = crate::core::tree::Element::new().on_mousedown(handler());
+                    child.layout_bounds = root.layout_bounds;
+                    root.children.push(child);
+                    let path = hit_path(&root, 10.0, 10.0);
+                    app.click_press_path = Some(path.clone());
+                    let mut event = PointerEvent::new(10.0, 10.0, MouseButton::Left, 1);
+                    dispatch_pointer(&path, &mut event, PointerKind::Down);
+                    assert!(event.is_consumed());
+                    assert!(event.default_prevented());
+                    assert_eq!(calls.get(), cancellation - 1);
+                    let mut blocked = PointerEvent::new(10.0, 10.0, MouseButton::Left, 1);
+                    dispatch_pointer(&path, &mut blocked, PointerKind::Down);
+                    assert_eq!(calls.get(), cancellation - 1);
+                    assert!(app.finish_native_pointer_handoff());
+                    assert!(!app.finish_native_pointer_handoff());
+                    assert!(app.click_press_path.is_none());
+                    armed.set(false);
+                    let mut fresh = PointerEvent::new(10.0, 10.0, MouseButton::Left, 1);
+                    dispatch_pointer(&path, &mut fresh, PointerKind::Down);
+                    assert!(!fresh.is_consumed());
+                    assert!(!fresh.default_prevented());
+                    assert_eq!(calls.get(), cancellation + 2);
+                }
+            }
+            app.cancel_pointer_session();
+            assert!(app.input_drag_rest.is_none());
+            assert!(!app.input_drag_multi);
+            assert!(app.input_drag_multi_base.is_empty());
+            assert!(app.label_drag_key.is_none());
+            assert!(!app.left_button_down);
+            assert_eq!(app.mouse_buttons, 0);
+            assert!(!text_field::text_drag_select_active());
+            assert!(!text_sel_move::is_active());
+            assert!(crate::app::pointer_capture_id().is_none());
+            assert_eq!(value.peek(), "seed");
+            assert_eq!(selection.peek(), Some((0, 4)));
+        }
+    });
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "native event loop; run in a separate process"]
 fn typed_keyboard_and_ime_preserve_controlled_input() {
     use crate::core::reactivity::{create_root, use_signal};
     use crate::utils::text_field::{
@@ -75,9 +194,11 @@ fn typed_keyboard_and_ime_preserve_controlled_input() {
             assert_eq!(value.peek(), text, "IME {input_type:?}");
             assert_eq!(external.peek(), text);
             assert_eq!(caret.peek(), Some(text.len()));
-            assert!(use_signal(&input_preedit_signal_key(&rest), String::new)
-                .peek()
-                .is_empty());
+            assert!(
+                use_signal(&input_preedit_signal_key(&rest), String::new)
+                    .peek()
+                    .is_empty()
+            );
             app.handle_ime_event(Ime::Disabled, window);
         }
         focus.set(String::new());
@@ -416,9 +537,11 @@ fn max_length_keyboard_ime_and_overwrite_preserve_selection_and_suffix() {
         use_signal(&input_preedit_signal_key(rest), String::new).set("中🦀x".into());
         ime_support::finish_composition_preserve_text(&input_focus_id(rest));
         assert_eq!(value.peek(), "a中🦀b");
-        assert!(use_signal(&input_preedit_signal_key(rest), String::new)
-            .peek()
-            .is_empty());
+        assert!(
+            use_signal(&input_preedit_signal_key(rest), String::new)
+                .peek()
+                .is_empty()
+        );
     });
 }
 
@@ -430,16 +553,27 @@ fn max_length_multi_cursor_rejection_does_not_publish_or_move_cursors() {
         let rest = "max-length-multi";
         use_signal(&input_max_length_signal_key(rest), || Some(2usize));
         let value = use_signal(&input_value_signal_key(rest), || "ab".to_string());
+        use crate::utils::text_annotations::*;
+        set_text_decorations(
+            rest,
+            vec![TextDecoration {
+                range: 1..2,
+                value: TextRangeStyle::default(),
+            }],
+        );
+        let decorations = text_decorations(rest);
         let cursors = load_text_cursors(rest, "ab");
         assert!(!commit_multi_edit(
             rest,
             value,
             "axb".into(),
             cursors.clone(),
+            vec![(1..1, "x".into())],
             crate::utils::text_edit_history::EditKind::Insert
         ));
         assert_eq!(value.peek(), "ab");
         assert_eq!(load_text_cursors(rest, "ab"), cursors);
+        assert_eq!(text_decorations(rest), decorations);
         value.set("external over-limit".into());
         assert!(accepts_input_edit(
             rest,
@@ -451,5 +585,48 @@ fn max_length_multi_cursor_rejection_does_not_publish_or_move_cursors() {
             &value.peek(),
             "external over-limit!"
         ));
+    });
+}
+
+#[cfg(feature = "text-undo")]
+#[test]
+fn disjoint_cursor_edits_and_history_keep_middle_annotations_precise() {
+    use crate::core::reactivity::{create_root, use_signal};
+    use crate::utils::{
+        text_annotations::*, text_edit_history::*, text_field::*, text_multi_cursor::*,
+    };
+    let (_owner, ()) = create_root(|| {
+        let id = "annotations-multi-history";
+        let value = use_signal(&input_value_signal_key(id), || "a中b".to_string());
+        let cursors = vec![TextCursor::collapsed(0), TextCursor::collapsed(5)];
+        store_text_cursors(id, &cursors);
+        set_text_decorations(
+            id,
+            vec![TextDecoration {
+                range: 1..4,
+                value: TextRangeStyle {
+                    underline: true,
+                    ..Default::default()
+                },
+            }],
+        );
+        let mut next = value.peek();
+        let (cursors, edits) = insert_at_cursors_with_edits(&mut next, cursors, "x");
+        assert!(commit_multi_edit(
+            id,
+            value,
+            next,
+            cursors,
+            edits,
+            EditKind::Insert
+        ));
+        assert_eq!(value.peek(), "xa中bx");
+        assert_eq!(text_decorations(id)[0].range, 2..5);
+        assert!(undo_field(id));
+        assert_eq!(value.peek(), "a中b");
+        assert_eq!(text_decorations(id)[0].range, 1..4);
+        assert!(redo_field(id));
+        assert_eq!(value.peek(), "xa中bx");
+        assert_eq!(text_decorations(id)[0].range, 2..5);
     });
 }

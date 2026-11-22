@@ -49,10 +49,12 @@ fn single_viewport_owner_avoids_list_descendants() {
 fn nested_moving_viewports_and_occluders_keep_scroll_ownership() {
     let mut outer = viewport("outer", 0.0);
     stamp_subtree_paint_hashes(&mut outer, false);
-    assert!(!outer
-        .children
-        .iter()
-        .any(|child| child.collect_skip_has_scroll));
+    assert!(
+        !outer
+            .children
+            .iter()
+            .any(|child| child.collect_skip_has_scroll)
+    );
     outer.children.push(viewport("inner", 200.0));
     invalidate_collect_paint_hash_path(&mut outer, &[0]);
     assert_eq!(query(&outer, 50.0).1, ["outer"]);

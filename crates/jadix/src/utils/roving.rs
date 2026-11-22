@@ -10,64 +10,14 @@ use std::rc::Rc;
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 
-use crate::core::reactivity::use_signal;
+use crate::core::reactivity::{batch, use_signal};
 use crate::core::tree::Element;
 use crate::utils::input_hit::collect_focusable_ids;
 
 /// Legacy focus namespace recognized as a tab list by the accessibility bridge.
 pub const TABSTRIP_FOCUS_PREFIX: &str = "tabstrip:";
 
-/// Move selection within `0..len`, wrapping at ends. Returns `None` if `len == 0`.
-pub fn roving_move(len: usize, current: usize, delta: i32) -> Option<usize> {
-    if len == 0 {
-        return None;
-    }
-    let n = len as i32;
-    let cur = (current.min(len - 1)) as i32;
-    let next = (cur + delta).rem_euclid(n);
-    Some(next as usize)
-}
-
-/// Home / End targets.
-pub fn roving_edge(len: usize, to_end: bool) -> Option<usize> {
-    if len == 0 {
-        None
-    } else if to_end {
-        Some(len - 1)
-    } else {
-        Some(0)
-    }
-}
-
-/// Skip disabled indices while moving (wraps). `disabled[i] == true` means skip.
-/// Returns `None` if `len == 0` or every index is disabled.
-pub fn roving_move_skipping(
-    len: usize,
-    current: usize,
-    delta: i32,
-    disabled: impl Fn(usize) -> bool,
-) -> Option<usize> {
-    if len == 0 {
-        return None;
-    }
-    let step = if delta >= 0 { 1 } else { -1 };
-    let steps = delta.unsigned_abs().max(1) as usize;
-    let mut idx = current.min(len - 1);
-    for _ in 0..steps {
-        let mut guard = 0usize;
-        loop {
-            idx = roving_move(len, idx, step)?;
-            guard += 1;
-            if !disabled(idx) {
-                break;
-            }
-            if guard >= len {
-                return None;
-            }
-        }
-    }
-    if disabled(idx) { None } else { Some(idx) }
-}
+pub use jadix_core::roving::{roving_move, roving_edge, roving_move_skipping};
 
 /// Move keyboard focus ring to `focus_id` (`focus-visible` on).
 ///
@@ -78,8 +28,11 @@ pub fn focus_by_id(focus_id: impl Into<String>) {
     if id.is_empty() {
         return;
     }
-    use_signal("__jadix_button_focus_id", String::new).set(id);
-    use_signal("__jadix_focus_visible", || false).set(true);
+    batch(|| {
+        resume_keyboard_focus();
+        use_signal("__jadix_button_focus_id", String::new).set(id);
+        use_signal("__jadix_focus_visible", || false).set(true);
+    });
 }
 
 /// Move focus without enabling the keyboard focus ring.
@@ -88,7 +41,35 @@ pub fn focus_id_only(focus_id: impl Into<String>) {
     if id.is_empty() {
         return;
     }
-    use_signal("__jadix_button_focus_id", String::new).set(id);
+    batch(|| {
+        resume_keyboard_focus();
+        use_signal("__jadix_button_focus_id", String::new).set(id);
+    });
+}
+
+/// Restore focus after closing a surface, preserving the existing focus ring.
+/// Restoration does not count as new keyboard input for focus-triggered hints.
+pub fn restore_focus_by_id(focus_id: impl Into<String>) {
+    let id = focus_id.into();
+    if id.is_empty() {
+        return;
+    }
+    batch(|| {
+        use_signal("__jadix_restored_focus_id", String::new).set(id.clone());
+        use_signal("__jadix_button_focus_id", String::new).set(id);
+    });
+}
+
+/// Whether the focus target was restored rather than newly reached by input.
+pub fn is_restored_focus(focus_id: &str) -> bool {
+    use_signal("__jadix_restored_focus_id", String::new).get() == focus_id
+}
+
+pub(crate) fn resume_keyboard_focus() {
+    let restored = use_signal("__jadix_restored_focus_id", String::new);
+    if !restored.peek().is_empty() {
+        restored.set(String::new());
+    }
 }
 
 /// Return focus on close only while it still belongs to the closing subtree.
@@ -118,7 +99,7 @@ impl PanelFocusReturn {
         }
         let focus = use_signal("__jadix_button_focus_id", String::new);
         if self.members.contains(&focus.peek()) {
-            focus.set(self.target);
+            restore_focus_by_id(self.target);
         }
     }
 }

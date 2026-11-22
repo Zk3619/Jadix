@@ -149,7 +149,7 @@ impl super::App {
             return false;
         }
         self.app_quit_futures = futures;
-        self.app_quit_deadline = Some(Instant::now() + std::time::Duration::from_millis(200));
+        self.app_quit_deadline = Some(Instant::now() + crate::core::reactivity::APP_QUIT_TIMEOUT);
         true
     }
 
@@ -167,10 +167,8 @@ impl super::App {
             }
         }
         let waker = std::task::Waker::from(Arc::new(QuitWake(self.event_loop_proxy.clone())));
-        let mut context = std::task::Context::from_waker(&waker);
-        self.app_quit_futures
-            .retain_mut(|future| future.as_mut().poll(&mut context).is_pending());
-        let complete = self.app_quit_futures.is_empty();
+        let complete =
+            crate::core::reactivity::poll_app_quit_futures(&mut self.app_quit_futures, &waker);
         if complete || Instant::now() >= deadline {
             if !complete {
                 log::warn!("app quit cleanup exceeded 200 ms; continuing shutdown");
@@ -432,6 +430,11 @@ impl super::App {
         }
         let primary = self.window_registry.primary_id();
         let closing = self.close_targets(id);
+        if closing.len() == self.window_registry.len()
+            && !crate::core::reactivity::app_quit_requested()
+        {
+            return;
+        }
         for &wid in &closing {
             let Some(window) = self.lifecycle_window(wid) else {
                 continue;
@@ -714,11 +717,7 @@ impl super::App {
         let dx = (a.x - b.x) as f32;
         let dy = (a.y - b.y) as f32;
         let d = (dx * dx + dy * dy).sqrt();
-        if d > 1.0 {
-            Some(d)
-        } else {
-            None
-        }
+        if d > 1.0 { Some(d) } else { None }
     }
 
     fn sync_pointer_action_touches(&self) {
@@ -1513,12 +1512,13 @@ impl ApplicationHandler for super::App {
         }
 
         // HoverCard / Tooltip openDelay / closeDelay（Solid 式 UI 线程定时器）。
-        if crate::utils::hover_intent::tick_hover_intent() {
+        if jadix_core::clock::flush() > 0 {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();
             }
         }
-        if let Some(wake) = crate::utils::hover_intent::hover_intent_next_wake_at() {
+        if let Some(wake) = jadix_core::clock::next_wake_at().into_iter()
+            .chain(crate::utils::hover_intent::hover_intent_next_wake_at()).min() {
             if wake <= now {
                 if let Some(state) = (*self.state.borrow()).as_ref() {
                     state.window.request_redraw();
@@ -2059,6 +2059,8 @@ pub(super) fn run_startup<F: FnMut() -> Element + 'static>(
     app_quit_handlers: Vec<crate::core::reactivity::AppQuitHandler>,
     app_builder: F,
 ) {
+    #[cfg(feature = "i18n")]
+    crate::i18n::install_host_callbacks();
     crate::logging::init();
 
     let (user_tx, user_rx) = std::sync::mpsc::channel();
@@ -2077,7 +2079,7 @@ pub(super) fn run_startup<F: FnMut() -> Element + 'static>(
                     super::InstancePolicy::Single { .. }
                 ) =>
             {
-                return
+                return;
             }
             Ok(guard) => guard,
             Err(error) => {
@@ -2175,7 +2177,7 @@ pub(super) fn create_app(
         input_drag_multi: false,
         input_drag_multi_base: Vec::new(),
         label_drag_key: None,
-        label_drag_anchor: 0,
+        label_drag_anchor: Default::default(),
         scroll_accum: std::collections::HashMap::new(),
         wheel_sticky_rest: None,
         wheel_sticky_cursor: [0.0, 0.0],

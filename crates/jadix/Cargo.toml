@@ -12,6 +12,10 @@ categories = ["gui"]
 # Ship workspace LICENSE + bundled-asset attributions with the crate tarball.
 include = ["/Cargo.toml", "/LICENSE", "/NOTICE", "/MOTION.md", "/SCALE_PREVIEW.md", "/THEMES.md", "/DOCUMENT_EDITING.md", "/TEXT_DOCUMENT_VIEWS.md", "/build.rs", "/src/**/*", "/benches/**/*", "/tests/**/*", "/examples/**/*", "/README.md", "/README.zh.md", "/GUIDE.md"]
 
+[[bin]]
+name = "debug_font_match"
+required-features = ["gpu"]
+
 [features]
 # Capability inventory and core/optional boundaries: docs/FEATURES.md.
 default = ["gpu", "macros", "backend-dx12", "backend-gles", "backend-metal", "window-materials", "theme-shadcn", "animation-base", "native-clipboard", "images", "file-persistence"]
@@ -49,11 +53,11 @@ native-materials = ["gpu", "window-materials"]
 scale-preview = ["gpu"]
 # Framework performance sampling capability (enabled by Gallery for its diagnostics UI).
 # Applications that do not need performance telemetry leave this feature disabled.
-performance = ["gpu"]
+performance = ["jadix_core/performance"]
 # Entire `src/i18n` module (catalogs, locale overlay, ICU4X format). Off by default.
 # Component chrome uses `tr_default` / `tr_with_default`, which return the source
 # string when this feature is off. Enable: cargo test -p jadix --lib --features i18n
-i18n = ["gpu", "dep:icu", "dep:icu_provider_blob", "dep:writeable"]
+i18n = ["jadix_core/i18n"]
 # AccessKit tree + local 0.31 winit hook. Off by default.
 # Element `accesskit_*` attrs still compile; the bridge is feature-gated.
 # Enable: cargo test -p jadix --lib --features a11y
@@ -103,7 +107,7 @@ fonts-emoji = ["gpu"]
 # Not in default. Path kernel (Chart, ProgressCircle) stays without this feature.
 svg = ["gpu", "dep:resvg", "jadix_2d/svg-fonts"]
 document-math = ["gpu", "document", "svg", "jadix_document/document-math"]
-syntax-highlighting = ["gpu", "jadix_document/syntax"]
+syntax-highlighting = ["jadix_document/syntax"]
 # Twemoji SVG via the same resvg (PNG fallback remains without it).
 emoji-svg = ["gpu", "svg"]
 # Extra raster codecs (off by default; PNG remains in the core set).
@@ -198,14 +202,6 @@ tracing = { workspace = true, default-features = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
-icu = { workspace = true, optional = true, features = [
-    "compiled_data",
-    "sync",
-    "serde",
-    "unstable",
-] }
-icu_provider_blob = { workspace = true, optional = true, features = ["alloc"] }
-writeable = { workspace = true, optional = true }
 jadix_macros = { workspace = true, optional = true }
 jadix_style_tokens = { workspace = true }
 stacker = { workspace = true }

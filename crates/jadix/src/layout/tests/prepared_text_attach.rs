@@ -2,6 +2,121 @@ use super::*;
 use crate::style::{InputCaretDraw, TextOverflow, TextStyle};
 
 #[test]
+fn retained_measurements_survive_live_rebuilds_and_expire_after_removal() {
+    let mut root = Element::new().flex_col().children(vec![
+        Element::new().text("keep cached metrics").w(160.0),
+        Element::new().text("remove on fast layout").w(160.0),
+        Element::new().text("remove on full layout").w(160.0),
+    ]);
+    let mut tree = LayoutTree::new();
+    tree.build_and_layout(&mut root, 240.0, 180.0, [0.0, 0.0]);
+    let ids: Vec<_> = root
+        .children
+        .iter()
+        .take(3)
+        .map(|child| child.layout_node.unwrap())
+        .collect();
+    for _ in 0..2 {
+        tree.build_and_layout(&mut root, 240.0, 180.0, [0.0, 0.0]);
+        assert!(ids.iter().all(|id| tree
+            .measure_layout_cache
+            .borrow()
+            .keys()
+            .any(|key| key.node == *id)));
+    }
+    root.children.remove(1);
+    tree.build_and_layout_fast(&mut root, 240.0, 180.0, [0.0, 0.0], false, false);
+    assert!(tree
+        .measure_layout_cache
+        .borrow()
+        .keys()
+        .all(|key| key.node != ids[1]));
+    root.children.remove(1);
+    tree.build_and_layout(&mut root, 240.0, 180.0, [0.0, 0.0]);
+    let cache = tree.measure_layout_cache.borrow();
+    assert!(cache
+        .keys()
+        .all(|key| key.node != ids[1] && key.node != ids[2]));
+    assert!(cache.keys().any(|key| key.node == ids[0]));
+}
+
+#[test]
+fn rich_span_paint_refresh_reuses_measurements_and_matches_fresh_layout() {
+    use crate::core::tree::LayoutStatus;
+    use crate::style::{TextSpan, TextSpanKind};
+    let mut model = Element::new()
+        .flex_col()
+        .w(320.0)
+        .h(160.0)
+        .child(Element::new().text_spans(vec![TextSpan::new("retained text").size(18.0)]));
+    // Production prepares the portal layer before reconciling a new scene.
+    hoist_portal_subtrees(&mut model);
+    let mut root = model.clone_static_skeleton();
+    let mut tree = LayoutTree::new();
+    tree.set_collect_skip_allowed(true);
+    tree.build_and_layout(&mut root, 320.0, 160.0, [-1.0; 2]);
+    tree.build_and_layout_fast(&mut root, 320.0, 160.0, [-1.0; 2], false, false);
+    let node = root.children[0].layout_node;
+    for change in 0..13 {
+        let span = &mut model.children[0].text_spans.as_mut().unwrap()[0];
+        match change {
+            0 => span.color = Some([20, 80, 140, 255]),
+            1 => span.background = Some([10, 30, 50, 90]),
+            2 => span.underline = true,
+            3 => span.strikethrough = true,
+            4 => span.href = Some("https://example.com".into()),
+            5 => span.background_padding_y = [3.0, 1.0],
+            6 => span.size = Some(24.0),
+            7 => span.weight = Some(700),
+            8 => span.italic = true,
+            9 => span.monospace = true,
+            10 => span.kind = TextSpanKind::Chip,
+            11 => span.padding_x = 7.0,
+            _ => {
+                span.text = "new text".into();
+                model.children[0].text = Some("new text".into());
+            }
+        }
+        let mut next = model.clone_static_skeleton();
+        let mut dirty = Vec::new();
+        let status = crate::app::state::reconcile_scene_tree(&mut next, &mut root, &mut dirty);
+        assert_eq!(
+            status,
+            if change < 6 {
+                LayoutStatus::StyleChanged
+            } else {
+                LayoutStatus::LayoutChanged
+            },
+            "change {change}"
+        );
+        tree.mark_dirty_nodes_in_tree(&next, &dirty.into_iter().collect());
+        root = next;
+        let actual = tree.build_and_layout_fast(&mut root, 320.0, 160.0, [-1.0; 2], false, false);
+        if change < 6 {
+            assert_eq!(tree.text_measure_misses.get(), 0, "paint change {change}");
+        } else {
+            assert!(tree.text_measure_misses.get() > 0, "metric change {change}");
+        }
+        assert_eq!(root.children[0].layout_node, node);
+        let mut fresh = model.clone_static_skeleton();
+        let expected = LayoutTree::new().build_and_layout(&mut fresh, 320.0, 160.0, [-1.0; 2]);
+        assert_eq!(
+            root.children[0].layout_bounds, fresh.children[0].layout_bounds,
+            "geometry {change}"
+        );
+        assert_eq!(actual.text_nodes.len(), expected.text_nodes.len());
+        assert_eq!(
+            actual.text_nodes[0].spans, expected.text_nodes[0].spans,
+            "paint payload {change}"
+        );
+        assert_eq!(
+            actual.text_nodes[0].clip_bounds,
+            expected.text_nodes[0].clip_bounds
+        );
+    }
+}
+
+#[test]
 fn height_animation_reuses_unchanged_text_measures() {
     let mut rows = vec![Element::new().h(20.0)];
     rows.extend((0..80).map(|i| {
@@ -115,6 +230,66 @@ fn plain_text_skips_unused_baseline_shaping_and_alignment_changes_remeasure() {
             .any(|value| { value.baselines.first.is_some() && value.baselines.last.is_some() }),
         "adding baseline alignment must invalidate cached leaf layouts"
     );
+}
+
+#[test]
+fn nested_text_baseline_tracks_padding_wrapping_and_font_changes() {
+    crate::text::measure::with_layout_font_system(|fonts| {
+        fonts.db_mut().load_font_data(
+            include_bytes!("../../../../../crates/jadix_cosmic_text/fonts/FiraMono-Medium.ttf")
+                .to_vec(),
+        );
+    });
+    let mut root = Element::new()
+        .flex_row()
+        .child(Element::new().text("peer").text_size(24.0))
+        .child(
+            Element::new()
+                .flex_col()
+                .w(110.0)
+                .p(7.0)
+                .child(
+                    Element::new()
+                        .text("hidden decoration")
+                        .text_size(80.0)
+                        .class("hidden"),
+                )
+                .child(
+                    Element::new()
+                        .absolute()
+                        .text("floating decoration")
+                        .text_size(40.0),
+                )
+                .child(
+                    Element::new()
+                        .text("nested text wraps over several lines")
+                        .text_size(16.0),
+                ),
+        )
+        .child(Element::new().w(20.0).h(20.0));
+    root.style.align_items = Some(taffy::AlignItems::BASELINE);
+    let mut tree = LayoutTree::new();
+    tree.build_and_layout(&mut root, 400.0, 400.0, [0.0, 0.0]);
+    for size in [16.0, 30.0] {
+        root.children[1].children[2].text_style.size = Some(size);
+        tree.mark_element_layout_dirty(&root.children[1].children[2]);
+        tree.build_and_layout_fast(&mut root, 400.0, 400.0, [0.0, 0.0], false, false);
+        let peer = &root.children[0];
+        let text = &root.children[1].children[2];
+        let baseline = |element: &Element| {
+            let meta = text_measure_meta(element, element.text.clone().unwrap(), false);
+            element.layout_bounds[1]
+                + measured_text_baselines(&meta, element.layout_bounds[2])
+                    .first
+                    .expect("fixture font has a first baseline")
+        };
+        let peer_baseline = baseline(peer);
+        assert!((peer_baseline - baseline(text)).abs() <= 1.0);
+        let image = &root.children[2];
+        assert!((peer_baseline - image.layout_bounds[1] - image.layout_bounds[3]).abs() <= 1.0);
+        assert!(text.layout_bounds[3] > size * 2.0, "fixture must wrap");
+        assert!((text.layout_bounds[1] - root.children[1].layout_bounds[1] - 7.0).abs() <= 1.0);
+    }
 }
 
 #[test]
@@ -258,6 +433,7 @@ fn text_measure_cache_keeps_icon_and_vertical_constraints() {
 fn prepared_text_on_text_layout_info_roundtrips() {
     let prepared = crate::text::prepare("hello prepared attach", 14.0, 400, 21.0);
     let info = TextLayoutInfo {
+        node_id: None,
         text: "hello prepared attach".into(),
         shape_suffix: None,
         spans: None,
@@ -420,9 +596,9 @@ fn single_line_textarea_selection_tracks_glyph_top() {
     let expected = y + band.map(|(dy, _)| dy).unwrap_or(0.0);
     let centered = y + (box_h - lh) * 0.5;
     assert!(
-            (sel_y - expected).abs() < 0.51,
-            "selection must share the glyph line top (y={sel_y}, expected={expected}, centered={centered})"
-        );
+        (sel_y - expected).abs() < 0.51,
+        "selection must share the glyph line top (y={sel_y}, expected={expected}, centered={centered})"
+    );
     assert!(
         (expected - centered).abs() > 0.5,
         "fixture must be taller than one line so centering would be visible"
@@ -485,9 +661,9 @@ fn bidi_selection_rects_follow_visual_runs() {
     );
     let x = selection[0].rect_pos[0];
     assert!(
-            x > hebrew_prefix + 1.0,
-            "Hello glyphs are past the logical Hebrew prefix (LTR box would cover Hebrew); x={x} hebrew_prefix={hebrew_prefix}"
-        );
+        x > hebrew_prefix + 1.0,
+        "Hello glyphs are past the logical Hebrew prefix (LTR box would cover Hebrew); x={x} hebrew_prefix={hebrew_prefix}"
+    );
 }
 
 #[test]
@@ -1290,4 +1466,169 @@ fn caret_after_cjk_in_latin_cjk_latin_is_past_glyph() {
         caret_x > only_cjk + 1.0,
         "caret must sit past mid-CJK (only_cjk={only_cjk}, caret_x={caret_x})"
     );
+}
+
+#[test]
+fn rich_span_background_outsets_expand_rotated_bake_without_layout_growth() {
+    let mut root = Element::new().w(400.0).h(200.0).child(
+        Element::new().w(180.0).h(80.0).child(
+            Element::new()
+                .text_spans(vec![
+                    crate::style::TextSpan::new("paint outsets").background([30, 90, 200, 255])
+                ])
+                .w(120.0)
+                .h(25.0),
+        ),
+    );
+    root.children[0].style.rotate_deg = 15.0;
+    let mut tree = LayoutTree::new();
+    let before = tree.build_and_layout(&mut root, 400.0, 200.0, [-1.0; 2]);
+    let geometry = root.children[0].children[0].layout_bounds;
+    let bake = |result: &crate::layout::RenderResult| {
+        result
+            .textured_draws
+            .iter()
+            .find(|d| {
+                d.texture_key
+                    .starts_with(crate::utils::text_texture::TEXT_XFORM_TEX_PREFIX)
+                    || d.texture_key
+                        .starts_with(crate::utils::text_texture::TEXT_MSDF_TEX_PREFIX)
+            })
+            .expect("rotated rich-text bake")
+            .rect
+    };
+    let before_bake = bake(&before);
+    root.children[0].children[0].text_spans.as_mut().unwrap()[0].background_padding_y =
+        [40.0, 20.0];
+    let after = tree.build_and_layout(&mut root, 400.0, 200.0, [-1.0; 2]);
+    assert_eq!(geometry, root.children[0].children[0].layout_bounds);
+    let after_bake = bake(&after);
+    assert!(
+        after_bake[3] >= 105.0,
+        "full top/bottom paint extent fits the bake"
+    );
+    assert!(after_bake[3] > before_bake[3]);
+    assert!(
+        (before_bake[1] + before_bake[3] / 2.0 - after_bake[1] - after_bake[3] / 2.0).abs() < 0.01
+    );
+}
+
+#[test]
+fn wrapped_row_first_character_selection_survives_long_paragraphs() {
+    let mut fs = crate::renderer::font_loader::create_font_system();
+    crate::renderer::font_loader::apply_default_families(fs.db_mut());
+    crate::text::install_shared_font_system(&mut fs);
+
+    for (text, wrap) in [
+        (
+            "alpha beta gamma delta epsilon ".repeat(12),
+            crate::text::WrapMode::Word,
+        ),
+        (
+            "abcdefghijklmnopqrstuvwxyz".repeat(12),
+            crate::text::WrapMode::Char,
+        ),
+        (
+            format!(
+                "{}\n{}",
+                "alpha\u{2060}beta gamma delta ".repeat(8),
+                "next paragraph ".repeat(8)
+            ),
+            crate::text::WrapMode::Word,
+        ),
+    ] {
+        for width in [80.0, 160.0] {
+            let model = crate::text::build_visual_lines(
+                &text,
+                14.0,
+                400,
+                21.0,
+                width,
+                wrap.to_line_break_source(),
+            );
+            assert_eq!(
+                model.ranges.last().unwrap().1,
+                text.len(),
+                "visual model must include the final byte"
+            );
+            assert!(
+                model.line_count() > 8,
+                "long paragraph must retain all wrapped rows"
+            );
+            if crate::text::needs_logical_prewrap(&text) {
+                let slabs = crate::text::visual_selection_highlights(
+                    &text,
+                    14.0,
+                    400,
+                    21.0,
+                    width,
+                    wrap.to_line_break_source(),
+                    0,
+                    text.len(),
+                );
+                assert_eq!(
+                    slabs.last().unwrap().0,
+                    model.line_count() - 1,
+                    "visual selection must include the final wrapped row"
+                );
+            }
+            for (row, &(start, end)) in model.ranges.iter().enumerate() {
+                if start == end {
+                    continue;
+                }
+                let next = start + text[start..end].chars().next().unwrap().len_utf8();
+                let expected_width =
+                    prefix_width_logical(&text[start..end], next - start, 14.0, 400, 21.0);
+                for selection in [(start, next), (next, start)] {
+                    let mut style = TextStyle {
+                        size: Some(14.0),
+                        weight: Some(400),
+                        line_height_px: Some(21.0),
+                        white_space: crate::style::WhiteSpace::Normal,
+                        wrap_mode: wrap,
+                        ..Default::default()
+                    };
+                    style.input_caret = Some(InputCaretDraw {
+                        caret_byte_index: next,
+                        selection: Some(selection),
+                        selection_bg: [80, 120, 200, 90],
+                        drop_caret: true,
+                        ..Default::default()
+                    });
+                    let mut fills = Vec::new();
+                    push_input_chrome_instances(
+                        &mut fills,
+                        &mut Vec::new(),
+                        &text,
+                        &style,
+                        12.0,
+                        20.0,
+                        width,
+                        model.line_count() as f32 * 21.0,
+                        None,
+                        1.0,
+                    );
+                    assert_eq!(
+                        fills.len(),
+                        1,
+                        "one selected character on row {row}, range={selection:?}"
+                    );
+                    let rect = &fills[0];
+                    assert!(
+                        (rect.rect_pos[0] - 12.0).abs() < 1.0,
+                        "first character must start its own row"
+                    );
+                    assert!(
+                        (rect.rect_pos[1] - (20.0 + row as f32 * 21.0)).abs() < 1.0,
+                        "selection must stay on row {row}, got {:?}",
+                        rect.rect_pos
+                    );
+                    assert!(
+                        (rect.rect_size[0] - expected_width).abs() < 1.0,
+                        "character selection must stay glyph-tight on row {row}"
+                    );
+                }
+            }
+        }
+    }
 }

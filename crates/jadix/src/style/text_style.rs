@@ -283,6 +283,8 @@ pub struct TextSpan {
     pub size: Option<f32>,
     pub kind: TextSpanKind,
     pub background: Option<[u8; 4]>,
+    /// Paint-only background outsets `[top, bottom]`; never change line metrics.
+    pub background_padding_y: [f32; 2],
     /// Horizontal padding; Chip/Mention measure width adds `2 * padding_x`.
     pub padding_x: f32,
     pub italic: bool,
@@ -294,6 +296,52 @@ pub struct TextSpan {
 }
 
 impl TextSpan {
+    /// Compare only inputs consumed by layout; paint and link metadata still
+    /// participate in the full `PartialEq` used by presentation caches.
+    pub(crate) fn layout_eq(a: Option<&[Self]>, b: Option<&[Self]>) -> bool {
+        match (a, b) {
+            (None, None) => true,
+            (Some(a), Some(b)) => {
+                a.len() == b.len()
+                    && a.iter().zip(b).all(|(a, b)| {
+                        a.text == b.text
+                            && a.weight == b.weight
+                            && a.size == b.size
+                            && a.kind == b.kind
+                            && a.padding_x == b.padding_x
+                            && a.italic == b.italic
+                            && a.monospace == b.monospace
+                    })
+            }
+            _ => false,
+        }
+    }
+
+    /// Split plain text into non-overlapping query matches and inheriting spans.
+    /// Matches Unicode lowercase text using the shared core filter semantics.
+    /// Original spelling and whole graphemes are retained; non-matches inherit
+    /// the leaf style. No canonical normalization or full case folding is applied.
+    /// Recompute these spans when the source text, query, or theme changes.
+    pub fn highlight_matches(text: &str, query: &str, color: [u8; 4]) -> Vec<Self> {
+        if query.is_empty() {
+            return vec![Self::new(text)];
+        }
+        let mut spans = Vec::new();
+        let mut cursor = 0;
+        for matched in jadix_core::text_filter::substring_match_ranges(text, query) {
+            let start = matched.start;
+            if start > cursor {
+                spans.push(Self::new(&text[cursor..start]));
+            }
+            cursor = matched.end;
+            spans.push(Self::new(&text[start..cursor]).color(color));
+        }
+        if cursor < text.len() || spans.is_empty() {
+            spans.push(Self::new(&text[cursor..]));
+        }
+        spans
+    }
+
     pub fn new(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
@@ -302,6 +350,7 @@ impl TextSpan {
             size: None,
             kind: TextSpanKind::Text,
             background: None,
+            background_padding_y: [0.0; 2],
             padding_x: 0.0,
             italic: false,
             monospace: false,
@@ -349,6 +398,18 @@ impl TextSpan {
     pub fn background(mut self, color: [u8; 4]) -> Self {
         self.background = Some(color);
         self
+    }
+
+    /// Expand the background vertically without moving glyphs or changing line height.
+    pub fn background_padding_y(mut self, top: f32, bottom: f32) -> Self {
+        self.background_padding_y = [top, bottom];
+        self.background_padding_y = self.background_outsets();
+        self
+    }
+
+    pub(crate) fn background_outsets(&self) -> [f32; 2] {
+        self.background_padding_y
+            .map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 })
     }
 
     pub fn padding_x(mut self, padding_x: f32) -> Self {
@@ -583,6 +644,83 @@ impl Default for TextStyle {
 }
 
 impl TextStyle {
+    /// Preserve text metrics and decoration when projecting an ordinary tree to a native host.
+    pub fn presentation_appearance(&self) -> jadix_core::presentation::style::TextAppearance {
+        use jadix_core::presentation::style as p;
+        p::TextAppearance {
+            selectable: Some(self.selectable),
+            line_height: self.line_height_px,
+            line_height_multiple: self.line_height_scale,
+            letter_spacing: self.letter_spacing,
+            align: match self.computed_align.or(self.align).unwrap_or_default() {
+                TextAlign::Start | TextAlign::MatchParent => p::TextAlignment::Start,
+                TextAlign::End => p::TextAlignment::End,
+                TextAlign::Left => p::TextAlignment::Left,
+                TextAlign::Right => p::TextAlignment::Right,
+                TextAlign::Center => p::TextAlignment::Center,
+                TextAlign::Justify | TextAlign::JustifyAll => p::TextAlignment::Justify,
+            },
+            direction: match self.direction {
+                TextDirection::Auto => p::TextDirection::Auto,
+                TextDirection::Ltr => p::TextDirection::Ltr,
+                TextDirection::Rtl => p::TextDirection::Rtl,
+            },
+            underline: self.underline.unwrap_or(false),
+            overline: self.overline.unwrap_or(false),
+            strikethrough: self.line_through.unwrap_or(false),
+            decoration_style: match self.decoration_style.unwrap_or(TextDecorationStyle::Solid) {
+                TextDecorationStyle::Solid => p::TextDecorationStyle::Solid,
+                TextDecorationStyle::Double => p::TextDecorationStyle::Double,
+                TextDecorationStyle::Dotted => p::TextDecorationStyle::Dotted,
+                TextDecorationStyle::Dashed => p::TextDecorationStyle::Dashed,
+                TextDecorationStyle::Wavy => p::TextDecorationStyle::Wavy,
+            },
+            decoration_color: self.decoration_color,
+            decoration_thickness: self.decoration_thickness,
+            underline_offset: self.underline_offset,
+            shadow: self.shadow_color.map(|color| p::ViewShadow {
+                color, offset: self.shadow_offset, blur: self.shadow_blur, ..Default::default()
+            }),
+            ..Default::default()
+        }
+    }
+
+    pub fn apply_presentation_appearance(&mut self, value: &jadix_core::presentation::style::TextAppearance) {
+        use jadix_core::presentation::style as p;
+        if let Some(selectable) = value.selectable { self.selectable = selectable; }
+        self.line_height_px = value.line_height;
+        self.line_height_scale = value.line_height_multiple;
+        self.line_height_specified = value.line_height.is_some() || value.line_height_multiple.is_some();
+        self.letter_spacing = value.letter_spacing;
+        self.letter_spacing_specified = true;
+        self.align = Some(match value.align {
+            p::TextAlignment::Start => TextAlign::Start, p::TextAlignment::End => TextAlign::End,
+            p::TextAlignment::Left => TextAlign::Left, p::TextAlignment::Right => TextAlign::Right,
+            p::TextAlignment::Center => TextAlign::Center, p::TextAlignment::Justify => TextAlign::Justify,
+        });
+        self.direction = match value.direction {
+            p::TextDirection::Auto => TextDirection::Auto,
+            p::TextDirection::Ltr => TextDirection::Ltr, p::TextDirection::Rtl => TextDirection::Rtl,
+        };
+        self.underline = Some(value.underline);
+        self.overline = Some(value.overline);
+        self.line_through = Some(value.strikethrough);
+        self.decoration_style = Some(match value.decoration_style {
+            p::TextDecorationStyle::Solid => TextDecorationStyle::Solid,
+            p::TextDecorationStyle::Double => TextDecorationStyle::Double,
+            p::TextDecorationStyle::Dotted => TextDecorationStyle::Dotted,
+            p::TextDecorationStyle::Dashed => TextDecorationStyle::Dashed,
+            p::TextDecorationStyle::Wavy => TextDecorationStyle::Wavy,
+        });
+        self.decoration_color = value.decoration_color;
+        self.decoration_color_specified = true;
+        self.decoration_thickness = value.decoration_thickness;
+        self.underline_offset = value.underline_offset;
+        self.shadow_color = value.shadow.as_ref().map(|s| s.color);
+        self.shadow_offset = value.shadow.as_ref().map_or([0.0; 2], |s| s.offset);
+        self.shadow_blur = value.shadow.as_ref().map_or(0.0, |s| s.blur);
+    }
+
     pub fn line_height_specified(&self) -> bool {
         self.line_height_specified
     }

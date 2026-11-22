@@ -46,6 +46,16 @@ fn format_inner(
         let ch = rest.chars().next().unwrap();
         let ch_len = ch.len_utf8();
         match ch {
+            '%' if rest.starts_with("%{") => {
+                if let Some((end, body)) = split_braces(&rest[1..]) {
+                    if let Some(value) = arg_value(args, body.trim()) { out.push_str(value); }
+                    else { out.push_str(&rest[..end + 1]); }
+                    rest = &rest[end + 1..];
+                } else {
+                    out.push('%');
+                    rest = &rest[1..];
+                }
+            }
             '\'' => {
                 let after = &rest[ch_len..];
                 if let Some(stripped) = after.strip_prefix('\'') {

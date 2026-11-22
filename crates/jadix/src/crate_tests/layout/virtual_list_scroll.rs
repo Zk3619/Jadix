@@ -2,7 +2,7 @@
 //! VirtualList: silent scroll remounts window; overlapping rows reuse layout nodes.
 
 use crate::app::test_support::sync_reactive_elements_subtree;
-use crate::components::virtual_list::virtual_list;
+use crate::components::virtual_list::{virtual_list, VirtualListHandle};
 use crate::core::reactivity::{create_effect, create_root, use_signal};
 use crate::core::scroll_viewport::scroll_offset_y_signal_key;
 use crate::core::tree::{Element, LayoutStatus, LayoutTree};
@@ -38,6 +38,143 @@ fn find_vlist_body_mut<'a>(el: &'a mut Element) -> Option<&'a mut Element> {
         }
     }
     None
+}
+
+#[test]
+fn geometry_handle_tracks_measurements_resize_and_data_shrink() {
+    use crate::core::scroll_viewport::scroll_viewport_w_signal_key;
+    use std::{cell::Cell, rc::Rc};
+
+    let (_owner, ()) = create_root(|| {
+        for measured in [false, true] {
+            let id = format!("geometry-{measured}");
+            let geometry = VirtualListHandle::default();
+            assert_eq!(geometry.row_offset(0), None);
+            let count = Rc::new(Cell::new(6));
+            let estimate = Rc::new(Cell::new(20.0));
+            let callback_geometry = geometry.clone();
+            let builder = virtual_list(&id)
+                .handle(geometry.clone())
+                .item_count_fn({
+                    let count = count.clone();
+                    move || count.get()
+                })
+                .item_height_fn({
+                    let estimate = estimate.clone();
+                    move || estimate.get()
+                })
+                .height(100.0)
+                .overscan(0)
+                .on_scroll_position(move |_| {
+                    assert!(callback_geometry.row_offset(0).is_some());
+                });
+            let mut root = Element::from(if measured {
+                builder.measure_rows()
+            } else {
+                builder
+            });
+            assert_eq!(geometry.row_offset(6), Some(120.0));
+            assert_eq!(geometry.row_offset(7), None);
+            let mut layout = LayoutTree::new();
+            sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+            for row in &mut find_vlist_body_mut(&mut root).unwrap().children {
+                if let Some(index) = row
+                    .template_id
+                    .as_deref()
+                    .and_then(|id| id.rsplit("__row_").next())
+                    .and_then(|index| index.parse::<usize>().ok())
+                {
+                    row.layout_bounds[3] = [80.0, 10.0, 40.0].get(index).copied().unwrap_or(20.0);
+                }
+            }
+            sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+            assert_eq!(
+                geometry.row_offset(3),
+                Some(if measured { 130.0 } else { 60.0 })
+            );
+            count.set(2);
+            sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+            assert_eq!(
+                geometry.row_offset(2),
+                Some(if measured { 90.0 } else { 40.0 })
+            );
+            assert_eq!(geometry.row_offset(3), None);
+            estimate.set(30.0);
+            use_signal(&scroll_viewport_w_signal_key(&id), || 0.0_f32).set_silent(200.0);
+            sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+            assert_eq!(geometry.row_offset(2), Some(60.0));
+            count.set(0);
+            sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+            assert_eq!(geometry.row_offset(0), Some(0.0));
+            assert_eq!(geometry.row_offset(1), None);
+        }
+    });
+}
+
+#[test]
+fn end_intent_reaches_last_measured_row_and_cancels_before_later_growth() {
+    use crate::core::scroll_viewport::{
+        cancel_scroll_end_y, request_scroll_end_y, scroll_behavior_signal_key,
+        scroll_target_y_signal_key,
+    };
+    let (_owner, _) = create_root(|| {
+        for behavior in ["jump", "smooth"] {
+            let id = format!("measured-end-{behavior}");
+            let mut root = Element::from(
+                virtual_list(&id)
+                    .item_count(40)
+                    .item_height(20.0)
+                    .height(300.0)
+                    .overscan(0)
+                    .measure_rows()
+                    .render_item(|i| Element::new().text(format!("r{i}"))),
+            );
+            let offset = use_signal(&scroll_offset_y_signal_key(&id), || 0.0_f32);
+            let target = use_signal(&scroll_target_y_signal_key(&id), || 0.0_f32);
+            use_signal(&scroll_behavior_signal_key(&id), || behavior.to_owned())
+                .set_silent(behavior.to_owned());
+            offset.set_silent(if behavior == "jump" { 500.0 } else { 100.0 });
+            target.set_silent(500.0);
+            request_scroll_end_y(&id, 500.0);
+            let mut layout = LayoutTree::new();
+            for _ in 0..10 {
+                for row in &mut find_vlist_body_mut(&mut root).unwrap().children {
+                    if row.attrs.contains_key("__jadix_vlist_row_key") {
+                        row.layout_bounds[3] = 100.0;
+                    }
+                }
+                let mut impact = LayoutStatus::Clean;
+                sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
+                if behavior == "smooth" && offset.peek() < target.peek() {
+                    assert!(target.peek() > 500.0, "measurement must retarget the chase");
+                    offset.set_silent(target.peek()); // settle the host animator
+                }
+            }
+            let mut texts = Vec::new();
+            collect_texts(&root, &mut texts);
+            assert!(texts.contains(&"r39".to_string()), "{behavior}: {texts:?}");
+            assert!(
+                target.peek() > 500.0,
+                "measured heights must exceed the estimate"
+            );
+            assert_eq!(offset.peek(), target.peek());
+            cancel_scroll_end_y(&id);
+            offset.set_silent(0.0);
+            target.set_silent(0.0);
+            sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+            for row in &mut find_vlist_body_mut(&mut root).unwrap().children {
+                if row.attrs.contains_key("__jadix_vlist_row_key") {
+                    row.layout_bounds[3] = 180.0;
+                }
+            }
+            sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+            assert_eq!(
+                offset.peek(),
+                0.0,
+                "cancelled End must not pull the viewport down"
+            );
+        }
+    });
 }
 
 #[test]
@@ -360,5 +497,68 @@ fn silent_scroll_reuses_overlapping_row_layout_nodes() {
                 "overlapping row must keep its layout_node"
             );
         });
+    });
+}
+
+#[test]
+fn focused_alignment_uses_measured_geometry_and_releases_manual_scroll() {
+    use crate::core::scroll_viewport::scroll_target_y_signal_key;
+    use std::{cell::Cell, rc::Rc};
+
+    let (_owner, ()) = create_root(|| {
+        for measured in [false, true] {
+            for align in ["start", "center", "end"] {
+                let id = format!("focus-align-{measured}-{align}");
+                let geometry = VirtualListHandle::default();
+                let requested = Rc::new(Cell::new(None));
+                let builder = virtual_list(&id)
+                    .handle(geometry.clone())
+                    .item_count(5000)
+                    .item_height(20.0)
+                    .height(100.0)
+                    .overscan(0)
+                    .focused_index_align(align)
+                    .focused_index_fn({
+                        let requested = requested.clone();
+                        move || requested.take()
+                    })
+                    .render_item(|i| Element::new().text(format!("r{i}")));
+                let mut root = Element::from(if measured {
+                    builder.measure_rows()
+                } else {
+                    builder
+                });
+                let mut layout = LayoutTree::new();
+                sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+                for row in &mut find_vlist_body_mut(&mut root).unwrap().children {
+                    if row.attrs.contains_key("__jadix_vlist_row_key") {
+                        row.layout_bounds[3] = 30.0;
+                    }
+                }
+                requested.set(Some(2500));
+                sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+                let top = geometry.row_offset(2500).unwrap() as f32;
+                let bottom = geometry.row_offset(2501).unwrap() as f32;
+                let expected = match align {
+                    "center" => (top + bottom - 100.0) / 2.0,
+                    "end" => bottom - 100.0,
+                    _ => top,
+                };
+                let offset = use_signal(&scroll_offset_y_signal_key(&id), || 0.0_f32);
+                let target = use_signal(&scroll_target_y_signal_key(&id), || 0.0_f32);
+                assert_eq!(target.peek(), expected, "{measured}: {align}");
+                let mut texts = Vec::new();
+                collect_texts(&root, &mut texts);
+                assert!(texts.contains(&"r2500".to_owned()));
+                assert!(texts.len() < 20, "only the requested window may mount");
+                offset.set_silent(0.0);
+                target.set_silent(0.0);
+                sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+                assert_eq!(target.peek(), 0.0);
+                texts.clear();
+                collect_texts(&root, &mut texts);
+                assert!(!texts.contains(&"r2500".to_owned()));
+            }
+        }
     });
 }

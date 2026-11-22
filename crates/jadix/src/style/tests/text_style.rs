@@ -1,7 +1,51 @@
 use super::{
-    parse_text_shadow, TextAlign, TextAlignDeclaration, TextDirection, TextOverflow, TextSpan,
-    TextSpanKind, TextStyle, WhiteSpace,
+    TextAlign, TextAlignDeclaration, TextDirection, TextOverflow, TextSpan, TextSpanKind,
+    TextStyle, WhiteSpace, parse_text_shadow,
 };
+
+#[test]
+fn search_match_spans_preserve_utf8_spelling_and_inherited_style() {
+    let color = [12, 34, 56, 255];
+    for (source, query, expected) in [
+        ("中文 ALpha alpha🙂", "aLP", vec!["ALp", "alp"]),
+        ("文中文🙂中文", "中文", vec!["中文", "中文"]),
+        ("aaaaa", "aa", vec!["aa", "aa"]),
+        ("ÉCOLE école", "éCO", vec!["ÉCO", "éco"]),
+        ("İstanbul", "i", vec!["İ"]),
+        ("İİİ", "\u{307}i", vec!["İİİ"]),
+        ("ΟΣ ΟΣΑ", "ος", vec!["ΟΣ"]),
+        ("e\u{301}cho", "E", vec!["e\u{301}"]),
+        ("👩‍💻 dev", "💻", vec!["👩‍💻"]),
+        ("\r\nx", "\n", vec!["\r\n"]),
+        ("Alpha", "", vec![]),
+        ("Alpha", "missing", vec![]),
+        ("", "", vec![]),
+        ("", "a", vec![]),
+    ] {
+        let spans = TextSpan::highlight_matches(source, query, color);
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| span.text.as_str())
+                .collect::<String>(),
+            source
+        );
+        assert_eq!(
+            spans
+                .iter()
+                .filter(|span| span.color.is_some())
+                .map(|span| span.text.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+        );
+        for span in spans {
+            assert!(span.color.is_none() || span.color == Some(color));
+            assert_eq!(span.weight, None);
+            assert_eq!(span.size, None);
+            assert_eq!(span.background, None);
+        }
+    }
+}
 
 #[test]
 fn text_span_chip_builder() {

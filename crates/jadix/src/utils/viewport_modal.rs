@@ -306,10 +306,63 @@ fn arm_modal_open_sync(id: &str, open: Signal<bool>, presence: &ModalPresenceHan
     let id = id.to_string();
     create_computed(move || {
         let want = open.try_get().unwrap_or(false);
+        sync_modal_focus_return(&id, want);
         let _ = sync_modal_presence(&presence, want);
         let mounted = mounted_signal(&presence);
         let _ = modal_sync_presence(&id, open, mounted);
     });
+}
+
+#[derive(Clone, PartialEq)]
+struct ModalFocusReturn {
+    focus: crate::utils::roving::PanelFocusReturn,
+    live_stage_id: String,
+}
+
+fn sync_modal_focus_return(id: &str, open: bool) {
+    let state = use_signal(&format!("{id}__modal_focus_return"), || {
+        None::<ModalFocusReturn>
+    });
+    if open {
+        if state.peek().is_none() {
+            let target = use_signal("__jadix_button_focus_id", String::new).peek();
+            state.set(Some(ModalFocusReturn {
+                focus: crate::utils::roving::PanelFocusReturn::capture(&Element::new(), target),
+                live_stage_id: String::new(),
+            }));
+        }
+    } else if let Some(mut previous) = state.peek() {
+        state.set(None);
+        if !previous.live_stage_id.is_empty() {
+            // Reactive descendants can appear after the initial panel build.
+            // Read the live stage before presence or body cleanup removes it.
+            let _ = crate::app::runtime::try_update_element_by_template_id(
+                &previous.live_stage_id,
+                |stage| {
+                    previous.focus.refresh(stage);
+                    crate::core::tree::LayoutStatus::Clean
+                },
+            );
+        }
+        previous.focus.restore();
+    }
+}
+
+fn remember_modal_focus_members(id: &str, open: Signal<bool>, stage: &mut Element) {
+    if !open.peek() {
+        return;
+    }
+    let state = use_signal(&format!("{id}__modal_focus_return"), || {
+        None::<ModalFocusReturn>
+    });
+    if let Some(mut current) = state.peek() {
+        let stage_id = stage
+            .template_id
+            .get_or_insert_with(|| format!("{id}__focus_return_stage"));
+        current.live_stage_id = stage_id.clone();
+        current.focus.refresh(stage);
+        state.set(Some(current));
+    }
 }
 
 fn viewport_modal_portal_if_mounted(
@@ -334,6 +387,7 @@ pub(crate) fn sync_viewport_modal_portal(
     open: Signal<bool>,
     presence: &ModalPresenceHandle,
 ) -> Option<ViewportModalPortal> {
+    sync_modal_focus_return(id, open.peek());
     let _ = sync_modal_presence(presence, open.peek());
     viewport_modal_portal_if_mounted(id, open, presence)
 }
@@ -435,6 +489,7 @@ pub fn dismiss_viewport_modal(id: &str, open: Signal<bool>) {
     if open.try_peek() == Some(true) {
         open.set(false);
     }
+    sync_modal_focus_return(id, false);
     let presence = use_modal_presence(id);
     crate::utils::modal_motion::finish_modal_exit_immediate(&presence);
     let _ = modal_sync_presence(id, open, mounted_signal(&presence));
@@ -529,7 +584,8 @@ fn finish_viewport_modal_layer(
     if opts.stage_overflow_hidden {
         stage = stage.overflow("hidden");
     }
-    let stage: Element = stage.child(panel).into();
+    let mut stage: Element = stage.child(panel).into();
+    remember_modal_focus_members(id, open, &mut stage);
     if opts.overlay {
         mount_viewport_modal_layer(overlay_el, stage, &portal.zs)
     } else {
@@ -549,6 +605,7 @@ fn assemble_modal(
     opts: ViewportModalContentOpts,
     body: Element,
 ) -> Element {
+    sync_modal_focus_return(id, open.peek());
     let _ = sync_modal_presence(presence, open.peek());
     bind_modal_open(presence, open);
     let Some(portal) = viewport_modal_portal_if_mounted(id, open, presence) else {
@@ -585,6 +642,7 @@ fn assemble_modal(
         crate::app::runtime::request_redraw();
     }
     stage = stage.child(panel);
+    remember_modal_focus_members(id, open, &mut stage);
     mount_viewport_modal_layer(overlay_el, stage, &portal.zs)
 }
 

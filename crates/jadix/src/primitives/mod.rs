@@ -24,6 +24,7 @@ pub mod r#box {
 pub mod canvas;
 pub mod effect_wrap;
 pub mod interactive;
+pub mod link;
 pub mod media;
 pub mod overlay;
 pub mod path;
@@ -45,6 +46,7 @@ pub use canvas::{
 pub use div::{boxed, div, gstack, hstack, r#box, vstack, BoxBuilder};
 pub use effect_wrap::{effect_wrap, EffectWrapBuilder};
 pub use interactive::{apply_disabled, interactive, InteractiveBuilder};
+pub use link::{link, LinkBuilder};
 pub use media::{
     audio, video, AudioBuilder, MediaAspectRatio, MediaFit, MediaRotation, VideoBuilder,
 };

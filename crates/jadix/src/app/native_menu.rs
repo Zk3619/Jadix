@@ -120,6 +120,7 @@ mod native {
                         accelerator,
                         on_select,
                         state,
+                        ..
                     } => {
                         if id.trim().is_empty() || !ids.insert(id.clone()) {
                             return Err(format!(
@@ -195,6 +196,7 @@ mod native {
                         label,
                         enabled,
                         items,
+                        ..
                     } => {
                         let submenu = muda::Submenu::new(label, enabled);
                         let children = append_items(

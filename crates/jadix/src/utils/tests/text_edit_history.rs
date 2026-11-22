@@ -2,7 +2,7 @@ use super::*;
 use crate::core::reactivity::{create_root, use_signal};
 use crate::core::tree::UnmountHook;
 use crate::utils::text_field::input_value_signal_key;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 fn snap(value: &str, caret: usize) -> TextEditSnapshot {
     TextEditSnapshot {

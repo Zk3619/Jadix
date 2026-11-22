@@ -1,6 +1,149 @@
 use super::*;
 
 #[test]
+fn appended_markdown_matches_full_parse_through_syntax_and_reference_changes() {
+    let cases = [
+        "reply\ncontinuation\n\nnext **bold**",
+        "heading\n===\n\nnext",
+        // GPUI Kit markdown-rs panic regression (markdown-rs#275).
+        "a\n===\n---\nb\n===",
+        "a\r\n===\r\n---\r\nb\r\n===",
+        "| a | b |\n| - | - |\n| c | d |\n\nnext",
+        "- list\n\n  continuation\n  - nested\n\nnext",
+        "> quote\n\n> continued\n\nnext",
+        "```rust\ncode\n\nnot a boundary\n```\n\nnext",
+        "~~~\ncode\n\nmore\n~~~\n\nnext",
+        "<div>\n\nhtml\n</div>\n\nnext",
+        "<!-- comment\n\ncontinued -->\n\nnext",
+        "a <span\n title=\"x\">text</span>\n\nnext",
+        "$$\nx^2\n\n+y\n$$\n\nnext",
+        "    indented\n\n    continued\n\nnext",
+        "[late]\n\n[late]: https://example.com\n\nnext",
+        "note[^id]\n\n[^id]: footnote\n\n    continued\n\nnext",
+        "中文 &amp; `  code`\r\n\r\nnext",
+    ];
+    for raw_html in [false, true] {
+        for tail in cases {
+            let prefix = "stable 中文 &amp; text\n\nanchor\n\n";
+            let mut document = Document::markdown_with_raw_html(prefix, raw_html);
+            for character in tail.chars() {
+                document = document.append(character.encode_utf8(&mut [0; 4])).unwrap();
+                let full = Document::markdown_with_raw_html(document.source().text(), raw_html);
+                assert_eq!(document.blocks().len(), full.blocks().len(), "{tail:?}");
+                for (actual, expected) in document.blocks().iter().zip(full.blocks()) {
+                    assert_eq!(actual.kind, expected.kind, "{}", document.source().text());
+                    assert_eq!(actual.source, expected.source);
+                    assert_eq!(actual.edit_range, expected.edit_range);
+                    assert_eq!(actual.inlines, expected.inlines);
+                    assert_eq!(actual.cells, expected.cells);
+                    assert_eq!(actual.alignments, expected.alignments);
+                    assert_eq!(actual.payload, expected.payload);
+                    assert_eq!(actual.source_positions, expected.source_positions);
+                }
+            }
+        }
+    }
+    let document = Document::markdown("[late]\n\nanchor\n\nreply");
+    let updated = document.append("\n\n[late]: https://example.com").unwrap();
+    assert_eq!(
+        updated.blocks()[0].inlines[0].style.link.as_deref(),
+        Some("https://example.com")
+    );
+    assert_ne!(updated.blocks()[0].id, document.blocks()[0].id);
+}
+
+#[test]
+fn streamed_append_reuses_prefix_and_bounds_parser_work() {
+    let prefix = "stable paragraph\n\n".repeat(2_000);
+    let mut document = Document::markdown(format!("{prefix}reply"));
+    let retained = document.blocks()[0].clone();
+    PARSED_MARKDOWN_BYTES.with(|bytes| bytes.set(0));
+    for index in 0..200 {
+        document = document.append(&format!(" chunk {index}\n\nnext")).unwrap();
+        assert_eq!(document.blocks()[0].id, retained.id);
+        assert!(Arc::ptr_eq(
+            &document.blocks()[0].inlines,
+            &retained.inlines
+        ));
+    }
+    let bytes = PARSED_MARKDOWN_BYTES.with(|bytes| bytes.get());
+    assert!(
+        bytes < 20_000,
+        "reparsed {bytes} bytes of a {} byte document",
+        document.source().len()
+    );
+    assert!(document.source().len() > 36_000);
+}
+
+#[test]
+fn deeply_nested_markdown_keeps_content_and_source_positions_on_a_small_stack() {
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            let depth = 8192;
+            let source = format!(
+                "{}**deep** &amp; <b>tail</b>\n\noutside",
+                "> ".repeat(depth)
+            );
+            for raw_html in [false, true] {
+                let document = Document::markdown_with_raw_html(source.as_str(), raw_html);
+                let block = document
+                    .blocks()
+                    .iter()
+                    .find(|block| block.text().contains("deep"))
+                    .unwrap();
+                assert!(block.text().contains("&"));
+                assert!(block.text().contains("tail"));
+                assert!(block
+                    .inlines
+                    .iter()
+                    .any(|inline| inline.text == "deep" && inline.style.bold));
+                let deep = block
+                    .inlines
+                    .iter()
+                    .position(|inline| inline.text == "deep")
+                    .unwrap();
+                assert_eq!(
+                    block.source_position(deep, 2),
+                    source.find("deep").map(|start| start + 2)
+                );
+                if !raw_html {
+                    assert_eq!(block.kind, DocumentBlockKind::Quote { depth });
+                    assert!(block.text().contains("<b>tail</b>"));
+                }
+                let offset = source.find("deep").unwrap();
+                let edited = document.replace(offset..offset + 4, "edited").unwrap();
+                assert!(edited
+                    .blocks()
+                    .iter()
+                    .any(|block| block.text().contains("edited")));
+                assert_eq!(edited.blocks().last().unwrap().text(), "outside");
+                assert_eq!(edited.raw_html_enabled(), raw_html);
+            }
+
+            let mut source = String::new();
+            for depth in 0..192 {
+                source.push_str(&format!("{}- item{depth}\n", "  ".repeat(depth)));
+            }
+            source.push_str("\noutside");
+            let document = Document::markdown(source.as_str());
+            let deepest = document
+                .blocks()
+                .iter()
+                .find(|block| block.text() == "item191")
+                .unwrap();
+            assert!(matches!(
+                deepest.kind,
+                DocumentBlockKind::ListItem { depth: 192, .. }
+            ));
+            assert_eq!(document.blocks().last().unwrap().text(), "outside");
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
 fn literal_html_preserves_tags_autolinks_source_positions_and_edit_policy() {
     let source = "a <b>bold</b> <img  src=\"x.png\"> <https://example.com>\n\n<div>block</div>\n  literal\n</div>\n\nlast";
     assert!(Document::markdown(source)
@@ -99,6 +242,25 @@ fn markdown_folds_text_whitespace_and_maps_display_positions_to_source() {
         .find(|inline| inline.style.code)
         .unwrap();
     assert_eq!(code.text, "keep  these");
+
+    for (source, expected) in [
+        ("x `  y`", "x   y"),
+        ("`  y` x", "  y x"),
+        ("x *`  y`*", "x   y"),
+    ] {
+        for raw_html in [false, true] {
+            let document = Document::markdown_with_raw_html(source, raw_html);
+            let block = &document.blocks()[0];
+            assert_eq!(block.text(), expected, "source {source:?}");
+            let index = block
+                .inlines
+                .iter()
+                .position(|inline| inline.style.code)
+                .unwrap();
+            assert_eq!(block.inlines[index].text, "  y");
+            assert_eq!(block.source_position(index, 2), source.find('y'));
+        }
+    }
 }
 
 #[test]

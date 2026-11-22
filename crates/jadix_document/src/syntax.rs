@@ -4,6 +4,35 @@ pub struct HighlightSpan {
     pub color: Option<[u8; 4]>,
 }
 
+mod worker;
+pub use worker::SyntaxWorker;
+#[cfg(feature = "syntax")]
+mod resume;
+
+/// Highlight an immutable snapshot in original UTF-8 byte coordinates.
+/// Parsing the complete source preserves multiline syntax state. Callers may
+/// prepare this on a worker, then index or render only the visible lines.
+/// The same size limits and feature-disabled fallback as `highlight_code` apply.
+pub fn highlight_document(
+    document: crate::TextDocument,
+    language: &str,
+    dark: bool,
+) -> crate::AnnotatedText<[u8; 4]> {
+    let mut offset = 0;
+    let annotations = highlight_code(document.text(), language, dark)
+        .into_iter()
+        .filter_map(|span| {
+            let start = offset;
+            offset += span.text.len();
+            span.color.map(|value| crate::TextAnnotation {
+                range: start..offset,
+                value,
+            })
+        })
+        .collect();
+    crate::AnnotatedText::new(document, annotations)
+}
+
 impl HighlightSpan {
     fn new(text: impl Into<String>) -> Self {
         Self {
@@ -19,39 +48,57 @@ impl HighlightSpan {
     }
 }
 
+pub fn within_limits(source: &str) -> bool {
+    source.len() <= 2 * 1024 * 1024 && source.lines().all(|line| line.len() <= 64 * 1024)
+}
+
+#[cfg(feature = "syntax")]
+fn resources(
+    language: &str,
+    dark: bool,
+) -> (
+    &'static syntect::parsing::SyntaxSet,
+    &'static syntect::parsing::SyntaxReference,
+    &'static syntect::highlighting::Theme,
+) {
+    use std::sync::OnceLock;
+    use syntect::{highlighting::ThemeSet, parsing::SyntaxSet};
+    static SYNTAXES: OnceLock<SyntaxSet> = OnceLock::new();
+    static THEMES: OnceLock<ThemeSet> = OnceLock::new();
+    let syntaxes = SYNTAXES.get_or_init(SyntaxSet::load_defaults_newlines);
+    let themes = THEMES.get_or_init(ThemeSet::load_defaults);
+    let language = match language.to_ascii_lowercase().as_str() {
+        "js" | "jsx" => "JavaScript",
+        "ts" | "tsx" => "TypeScript",
+        "md" | "markdown" => "Markdown",
+        "py" => "Python",
+        _ => language,
+    };
+    let syntax = syntaxes
+        .find_syntax_by_token(language)
+        .or_else(|| syntaxes.find_syntax_by_extension(language))
+        .or_else(|| {
+            (language == "TypeScript")
+                .then(|| syntaxes.find_syntax_by_token("JavaScript"))
+                .flatten()
+        })
+        .unwrap_or_else(|| syntaxes.find_syntax_plain_text());
+    let theme = &themes.themes[if dark {
+        "base16-ocean.dark"
+    } else {
+        "InspiredGitHub"
+    }];
+    (syntaxes, syntax, theme)
+}
+
 pub fn highlight_code(source: &str, language: &str, dark: bool) -> Vec<HighlightSpan> {
-    if source.len() > 2 * 1024 * 1024 || source.lines().any(|line| line.len() > 64 * 1024) {
+    if !within_limits(source) {
         return vec![HighlightSpan::new(source)];
     }
     #[cfg(feature = "syntax")]
     {
-        use std::sync::OnceLock;
-        use syntect::{easy::HighlightLines, highlighting::ThemeSet, parsing::SyntaxSet};
-        static SYNTAXES: OnceLock<SyntaxSet> = OnceLock::new();
-        static THEMES: OnceLock<ThemeSet> = OnceLock::new();
-        let syntaxes = SYNTAXES.get_or_init(SyntaxSet::load_defaults_newlines);
-        let themes = THEMES.get_or_init(ThemeSet::load_defaults);
-        let language = match language.to_ascii_lowercase().as_str() {
-            "js" | "jsx" => "JavaScript",
-            "ts" | "tsx" => "TypeScript",
-            "md" | "markdown" => "Markdown",
-            "py" => "Python",
-            _ => language,
-        };
-        let syntax = syntaxes
-            .find_syntax_by_token(language)
-            .or_else(|| syntaxes.find_syntax_by_extension(language))
-            .or_else(|| {
-                (language == "TypeScript")
-                    .then(|| syntaxes.find_syntax_by_token("JavaScript"))
-                    .flatten()
-            })
-            .unwrap_or_else(|| syntaxes.find_syntax_plain_text());
-        let theme = &themes.themes[if dark {
-            "base16-ocean.dark"
-        } else {
-            "InspiredGitHub"
-        }];
+        use syntect::easy::HighlightLines;
+        let (syntaxes, syntax, theme) = resources(language, dark);
         let mut highlighter = HighlightLines::new(syntax, theme);
         let mut spans: Vec<HighlightSpan> = Vec::new();
         for line in syntect::util::LinesWithEndings::from(source) {

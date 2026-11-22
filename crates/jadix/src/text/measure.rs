@@ -138,7 +138,7 @@ thread_local! {
         RefCell::new(HashMap::new());
     // Basic ASCII shaping has independent per-character advances (no kerning
     // or ligatures). Reuse those exact advances for changing numeric readouts.
-    static ASCII_ADVANCES: RefCell<HashMap<PrepareKey, [f32; 95]>> = RefCell::new(HashMap::new());
+    static ASCII_ADVANCES: RefCell<HashMap<(PrepareKey, glyphon::Style), [f32; 95]>> = RefCell::new(HashMap::new());
     static LAYOUT_FONT_SYSTEM: RefCell<LayoutFsSlot> = const { RefCell::new(LayoutFsSlot::Empty) };
 }
 
@@ -441,6 +441,7 @@ fn heuristic_segment_width(text: &str, size: f32, weight: u16) -> f32 {
     (w * wf * 1.03).max(size * 0.5)
 }
 
+#[cfg(test)]
 fn measure_run_width(
     font_system: &mut FontSystem,
     text: &str,
@@ -461,30 +462,28 @@ fn measure_run_width(
         other => other,
     };
     let weight = crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
-    measure_resolved_run_width(font_system, text, size, line_height, weight, family)
+    let attrs = Attrs::new()
+        .family(family)
+        .weight(glyphon::fontdb::Weight(weight));
+    measure_resolved_run_width(font_system, text, size, line_height, &attrs)
 }
 
 fn ascii_advances(
     font_system: &mut FontSystem,
     size: f32,
     line_height: f32,
-    weight: u16,
-    family: Family<'_>,
+    attrs: &Attrs<'_>,
 ) -> [f32; 95] {
-    let key = prepare_key("", size, weight, line_height, family);
+    let key = (
+        prepare_key("", size, attrs.weight.0, line_height, attrs.family),
+        attrs.style,
+    );
     let cached = ASCII_ADVANCES.with(|c| c.borrow().get(&key).copied());
     let advances = cached.unwrap_or_else(|| {
         let alphabet: String = (32_u8..=126).map(char::from).collect();
         let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
         buffer.set_size(Some(16_384.0), Some(line_height * 2.0));
-        buffer.set_text(
-            &alphabet,
-            &Attrs::new()
-                .family(family)
-                .weight(glyphon::fontdb::Weight(weight)),
-            Shaping::Basic,
-            None,
-        );
+        buffer.set_text(&alphabet, attrs, Shaping::Basic, None);
         buffer.shape_until_scroll(font_system, false);
         let mut table = [0.0; 95];
         for run in buffer.layout_runs() {
@@ -513,18 +512,17 @@ fn measure_resolved_run_width(
     text: &str,
     size: f32,
     line_height: f32,
-    weight: u16,
-    family: Family<'_>,
+    attrs: &Attrs<'_>,
 ) -> f32 {
     if text.is_empty() || text == "\n" {
         return 0.0;
     }
-    let heuristic = heuristic_segment_width(text, size, weight);
+    let heuristic = heuristic_segment_width(text, size, attrs.weight.0);
     if font_system.db().faces().next().is_none() {
         return heuristic;
     }
     if ascii_metrics_cacheable(size, line_height) && text.bytes().all(|b| (32..=126).contains(&b)) {
-        let advances = ascii_advances(font_system, size, line_height, weight, family);
+        let advances = ascii_advances(font_system, size, line_height, attrs);
         return text.bytes().map(|b| advances[(b - 32) as usize]).sum();
     }
     let shaping = if text.is_ascii() {
@@ -548,13 +546,10 @@ fn measure_resolved_run_width(
             Some(16_384.0),
             Some(line_height + crate::utils::text_field::text_edit_ink_pad_px(size)),
         );
-        let attrs = Attrs::new()
-            .family(family)
-            .weight(glyphon::fontdb::Weight(weight));
         crate::renderer::emoji_layout::set_buffer_with_emoji_slots(
             &mut buffer,
             layout.as_ref(),
-            &attrs,
+            attrs,
             shaping,
             size,
             line_height,
@@ -593,15 +588,48 @@ pub fn prepare_rich(
     default_weight: u16,
     line_height: f32,
 ) -> PreparedText {
+    prepare_rich_with_family(spans, default_size, default_weight, line_height, None)
+}
+
+/// Resolve a leaf's font stack before applying individual span overrides.
+pub(crate) fn prepare_rich_with_family(
+    spans: &[crate::style::TextSpan],
+    default_size: f32,
+    default_weight: u16,
+    line_height: f32,
+    family: Option<&str>,
+) -> PreparedText {
     use crate::style::TextSpanKind;
 
     let mut segments = Vec::new();
     let mut max_seg = 0.0_f32;
-    let family = Family::SansSerif;
     with_layout_font_system(|font_system| {
+        let family = family
+            .map(|name| crate::utils::font::resolve_family(font_system.db(), name))
+            .unwrap_or_else(|| crate::renderer::text_hit::best_font_family(font_system));
+        let default_weight = crate::utils::font::normalize_weight_for_family(
+            font_system.db(),
+            family,
+            default_weight,
+        );
         for span in spans {
             let size = span.size.unwrap_or(default_size);
-            let weight = span.weight.unwrap_or(default_weight);
+            // Match prepare_text: normalize the inherited weight once, then
+            // apply the span's explicit weight/style/family without re-snapping.
+            let attrs = Attrs::new()
+                .family(if span.monospace {
+                    Family::Monospace
+                } else {
+                    family
+                })
+                .weight(glyphon::fontdb::Weight(
+                    span.weight.unwrap_or(default_weight),
+                ))
+                .style(if span.italic {
+                    glyphon::Style::Italic
+                } else {
+                    glyphon::Style::Normal
+                });
             let lh = if (size - default_size).abs() > f32::EPSILON {
                 line_height * (size / default_size.max(1.0))
             } else {
@@ -610,7 +638,7 @@ pub fn prepare_rich(
             match span.kind {
                 TextSpanKind::Text => {
                     for (seg, break_after) in split_segments(&span.text) {
-                        let width = measure_run_width(font_system, &seg, size, lh, weight, family);
+                        let width = measure_resolved_run_width(font_system, &seg, size, lh, &attrs);
                         max_seg = max_seg.max(width);
                         segments.push(PreparedSegment {
                             text: seg,
@@ -621,7 +649,7 @@ pub fn prepare_rich(
                 }
                 TextSpanKind::Chip | TextSpanKind::Mention => {
                     let text_w =
-                        measure_run_width(font_system, &span.text, size, lh, weight, family);
+                        measure_resolved_run_width(font_system, &span.text, size, lh, &attrs);
                     let width = text_w + 2.0 * span.padding_x;
                     max_seg = max_seg.max(width);
                     segments.push(PreparedSegment {
@@ -667,19 +695,16 @@ pub fn prepare_with_family(
         };
         let weight =
             crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
+        let attrs = Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(weight));
         // Fetch the shared advance table once, avoiding a cache lookup and
         // copying 95 advances for every whitespace segment.
         let advances = if ascii_metrics_cacheable(size, line_height)
             && text.bytes().all(|b| (32..=126).contains(&b) || b == b'\n')
             && font_system.db().faces().next().is_some()
         {
-            Some(ascii_advances(
-                font_system,
-                size,
-                line_height,
-                weight,
-                family,
-            ))
+            Some(ascii_advances(font_system, size, line_height, &attrs))
         } else {
             None
         };
@@ -691,7 +716,7 @@ pub fn prepare_with_family(
                     seg.bytes().map(|b| advances[(b - 32) as usize]).sum()
                 }
             } else {
-                measure_resolved_run_width(font_system, &seg, size, line_height, weight, family)
+                measure_resolved_run_width(font_system, &seg, size, line_height, &attrs)
             };
             max_seg = max_seg.max(width);
             segments.push(PreparedSegment {

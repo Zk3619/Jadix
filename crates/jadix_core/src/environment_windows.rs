@@ -149,6 +149,7 @@ pub(super) fn snapshot() -> io::Result<EnvironmentSnapshot> {
         reduced_motion: (motion_ok != 0).then_some(animation == 0),
         font_scale: 1.0,
         lifecycle: Lifecycle::Active,
+        wake_count: 0,
     };
     value.validate()?;
     Ok(value)

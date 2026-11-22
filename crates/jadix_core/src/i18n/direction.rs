@@ -1,6 +1,6 @@
 //! Writing direction derived from locale (Unicode CLDR).
 
-use crate::style::TextDirection;
+use crate::environment::LayoutDirection;
 
 /// Paragraph / document writing direction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -32,11 +32,11 @@ impl WritingDirection {
     }
 }
 
-impl From<WritingDirection> for TextDirection {
+impl From<WritingDirection> for LayoutDirection {
     fn from(d: WritingDirection) -> Self {
         match d {
-            WritingDirection::Ltr => TextDirection::Ltr,
-            WritingDirection::Rtl => TextDirection::Rtl,
+            WritingDirection::Ltr => LayoutDirection::LeftToRight,
+            WritingDirection::Rtl => LayoutDirection::RightToLeft,
         }
     }
 }

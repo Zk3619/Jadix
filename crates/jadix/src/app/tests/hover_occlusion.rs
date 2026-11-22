@@ -211,6 +211,21 @@ fn session_owned_cursor_locks_grabbing_over_hit_miss() {
 }
 
 #[test]
+fn label_selection_drag_keeps_text_cursor_over_selectable_children() {
+    use crate::core::tree::CursorKind;
+
+    assert_eq!(
+        label_selection_cursor(Some(CursorKind::Pointer.into()), true).map(|cursor| cursor.kind),
+        Some(CursorKind::Text)
+    );
+    assert_eq!(
+        label_selection_cursor(Some(CursorKind::Pointer.into()), false).map(|cursor| cursor.kind),
+        Some(CursorKind::Pointer)
+    );
+    assert_eq!(label_selection_cursor(None, false), None);
+}
+
+#[test]
 fn claiming_underlay_blocks_scroll_chain_underneath() {
     use crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX;
 

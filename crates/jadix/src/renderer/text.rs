@@ -317,6 +317,7 @@ pub struct JadixTextRenderer {
     pub(crate) text_area_capacity_hint: usize,
     pub(crate) emoji_cache: EmojiGlyphCache,
     pub(crate) pending_warmup: Vec<usize>,
+    pub(crate) text_links: Rc<RefCell<super::text_links::TextLinkCache>>,
 }
 
 impl JadixTextRenderer {
@@ -344,6 +345,7 @@ impl JadixTextRenderer {
         self.pending_warmup.clear();
         self.emoji_cache = EmojiGlyphCache::default();
         *self.swash_cache.borrow_mut() = SwashCache::new();
+        *self.text_links.borrow_mut() = super::text_links::TextLinkCache::default();
     }
 
     #[inline]
@@ -411,7 +413,7 @@ impl JadixTextRenderer {
         config: &SurfaceConfiguration,
         source: &Self,
     ) -> Self {
-        Self::with_font_ptr(
+        let mut renderer = Self::with_font_ptr(
             device,
             queue,
             config,
@@ -419,7 +421,9 @@ impl JadixTextRenderer {
             None,
             source.gpu_cache.clone(),
             source.swash_cache.clone(),
-        )
+        );
+        renderer.text_links = source.text_links.clone();
+        renderer
     }
 
     fn with_font_ptr(
@@ -458,6 +462,7 @@ impl JadixTextRenderer {
             text_area_capacity_hint: 0,
             emoji_cache: EmojiGlyphCache::default(),
             pending_warmup: Vec::new(),
+            text_links: Rc::new(RefCell::new(super::text_links::TextLinkCache::default())),
         }
     }
 

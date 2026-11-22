@@ -740,47 +740,58 @@ fn show_reactive_bound_child_still_reruns_render() {
 
 #[test]
 fn show_reactive_handler_body_still_reruns_render() {
-    reset_registered_anchors();
-    let open = use_signal("wp_n6_handler_open", || false);
-    open.set_silent(false);
-    let renders = Rc::new(Cell::new(0_u32));
-    let mounted = Rc::new(RefCell::new(None::<Element>));
-    let renders_e = Rc::clone(&renders);
-    let mounted_a = Rc::clone(&mounted);
+    for link_hover in [false, true] {
+        reset_registered_anchors();
+        let open = use_signal("wp_n6_handler_open", || false);
+        open.set_silent(false);
+        let renders = Rc::new(Cell::new(0_u32));
+        let mounted = Rc::new(RefCell::new(None::<Element>));
+        let renders_e = Rc::clone(&renders);
+        let mounted_a = Rc::clone(&mounted);
 
-    let root = create_effect(move || {
-        let renders_e = Rc::clone(&renders_e);
-        let view = show_reactive(
-            "wp_n6:handler",
-            move || open.get(),
-            move || {
-                renders_e.set(renders_e.get() + 1);
-                Element::new()
-                    .template_id("wp_n6:handler:btn")
-                    .text("click")
-                    .on_click(|| {})
-            },
+        let root = create_effect(move || {
+            let renders_e = Rc::clone(&renders_e);
+            let view = show_reactive(
+                "wp_n6:handler",
+                move || open.get(),
+                move || {
+                    renders_e.set(renders_e.get() + 1);
+                    let element = Element::new()
+                        .template_id("wp_n6:handler:btn")
+                        .text("click");
+                    let element = if link_hover {
+                        element.on_text_link_hover(|_| {})
+                    } else {
+                        element.on_click(|| {})
+                    };
+                    assert_eq!(
+                        crate::core::tree_stats::count_element_tree(&element).handler_nodes,
+                        1
+                    );
+                    element
+                },
+            );
+            *mounted_a.borrow_mut() = Some(view);
+        });
+
+        open.set(true);
+        assert_eq!(renders.get(), 1);
+        let hits_after_first = static_template_clone_hit_count();
+        open.set(false);
+        open.set(true);
+        assert_eq!(
+            renders.get(),
+            2,
+            "Show body with on_* must re-run render; interned clones must not share handlers"
         );
-        *mounted_a.borrow_mut() = Some(view);
-    });
+        assert_eq!(
+            static_template_clone_hit_count(),
+            hits_after_first,
+            "handler bodies must not count as static template clone hits"
+        );
 
-    open.set(true);
-    assert_eq!(renders.get(), 1);
-    let hits_after_first = static_template_clone_hit_count();
-    open.set(false);
-    open.set(true);
-    assert_eq!(
-        renders.get(),
-        2,
-        "Show body with on_* must re-run render; interned clones must not share handlers"
-    );
-    assert_eq!(
-        static_template_clone_hit_count(),
-        hits_after_first,
-        "handler bodies must not count as static template clone hits"
-    );
-
-    drop(mounted.borrow_mut().take());
-    dispose_effect(root);
-    reset_registered_anchors();
+        drop(mounted.borrow_mut().take());
+        dispose_effect(root);
+        reset_registered_anchors();
+    }
 }

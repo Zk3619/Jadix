@@ -16,6 +16,7 @@ pub mod scroll_viewport;
 pub mod store;
 pub(crate) mod texture_stats;
 pub mod tree;
+pub use jadix_core::range;
 pub(crate) mod tree_stats;
 
 pub mod scrollbar;

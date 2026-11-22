@@ -105,7 +105,11 @@ pub fn parse_markdown_blocks(src: &str) -> Element {
     Element::new().flex_col().gap(8.0).children(children)
 }
 
-fn inline_spans(inlines: &[jadix_document::DocumentInline]) -> Vec<crate::style::TextSpan> {
+/// Convert semantic inline styles to shared text spans. Object layout and
+/// superscript/subscript positioning remain the document surface's responsibility.
+pub fn document_inline_spans(
+    inlines: &[jadix_document::DocumentInline],
+) -> Vec<crate::style::TextSpan> {
     inlines
         .iter()
         .map(|inline| {
@@ -118,6 +122,7 @@ fn inline_spans(inlines: &[jadix_document::DocumentInline]) -> Vec<crate::style:
             if inline.style.italic {
                 span = span.italic();
             }
+            span.strikethrough = inline.style.strike;
             if inline.style.code {
                 span = span.monospace().background([15, 23, 42, 28]).padding_x(3.0);
             }
@@ -128,9 +133,14 @@ fn inline_spans(inlines: &[jadix_document::DocumentInline]) -> Vec<crate::style:
                 span = span.background(background);
             }
             if let Some(size) = inline.style.font_size {
-                span = span.size(size as f32);
+                span = span.size(f32::from(size).clamp(8.0, 96.0));
             }
-            if let Some(link) = &inline.style.link {
+            if let Some(link) = inline
+                .style
+                .link
+                .as_ref()
+                .filter(|link| jadix_document::is_safe_document_destination(link))
+            {
                 span = span
                     .color([37, 99, 235, 255])
                     .underline()
@@ -151,7 +161,7 @@ pub(crate) fn inline_spans_for_source(src: &str) -> Vec<crate::style::TextSpan> 
             document
                 .blocks()
                 .iter()
-                .flat_map(|block| inline_spans(&block.inlines)),
+                .flat_map(|block| document_inline_spans(&block.inlines)),
         );
         spans.push(crate::style::TextSpan::new("\n"));
         rest = &tail[1..];
@@ -161,7 +171,7 @@ pub(crate) fn inline_spans_for_source(src: &str) -> Vec<crate::style::TextSpan> 
         document
             .blocks()
             .iter()
-            .flat_map(|block| inline_spans(&block.inlines)),
+            .flat_map(|block| document_inline_spans(&block.inlines)),
     );
     if spans.is_empty() {
         vec![crate::style::TextSpan::new("")]
@@ -171,7 +181,7 @@ pub(crate) fn inline_spans_for_source(src: &str) -> Vec<crate::style::TextSpan> 
 }
 
 fn inline_rich(block: &jadix_document::DocumentBlock) -> Element {
-    Element::new().text_spans(inline_spans(&block.inlines))
+    Element::new().text_spans(document_inline_spans(&block.inlines))
 }
 
 fn heading_element(level: u8, block: &jadix_document::DocumentBlock) -> Element {
@@ -262,7 +272,7 @@ fn table_row_element(block: &jadix_document::DocumentBlock, header: bool) -> Ele
     let cells: Vec<Element> = block
         .cells
         .iter()
-        .map(|cell| Element::new().text_spans(inline_spans(cell)))
+        .map(|cell| Element::new().text_spans(document_inline_spans(cell)))
         .collect();
     let mut element = Element::new().flex_row().gap(8.0).children(cells);
     element.set_attr("jadix_md_table_row", if header { "header" } else { "1" });

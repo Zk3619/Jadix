@@ -476,8 +476,11 @@ fn finish_composition_preserve_text_inner(focus_id: &str) {
         let cs = crate::utils::text_field::load_text_cursors(rest, &old);
         if cs.len() > 1 {
             let mut value = old.clone();
-            let new_cs =
-                crate::utils::text_multi_cursor::insert_at_cursors(&mut value, cs.clone(), &insert);
+            let (new_cs, edits) = crate::utils::text_multi_cursor::insert_at_cursors_with_edits(
+                &mut value,
+                cs.clone(),
+                &insert,
+            );
             if crate::utils::text_field::accepts_input_edit(rest, &old, &value) {
                 let latest = crate::utils::text_field::latest_caret_signal(rest).peek();
                 #[cfg(feature = "text-undo")]
@@ -485,6 +488,7 @@ fn finish_composition_preserve_text_inner(focus_id: &str) {
                     rest,
                     crate::utils::text_edit_history::EditKind::Replace,
                 );
+                crate::utils::text_annotations::apply_edits(rest, &old, &edits);
                 crate::utils::text_field::commit_value_sig(rest, val_sig, value);
                 crate::utils::text_field::store_text_cursors(rest, &new_cs);
                 if let Some(latest) = latest {
@@ -647,11 +651,7 @@ pub(crate) fn map_preedit_cursor(
     cursor: Option<(usize, usize)>,
     caret_unspecified: bool,
 ) -> Option<(usize, usize)> {
-    if caret_unspecified {
-        None
-    } else {
-        cursor
-    }
+    if caret_unspecified { None } else { cursor }
 }
 
 /// Windows `GCS_COMPATTR` values. Japanese IME uses these for clause underlines.

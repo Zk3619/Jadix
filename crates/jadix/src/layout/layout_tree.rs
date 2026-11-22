@@ -2657,6 +2657,8 @@ pub struct RenderResult {
 /// Post-layout geometry/style snapshot for one text run (consumed by glyphon).
 #[derive(Clone)]
 pub struct TextLayoutInfo {
+    /// Layout identity used to join painted text with the actual pointer hit path.
+    pub node_id: Option<taffy::NodeId>,
     pub text: String,
     /// Matches [`crate::core::tree::Element::text_shape_suffix`]: shapes with text, not for caret.
     pub shape_suffix: Option<String>,
@@ -2695,6 +2697,7 @@ pub struct LayoutTree {
     /// Current layout viewport (window / compute available size) for `vw`/`vh`/`dvh`.
     viewport: [f32; 2],
     text_measurements: HashMap<taffy::NodeId, TextMeasureMeta>,
+    scroll_viewports: HashMap<NodeId, String>,
     /// Text sizes survive layout frames until their text metadata changes.
     measure_layout_cache: RefCell<HashMap<TextMeasureCacheKey, TextLeafMeasurement>>,
     text_baselines_requested: bool,
@@ -2894,7 +2897,6 @@ impl LayoutTree {
 }
 
 /// Text leaf measure meta (line-height aligned with TextStyle).
-#[derive(PartialEq)]
 struct TextMeasureMeta {
     size: f32,
     font_family: Option<String>,
@@ -2916,6 +2918,25 @@ struct TextMeasureMeta {
     /// not become flex max-content (gallery wrap row reflowed after typing).
     caret_scroll: bool,
     writing_mode: crate::style::WritingMode,
+}
+
+impl PartialEq for TextMeasureMeta {
+    fn eq(&self, other: &Self) -> bool {
+        self.size == other.size
+            && self.font_family == other.font_family
+            && self.text == other.text
+            && self.shape_suffix == other.shape_suffix
+            && self.is_icon == other.is_icon
+            && self.line_height_px == other.line_height_px
+            && self.line_height_scale == other.line_height_scale
+            && self.weight == other.weight
+            && self.letter_spacing == other.letter_spacing
+            && crate::style::TextSpan::layout_eq(self.spans.as_deref(), other.spans.as_deref())
+            && self.nowrap == other.nowrap
+            && self.clip_to_box == other.clip_to_box
+            && self.caret_scroll == other.caret_scroll
+            && self.writing_mode == other.writing_mode
+    }
 }
 
 impl TextMeasureMeta {
@@ -3327,7 +3348,13 @@ fn measured_text_leaf_size_horizontal(
     };
 
     let (width, height) = if let Some(spans) = m.spans.as_ref().filter(|s| !s.is_empty()) {
-        let prepared = crate::text::prepare_rich(spans, size, m.weight, single_line_height);
+        let prepared = crate::text::measure::prepare_rich_with_family(
+            spans,
+            size,
+            m.weight,
+            single_line_height,
+            m.font_family.as_deref(),
+        );
         let mut intrinsic_w = crate::text::intrinsic_width(&prepared);
         if m.letter_spacing.abs() > f32::EPSILON {
             let gaps = blob.chars().count().saturating_sub(1) as f32;
@@ -3747,6 +3774,7 @@ impl LayoutTree {
             portals_prepared: None,
             viewport: [0.0, 0.0],
             text_measurements: HashMap::new(),
+            scroll_viewports: HashMap::new(),
             measure_layout_cache: RefCell::new(HashMap::new()),
             text_baselines_requested: false,
             visited_nodes: std::collections::HashSet::new(),
@@ -4012,6 +4040,7 @@ impl LayoutTree {
             .copied()
             .filter(|id| !live.contains(id))
             .collect();
+        let removed_nodes = !orphans.is_empty();
         for id in orphans {
             if !self.total_nodes.contains(&id) {
                 continue;
@@ -4022,17 +4051,75 @@ impl LayoutTree {
             // Taffy `remove` unparents remaining children without deleting them.
             self.collect_skip.evict(id);
             let _ = self.taffy.remove(id);
+            self.scroll_viewports.remove(&id);
             self.total_nodes.remove(&id);
             self.text_measurements.remove(&id);
             self.visited_nodes.remove(&id);
         }
-        self.measure_layout_cache
-            .get_mut()
-            .retain(|key, _| self.total_nodes.contains(&key.node));
+        if removed_nodes {
+            self.measure_layout_cache
+                .get_mut()
+                .retain(|key, _| self.total_nodes.contains(&key.node));
+        }
+    }
+
+    fn sync_scroll_viewport(&mut self, node: NodeId, element: &Element) {
+        if let Some(id) = element
+            .focus_id
+            .as_deref()
+            .and_then(|id| id.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX))
+        {
+            if self
+                .scroll_viewports
+                .get(&node)
+                .is_none_or(|previous| previous != id)
+            {
+                self.scroll_viewports.insert(node, id.to_owned());
+            }
+        } else {
+            self.scroll_viewports.remove(&node);
+        }
+    }
+
+    /// Nearest registered ancestor scrolling on the physical axis, and this
+    /// node's natural content origin within it. Paint scroll and transforms are
+    /// excluded. Returns None until layout, after pruning, or without an owner.
+    pub fn ancestor_scroll_viewport(
+        &self,
+        mut node: NodeId,
+        horizontal: bool,
+    ) -> Option<(&str, f64)> {
+        // Taffy::parent panics for retired IDs. A retained component may still
+        // hold its previous node until the next structural reconciliation.
+        if !self.total_nodes.contains(&node) {
+            return None;
+        }
+        let mut origin = 0.0;
+        while let Some(parent) = self.taffy.parent(node) {
+            let layout = self.taffy.layout(node).ok()?;
+            origin += f64::from(if horizontal {
+                layout.location.x
+            } else {
+                layout.location.y
+            });
+            let overflow = self.taffy.style(parent).ok()?.overflow;
+            if crate::core::scroll_viewport::overflow_style_is_scrollable(if horizontal {
+                overflow.x
+            } else {
+                overflow.y
+            }) {
+                if let Some(id) = self.scroll_viewports.get(&parent) {
+                    return (origin.is_finite() && origin >= 0.0).then_some((id.as_str(), origin));
+                }
+            }
+            node = parent;
+        }
+        None
     }
 
     pub fn update_taffy_node_style(&mut self, element: &Element) {
         if let Some(node_id) = element.layout_node {
+            self.sync_scroll_viewport(node_id, element);
             // Paint synchronizers also use this entry point without a bind path.
             // The next idle stamp must observe their changed chrome/indicator.
             self.collect_skip.hash_bust = true;
@@ -4253,14 +4340,18 @@ impl LayoutTree {
             .filter(|id| !self.visited_nodes.contains(id))
             .cloned()
             .collect();
+        let removed_nodes = !to_remove.is_empty();
         for node_id in to_remove {
             let _ = self.taffy.remove(node_id);
+            self.scroll_viewports.remove(&node_id);
             self.total_nodes.remove(&node_id);
             self.text_measurements.remove(&node_id);
         }
-        self.measure_layout_cache
-            .get_mut()
-            .retain(|key, _| self.total_nodes.contains(&key.node));
+        if removed_nodes {
+            self.measure_layout_cache
+                .get_mut()
+                .retain(|key, _| self.total_nodes.contains(&key.node));
+        }
         let rebuild_ms = t_rebuild_begin.elapsed().as_secs_f32() * 1000.0;
 
         let available_space = Size {
@@ -4944,6 +5035,7 @@ impl LayoutTree {
                 ..Default::default()
             };
             scratch.text_nodes.push(TextLayoutInfo {
+                node_id: None,
                 text: g.text,
                 shape_suffix: None,
                 spans: None,
@@ -5186,6 +5278,7 @@ impl LayoutTree {
                     };
 
                     element.layout_node = Some(node_id);
+                    self.sync_scroll_viewport(node_id, element);
                     self.visited_nodes.insert(node_id);
 
                     self.sync_text_measure(element);
@@ -7568,6 +7661,18 @@ impl LayoutTree {
                                 line_h,
                             );
                         let hard_lines_n = text.split('\n').count().max(1);
+                        // Paint outsets need texture room, not extra layout/line height.
+                        let span_pad = element.text_spans.as_ref().map_or(0.0_f32, |spans| {
+                            spans.iter().filter(|span| span.background.is_some()).fold(
+                                0.0_f32,
+                                |pad, span| {
+                                    span.background_outsets().into_iter().fold(pad, f32::max)
+                                },
+                            ) * raster_scale
+                        });
+                        let extra = (span_pad - pad).max(0.0);
+                        let (bake_w, bake_h, pad) =
+                            (bake_w + extra * 2.0, bake_h + extra * 2.0, pad + extra);
                         let glyph_dy = crate::utils::text_texture::bake_glyph_layout_dy(
                             src_h,
                             line_h,
@@ -7708,11 +7813,12 @@ impl LayoutTree {
                             if let Some(spans) =
                                 element.text_spans.as_ref().filter(|s| !s.is_empty())
                             {
-                                Some(crate::text::prepare_rich(
+                                Some(crate::text::measure::prepare_rich_with_family(
                                     spans,
                                     text_style.size_resolved(),
                                     text_style.weight_resolved(),
                                     line_height,
+                                    text_style.font_family.as_deref(),
                                 ))
                             } else {
                                 let blob: std::borrow::Cow<'_, str> =
@@ -7765,6 +7871,7 @@ impl LayoutTree {
                             text_h
                         };
                         text_nodes.push(TextLayoutInfo {
+                            node_id: element.layout_node,
                             text: text.clone(),
                             shape_suffix: element.text_shape_suffix.clone(),
                             spans: element.text_spans.clone(),

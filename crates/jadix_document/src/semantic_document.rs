@@ -84,6 +84,8 @@ pub struct DocumentInline {
     pub style: DocumentInlineStyle,
 }
 
+pub use crate::is_safe_document_destination;
+
 #[derive(Clone, Debug)]
 pub struct DocumentBlock {
     pub id: u64,
@@ -248,6 +250,16 @@ impl Document {
         if self.format() == DocumentFormat::RichText {
             return Ok(super::rich_text::replace_rich(self, source, range, insert));
         }
+        if self.format() == DocumentFormat::Markdown
+            && range.is_empty()
+            && range.start == self.source().len()
+            && !self.0.references
+            && !source.text().contains("]:")
+        {
+            if let Some(updated) = self.reparse_markdown_tail(&source) {
+                return Ok(updated);
+            }
+        }
         if let Some(index) = self.block_at(range.start) {
             let block = &self.blocks()[index];
             let old = &self.source().text()[range.clone()];
@@ -356,6 +368,64 @@ impl Document {
             self.0.raw_html,
         ))
     }
+
+    /// Append a reply using the same source-preserving edit path as the editor.
+    /// Reference definitions require a whole parse because they affect earlier text.
+    pub fn append(&self, text: &str) -> Result<Self, DocumentEditError> {
+        let end = self.source().len();
+        self.replace(end..end, text)
+    }
+
+    fn reparse_markdown_tail(&self, source: &TextDocument) -> Option<Self> {
+        // Start at a previously parsed top-level, single-line paragraph after a
+        // blank line, not at an arbitrary blank inside a fence/list/HTML block.
+        // Reparse that paragraph too: appended setext/table syntax may change it.
+        let index = self.blocks().iter().rposition(|block| {
+            block.independent
+                && block.kind == DocumentBlockKind::Paragraph
+                && block.edit_range.is_none()
+                && self
+                    .source()
+                    .line_at_byte(block.source.start)
+                    .is_some_and(|line| {
+                        line > 0
+                            && self
+                                .source()
+                                .line(line - 1)
+                                .is_some_and(|text| text.trim().is_empty())
+                    })
+        })?;
+        let start = self.blocks()[index].source.start;
+        if start == 0
+            || self.blocks()[..index].iter().any(|block| {
+                block.source.end > start
+                    || block
+                        .edit_range
+                        .as_ref()
+                        .is_some_and(|range| range.end > start)
+            })
+        {
+            return None;
+        }
+        let mut blocks = self.blocks()[..index].to_vec();
+        for mut block in parse_blocks(&TextDocument::new(&source.text()[start..]), self.0.raw_html)
+        {
+            block.source.start += start;
+            block.source.end += start;
+            if let Some(range) = &mut block.edit_range {
+                range.start += start;
+                range.end += start;
+            }
+            blocks.push(block);
+        }
+        Some(Self(Arc::new(DocumentSnapshot {
+            source: source.clone(),
+            format: self.format(),
+            blocks,
+            references: false,
+            raw_html: self.0.raw_html,
+        })))
+    }
 }
 
 pub(super) fn block(kind: DocumentBlockKind, source: Range<usize>) -> DocumentBlock {
@@ -401,6 +471,17 @@ struct Parsed<'a> {
     children: Vec<Parsed<'a>>,
 }
 
+impl Drop for Parsed<'_> {
+    fn drop(&mut self) {
+        // Parser events can nest far beyond the native thread stack. Empty each
+        // child's descendants before Rust drops it, including on early returns.
+        let mut pending = std::mem::take(&mut self.children);
+        while let Some(mut node) = pending.pop() {
+            pending.append(&mut node.children);
+        }
+    }
+}
+
 fn markdown_options() -> Options {
     Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
@@ -409,7 +490,14 @@ fn markdown_options() -> Options {
         | Options::ENABLE_MATH
 }
 
+#[cfg(test)]
+thread_local! {
+    static PARSED_MARKDOWN_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 fn parse_blocks(source: &TextDocument, raw_html: bool) -> Vec<DocumentBlock> {
+    #[cfg(test)]
+    PARSED_MARKDOWN_BYTES.with(|bytes| bytes.set(bytes.get() + source.len()));
     let options = markdown_options();
     let mut stack = vec![Parsed {
         tag: None,
@@ -448,7 +536,6 @@ fn parse_blocks(source: &TextDocument, raw_html: bool) -> Vec<DocumentBlock> {
             ..Context::default()
         },
         &mut blocks,
-        0,
     );
     blocks.sort_by_key(|block| block.source.start);
     let mut complete = Vec::with_capacity(blocks.len());
@@ -516,8 +603,14 @@ fn ordinary_kind(context: &Context) -> DocumentBlockKind {
 }
 
 fn contains_inline_html(node: &Parsed<'_>) -> bool {
-    matches!(node.event, Some(Event::InlineHtml(_)))
-        || node.children.iter().any(contains_inline_html)
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        if matches!(node.event, Some(Event::InlineHtml(_))) {
+            return true;
+        }
+        pending.extend(node.children.iter().rev());
+    }
+    false
 }
 
 fn render_html_math(event: Event<'_>) -> Event<'_> {
@@ -544,18 +637,25 @@ fn lower(
     source: &TextDocument,
     context: &Context,
     out: &mut Vec<DocumentBlock>,
-    depth: usize,
 ) {
-    if depth > 128 {
-        return;
-    }
-    for node in nodes {
+    let mut pending: Vec<_> = nodes
+        .iter()
+        .rev()
+        .map(|node| (node, context.clone(), None::<usize>))
+        .collect();
+    while let Some((node, mut context, item_start)) = pending.pop() {
+        // Decide list continuation after the previous child has been lowered.
+        if item_start.is_some_and(|start| out.last().is_some_and(|b| b.source.start >= start)) {
+            context.marker = context.marker.as_ref().map(|_| String::new());
+            context.checked = None;
+        }
+        let context = &context;
         if !context.text_only_html
-            && contains_inline_html(node)
             && matches!(
                 node.tag,
                 Some(Tag::Paragraph | Tag::Heading { .. } | Tag::List(_) | Tag::Table(_))
             )
+            && contains_inline_html(node)
         {
             let mut html = String::new();
             pulldown_cmark::html::push_html(
@@ -577,7 +677,6 @@ fn lower(
                 source,
                 &mut inlines,
                 &mut source_positions,
-                0,
             );
             let mut retained_inlines = Vec::new();
             let mut retained_positions = Vec::new();
@@ -633,10 +732,15 @@ fn lower(
             Some(Tag::BlockQuote(_)) => {
                 let mut context = context.clone();
                 context.quote += 1;
-                lower(&node.children, source, &context, out, depth + 1);
+                pending.extend(
+                    node.children
+                        .iter()
+                        .rev()
+                        .map(|child| (child, context.clone(), None)),
+                );
             }
             Some(Tag::List(start)) => {
-                for (item_index, item) in node.children.iter().enumerate() {
+                for (item_index, item) in node.children.iter().enumerate().rev() {
                     let mut context = context.clone();
                     context.list_depth += 1;
                     context.marker = Some(
@@ -645,7 +749,7 @@ fn lower(
                             .unwrap_or_else(|| "\u{2022}".into()),
                     );
                     context.checked = task_marker(item);
-                    lower(std::slice::from_ref(item), source, &context, out, depth + 1);
+                    pending.push((item, context, None));
                 }
             }
             Some(Tag::Item) => {
@@ -663,28 +767,13 @@ fn lower(
                         out,
                     );
                 }
-                let nested: Vec<_> = node
-                    .children
-                    .iter()
-                    .filter(|child| is_block(child))
-                    .collect();
-                for child in nested {
-                    let mut continuation = context.clone();
-                    if out
-                        .last()
-                        .is_some_and(|block| block.source.start >= node.source.start)
-                    {
-                        continuation.marker = context.marker.as_ref().map(|_| String::new());
-                        continuation.checked = None;
-                    }
-                    lower(
-                        std::slice::from_ref(child),
-                        source,
-                        &continuation,
-                        out,
-                        depth + 1,
-                    );
-                }
+                pending.extend(
+                    node.children
+                        .iter()
+                        .rev()
+                        .filter(|child| is_block(child))
+                        .map(|child| (child, context.clone(), Some(node.source.start))),
+                );
             }
             Some(Tag::CodeBlock(code)) => {
                 let language = match code {
@@ -724,8 +813,7 @@ fn lower(
                             let offset = raw.find(text).unwrap_or(0);
                             result.inlines = Arc::from([DocumentInline {
                                 text: text.into(),
-                                source: result.source.start + offset
-                                    ..result.source.start + offset + text.len(),
+                                source: offset..offset + text.len(),
                                 kind: DocumentInlineKind::Text,
                                 style: DocumentInlineStyle::default(),
                             }]);
@@ -764,7 +852,12 @@ fn lower(
                 let mut context = context.clone();
                 context.alignments = alignments.clone().into();
                 context.edit_range = Some(node.source.clone());
-                lower(&node.children, source, &context, out, depth + 1);
+                pending.extend(
+                    node.children
+                        .iter()
+                        .rev()
+                        .map(|child| (child, context.clone(), None)),
+                );
             }
             Some(Tag::TableHead | Tag::TableRow) => {
                 let mut result = block(
@@ -785,7 +878,6 @@ fn lower(
                             source,
                             &mut inlines,
                             &mut source_positions,
-                            0,
                         );
                         for inline in &mut inlines {
                             inline.source = inline.source.start.saturating_sub(result.source.start)
@@ -827,7 +919,12 @@ fn lower(
                 }
                 Some(Event::Rule) => out.push(block(DocumentBlockKind::Rule, node.source.clone())),
                 _ if !node.children.is_empty() => {
-                    lower(&node.children, source, context, out, depth + 1)
+                    pending.extend(
+                        node.children
+                            .iter()
+                            .rev()
+                            .map(|child| (child, context.clone(), None)),
+                    );
                 }
                 _ => {}
             },
@@ -851,22 +948,30 @@ fn is_block(node: &Parsed<'_>) -> bool {
 }
 
 fn task_marker(node: &Parsed<'_>) -> Option<bool> {
-    if let Some(Event::TaskListMarker(checked)) = node.event {
-        return Some(checked);
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        if let Some(Event::TaskListMarker(checked)) = node.event {
+            return Some(checked);
+        }
+        pending.extend(node.children.iter().rev());
     }
-    node.children.iter().find_map(task_marker)
+    None
 }
 
 fn collect_text(node: &Parsed<'_>, text: &mut String) {
-    match node.event.as_ref() {
-        Some(
-            Event::Text(value) | Event::Code(value) | Event::Html(value) | Event::InlineHtml(value),
-        ) => text.push_str(value),
-        Some(Event::SoftBreak | Event::HardBreak) => text.push('\n'),
-        _ => {}
-    }
-    for child in &node.children {
-        collect_text(child, text);
+    let mut pending = vec![node];
+    while let Some(node) = pending.pop() {
+        match node.event.as_ref() {
+            Some(
+                Event::Text(value)
+                | Event::Code(value)
+                | Event::Html(value)
+                | Event::InlineHtml(value),
+            ) => text.push_str(value),
+            Some(Event::SoftBreak | Event::HardBreak) => text.push('\n'),
+            _ => {}
+        }
+        pending.extend(node.children.iter().rev());
     }
 }
 
@@ -876,85 +981,86 @@ fn collect_inline(
     source: &TextDocument,
     out: &mut Vec<DocumentInline>,
     source_positions: &mut Vec<Arc<[(usize, usize)]>>,
-    depth: usize,
 ) {
-    if depth > 128 {
-        return;
-    }
-    let mut style = inherited.clone();
-    match node.tag.as_ref() {
-        Some(Tag::Strong) => style.bold = true,
-        Some(Tag::Emphasis) => style.italic = true,
-        Some(Tag::Strikethrough) => style.strike = true,
-        Some(Tag::Superscript) => style.superscript = true,
-        Some(Tag::Subscript) => style.subscript = true,
-        Some(Tag::Link { dest_url, .. }) => style.link = Some(dest_url.to_string()),
-        Some(Tag::Image {
-            dest_url, title, ..
-        }) => {
-            let mut text = String::new();
-            collect_text(node, &mut text);
+    let mut pending = vec![(node, inherited.clone())];
+    while let Some((node, mut style)) = pending.pop() {
+        match node.tag.as_ref() {
+            Some(Tag::Strong) => style.bold = true,
+            Some(Tag::Emphasis) => style.italic = true,
+            Some(Tag::Strikethrough) => style.strike = true,
+            Some(Tag::Superscript) => style.superscript = true,
+            Some(Tag::Subscript) => style.subscript = true,
+            Some(Tag::Link { dest_url, .. }) => style.link = Some(dest_url.to_string()),
+            Some(Tag::Image {
+                dest_url, title, ..
+            }) => {
+                let mut text = String::new();
+                collect_text(node, &mut text);
+                out.push(DocumentInline {
+                    text,
+                    source: node.source.clone(),
+                    style,
+                    kind: DocumentInlineKind::Image {
+                        destination: dest_url.to_string(),
+                        title: title.to_string(),
+                    },
+                });
+                source_positions.push(Arc::from([]));
+                continue;
+            }
+            _ => {}
+        }
+        let value = match node.event.as_ref() {
+            Some(Event::Text(value)) => Some((value.to_string(), DocumentInlineKind::Text, true)),
+            Some(
+                Event::Html(value) | Event::InlineHtml(value) | Event::FootnoteReference(value),
+            ) => Some((value.to_string(), DocumentInlineKind::Text, false)),
+            Some(Event::Code(value)) => {
+                style.code = true;
+                Some((value.to_string(), DocumentInlineKind::Text, false))
+            }
+            Some(Event::SoftBreak | Event::HardBreak) => {
+                Some(("\n".into(), DocumentInlineKind::Text, false))
+            }
+            Some(Event::InlineMath(value) | Event::DisplayMath(value)) => {
+                Some((value.to_string(), DocumentInlineKind::Math, false))
+            }
+            _ => None,
+        };
+        if let Some((text, kind, fold_whitespace)) = value {
+            let raw = &source.text()[node.source.clone()];
+            let matched_start = raw.find(&text);
+            let range = matched_start
+                .map(|start| node.source.start + start..node.source.start + start + text.len())
+                .unwrap_or_else(|| node.source.clone());
+            let (text, positions) = if fold_whitespace {
+                fold_markdown_whitespace(&text, range.start, matched_start.is_some())
+            } else {
+                (text, Vec::new())
+            };
             out.push(DocumentInline {
                 text,
-                source: node.source.clone(),
-                style,
-                kind: DocumentInlineKind::Image {
-                    destination: dest_url.to_string(),
-                    title: title.to_string(),
+                source: if matches!(node.event, Some(Event::SoftBreak | Event::HardBreak)) {
+                    node.source.clone()
+                } else {
+                    range
                 },
+                kind,
+                style,
             });
-            source_positions.push(Arc::from([]));
-            return;
-        }
-        _ => {}
-    }
-    let value = match node.event.as_ref() {
-        Some(Event::Text(value)) => Some((value.to_string(), DocumentInlineKind::Text, true)),
-        Some(Event::Html(value) | Event::InlineHtml(value) | Event::FootnoteReference(value)) => {
-            Some((value.to_string(), DocumentInlineKind::Text, false))
-        }
-        Some(Event::Code(value)) => {
-            style.code = true;
-            Some((value.to_string(), DocumentInlineKind::Text, false))
-        }
-        Some(Event::SoftBreak | Event::HardBreak) => {
-            Some(("\n".into(), DocumentInlineKind::Text, false))
-        }
-        Some(Event::InlineMath(value) | Event::DisplayMath(value)) => {
-            Some((value.to_string(), DocumentInlineKind::Math, false))
-        }
-        _ => None,
-    };
-    if let Some((text, kind, fold_whitespace)) = value {
-        let raw = &source.text()[node.source.clone()];
-        let matched_start = raw.find(&text);
-        let range = matched_start
-            .map(|start| node.source.start + start..node.source.start + start + text.len())
-            .unwrap_or_else(|| node.source.clone());
-        let (text, positions) = if fold_whitespace {
-            fold_markdown_whitespace(&text, range.start, matched_start.is_some())
-        } else {
-            (text, Vec::new())
-        };
-        out.push(DocumentInline {
-            text,
-            source: if matches!(node.event, Some(Event::SoftBreak | Event::HardBreak)) {
-                node.source.clone()
+            if matches!(node.event, Some(Event::SoftBreak | Event::HardBreak)) {
+                source_positions.push(Arc::from([(1, node.source.end)]));
             } else {
-                range
-            },
-            kind,
-            style,
-        });
-        if matches!(node.event, Some(Event::SoftBreak | Event::HardBreak)) {
-            source_positions.push(Arc::from([(1, node.source.end)]));
-        } else {
-            source_positions.push(positions.into());
+                source_positions.push(positions.into());
+            }
+            continue;
         }
-        return;
-    }
-    for child in &node.children {
-        collect_inline(child, &style, source, out, source_positions, depth + 1);
+        pending.extend(
+            node.children
+                .iter()
+                .rev()
+                .map(|child| (child, style.clone())),
+        );
     }
 }
 
@@ -1074,7 +1180,6 @@ fn push_inline_lines(
             source,
             &mut inlines,
             &mut source_positions,
-            0,
         );
     }
     normalize_inline_boundaries(&mut inlines, &mut source_positions);

@@ -38,32 +38,43 @@ pub fn set_text(text: &str) {
     crate::platform::clipboard_set_text(text);
 }
 
+/// Write text and optional HTML in one clipboard operation. Returns false when
+/// unavailable or any requested format fails, so callers can safely abort a cut.
+pub fn set_text_and_html(text: &str, html: Option<&str>) -> bool {
+    crate::platform::clipboard_set_text_and_html(text, html)
+}
+
 /// Returns `None` when `native-clipboard` is disabled or the platform has no text.
 pub fn get_text() -> Option<String> {
     crate::platform::clipboard_get_text()
 }
 
-/// MIME 类型常量（文本族）。`jadix_clipboard` 默认路径以纯文本为主；
-/// 自定义 MIME 在无平台扩展时退化为 UTF-8 文本写入。
+/// MIME 类型常量（文本族）。HTML 使用桌面原生格式，其余类型走 UTF-8 文本。
 pub mod mime {
     pub const TEXT_PLAIN: &str = "text/plain";
     pub const TEXT_HTML: &str = "text/html";
     pub const TEXT_URI_LIST: &str = "text/uri-list";
 }
 
-/// 按 MIME 写入；未知类型仍走纯文本。
+/// 按 MIME 写入；HTML 使用桌面原生格式，未知类型仍走纯文本。
 pub fn set_with_mime(mime_type: &str, data: &str) {
-    let _ = mime_type;
-    set_text(data);
+    if mime_type == mime::TEXT_HTML {
+        crate::platform::clipboard_set_html(data);
+    } else {
+        set_text(data);
+    }
 }
 
-/// 按 MIME 读取；当前实现仅返回系统剪贴板纯文本（若有）。
+/// 按 MIME 读取；HTML 不可用时返回 None，不会把纯文本冒充 HTML。
 pub fn get_with_mime(mime_type: &str) -> Option<String> {
-    let _ = mime_type;
-    get_text()
+    if mime_type == mime::TEXT_HTML {
+        crate::platform::clipboard_get_html()
+    } else {
+        get_text()
+    }
 }
 
-/// 写入 HTML（以纯文本形式落到系统剪贴板；平台富文本后续加深）。
+/// 写入原生 HTML；未开启 native-clipboard 或非桌面平台时不写入。
 pub fn set_html(html: &str) {
     set_with_mime(mime::TEXT_HTML, html);
 }

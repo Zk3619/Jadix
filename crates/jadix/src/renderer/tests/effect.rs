@@ -109,6 +109,7 @@ fn queue_zoom_layer_wrap_ignores_origin() {
 
 fn sample_zoom_text(color: Option<[u8; 4]>) -> crate::layout::layout_tree::TextLayoutInfo {
     crate::layout::layout_tree::TextLayoutInfo {
+        node_id: None,
         text: "You can change this later in Settings.".into(),
         shape_suffix: None,
         spans: None,

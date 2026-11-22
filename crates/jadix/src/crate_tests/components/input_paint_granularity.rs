@@ -21,6 +21,92 @@ fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
 }
 
 #[test]
+fn shared_range_styles_compose_with_syntax_and_ime_without_idle_reshape() {
+    use crate::style::TextSpan;
+    use crate::utils::text_annotations::*;
+    use crate::utils::text_field::*;
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+    let (_owner, ()) = crate::core::reactivity::create_root(|| {
+        let id = "range-styles-ime";
+        let value = use_signal(&input_value_signal_key(id), || "a中b".to_string());
+        use_signal("__jadix_button_focus_id", String::new).set(textarea_focus_id(id));
+        set_text_decorations(
+            id,
+            vec![TextDecoration {
+                range: 2..4, // Expand the partial UTF-8 edge to the whole character.
+                value: TextRangeStyle {
+                    background: Some([30, 40, 50, 255]),
+                    underline: true,
+                    ..Default::default()
+                },
+            }],
+        );
+        let mut syntax = TextSpan::new("a中b");
+        syntax.color = Some([100, 120, 140, 255]);
+        set_text_field_syntax(id, "a中b", Some(vec![syntax]));
+        let mut el = Element::new().child(textarea(id).rows(2).resizable(false));
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut el, 240.0, 100.0, [0.0, 0.0]);
+        let mut impact = LayoutStatus::Clean;
+        sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+        let leaf = find_tid(&el, &input_text_template_id(id)).unwrap();
+        let spans = leaf.text_spans.as_ref().unwrap();
+        assert_eq!(
+            spans.iter().map(|s| s.text.as_str()).collect::<String>(),
+            value.peek()
+        );
+        let middle = spans.iter().find(|s| s.text == "中").unwrap();
+        assert!(middle.underline);
+        assert_eq!(middle.color, Some([100, 120, 140, 255]));
+        assert_eq!(middle.background, Some([30, 40, 50, 255]));
+        let revision = leaf.attrs["jadix_text_annotation_revision"].clone();
+        // Use a window container: layout assigns the root its viewport height.
+        // Bound the settle phase, then require subsequent idle syncs to stay clean.
+        for _ in 0..4 {
+            tree.build_and_layout(&mut el, 240.0, 100.0, [0.0, 0.0]);
+            impact = LayoutStatus::Clean;
+            sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+            if impact == LayoutStatus::Clean {
+                break;
+            }
+        }
+        assert_eq!(impact, LayoutStatus::Clean);
+        sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+        assert_eq!(impact, LayoutStatus::Clean);
+        assert_eq!(
+            find_tid(&el, &input_text_template_id(id)).unwrap().attrs["jadix_text_annotation_revision"],
+            revision
+        );
+        use_signal(&input_ime_anchor_signal_key(id), || None::<usize>).set(Some(1));
+        use_signal(&input_preedit_signal_key(id), String::new).set("组".into());
+        sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+        let leaf = find_tid(&el, &input_text_template_id(id)).unwrap();
+        let spans = leaf.text_spans.as_ref().unwrap();
+        assert_eq!(
+            spans.iter().map(|s| s.text.as_str()).collect::<String>(),
+            "a组中b"
+        );
+        assert_eq!(
+            spans.iter().find(|s| s.text == "组").unwrap().background,
+            None
+        );
+        assert_eq!(
+            spans.iter().find(|s| s.text == "中").unwrap().background,
+            Some([30, 40, 50, 255])
+        );
+        assert_eq!(
+            spans.iter().find(|s| s.text == "中").unwrap().color,
+            Some([100, 120, 140, 255])
+        );
+        assert_eq!(spans.iter().find(|s| s.text == "组").unwrap().color, None);
+        commit_value(id, "new document".into());
+        assert!(text_decorations(id).is_empty());
+    });
+}
+
+#[test]
 fn text_fields_clear_selection_on_blur_before_refocus() {
     use crate::utils::text_field::{focus_id_for_text_edit, input_selection_signal_key};
     let focus = use_signal("__jadix_button_focus_id", String::new);
@@ -177,7 +263,11 @@ fn focused_end_caret_input_prepares_once_per_paint() {
     let leaf = find_tid(&el, &input_text_template_id(id)).unwrap();
     assert_eq!(leaf.text.as_deref(), Some(long.as_str()));
     assert_eq!(
-        leaf.text_style.input_caret.as_ref().unwrap().caret_byte_index,
+        leaf.text_style
+            .input_caret
+            .as_ref()
+            .unwrap()
+            .caret_byte_index,
         long.len()
     );
     let scroll = leaf.text_style.scroll_x;

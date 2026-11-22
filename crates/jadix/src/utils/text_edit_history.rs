@@ -253,35 +253,11 @@ pub fn with_test_replace_caps(hard: usize, retain: usize, f: impl FnOnce()) {
 #[cfg(feature = "text-undo")]
 /// Byte diff with UTF-8-safe prefix/suffix. `range` is on `before`.
 fn diff_change(before: &str, after: &str) -> Option<TextChange> {
-    if before == after {
-        return None;
-    }
-    let b = before.as_bytes();
-    let a = after.as_bytes();
-    let mut prefix = 0;
-    let max_pre = b.len().min(a.len());
-    while prefix < max_pre && b[prefix] == a[prefix] {
-        prefix += 1;
-    }
-    while prefix > 0 && !before.is_char_boundary(prefix) {
-        prefix -= 1;
-    }
-    let mut suffix = 0;
-    let max_suf = (b.len() - prefix).min(a.len() - prefix);
-    while suffix < max_suf && b[b.len() - 1 - suffix] == a[a.len() - 1 - suffix] {
-        suffix += 1;
-    }
-    while suffix > 0
-        && (!before.is_char_boundary(b.len() - suffix) || !after.is_char_boundary(a.len() - suffix))
-    {
-        suffix -= 1;
-    }
-    let old_hi = b.len() - suffix;
-    let new_hi = a.len() - suffix;
+    let (range, insert) = jadix_document::annotations::replacement_between(before, after)?;
     Some(TextChange {
-        range: prefix..old_hi,
-        old_text: before[prefix..old_hi].to_string(),
-        new_text: after[prefix..new_hi].to_string(),
+        old_text: before[range.clone()].to_string(),
+        new_text: insert.to_string(),
+        range,
     })
 }
 
@@ -371,9 +347,9 @@ mod stack {
     };
 
     use super::{
-        apply_forward, apply_reverse, diff_change, payload_for_change, try_merge_change, EditKind,
-        EditPoint, EditTransactionGuard, RetainedSide, SetTextUndoPolicy, TextUndoConfig,
-        UndoGroup, UndoPayload,
+        EditKind, EditPoint, EditTransactionGuard, RetainedSide, SetTextUndoPolicy, TextUndoConfig,
+        UndoGroup, UndoPayload, apply_forward, apply_reverse, diff_change, payload_for_change,
+        try_merge_change,
     };
 
     #[derive(Clone, Debug, PartialEq, Eq, Default)]
@@ -422,6 +398,7 @@ mod stack {
         open_txn: bool,
         pending_before: Option<TextEditSnapshot>,
         pending_kind: Option<EditKind>,
+        pending_changes: Option<Vec<super::TextChange>>,
         coalesce_next: bool,
     }
 
@@ -440,6 +417,7 @@ mod stack {
                 open_txn: false,
                 pending_before: None,
                 pending_kind: None,
+                pending_changes: None,
                 coalesce_next: false,
             }
         }
@@ -606,6 +584,7 @@ mod stack {
         let before = before.clamp();
         let cell = manager_cell(field_id);
         let mut st = cell.borrow_mut();
+        st.pending_changes = None;
         if st.blocked() {
             st.pending_before = None;
             st.pending_kind = None;
@@ -624,6 +603,44 @@ mod stack {
         st.last_at = Instant::now();
     }
 
+    /// Keep disjoint cursor replacements separate, including through undo/redo.
+    pub(crate) fn note_cursor_edits(
+        field_id: &str,
+        before: &str,
+        edits: &crate::utils::text_multi_cursor::CursorEdits,
+    ) {
+        let cell = manager_cell(field_id);
+        let mut st = cell.borrow_mut();
+        if st.blocked()
+            || edits.len() < 2
+            || st
+                .pending_before
+                .as_ref()
+                .is_none_or(|snap| snap.value != before)
+        {
+            return;
+        }
+        let mut value = before.to_string();
+        let mut changes = Vec::with_capacity(edits.len());
+        let mut bytes = 0usize;
+        for (range, insert) in edits {
+            let Some(old) = value.get(range.clone()) else {
+                return;
+            };
+            bytes = bytes.saturating_add(old.len()).saturating_add(insert.len());
+            if bytes > super::large_replace_hard() {
+                return;
+            }
+            changes.push(super::TextChange {
+                range: range.clone(),
+                old_text: old.to_string(),
+                new_text: insert.clone(),
+            });
+            value.replace_range(range.clone(), insert);
+        }
+        st.pending_changes = Some(changes);
+    }
+
     pub fn note_after_edit(field_id: &str, after: TextEditSnapshot) {
         let after = after.clamp();
         let cell = manager_cell(field_id);
@@ -638,6 +655,7 @@ mod stack {
         let kind = st.pending_kind.take().unwrap_or(EditKind::Other);
         let coalesce = st.coalesce_next;
         st.coalesce_next = false;
+        let changes = st.pending_changes.take();
         let Some(ch) = diff_change(&before.value, &after.value) else {
             st.current = Some(after);
             return;
@@ -646,12 +664,13 @@ mod stack {
             st.current = Some(after);
             return;
         }
+        let changes = changes.unwrap_or_else(|| vec![ch.clone()]);
         if coalesce {
             if let Some(mut g) = st.past.pop_back() {
                 st.current_bytes = st.current_bytes.saturating_sub(g.payload_bytes());
                 let merged = if st.open_txn {
                     if let UndoPayload::Changes(chs) = &mut g.payload {
-                        chs.push(ch.clone());
+                        chs.extend(changes.iter().cloned());
                         g.state_after = after.point();
                         g.at = Instant::now();
                         true
@@ -660,7 +679,9 @@ mod stack {
                     }
                 } else {
                     match &mut g.payload {
-                        UndoPayload::Changes(chs) if chs.len() == 1 && g.kind == kind => {
+                        UndoPayload::Changes(chs)
+                            if chs.len() == 1 && changes.len() == 1 && g.kind == kind =>
+                        {
                             let merged = try_merge_change(&mut chs[0], &ch, kind);
                             if merged {
                                 g.state_after = after.point();
@@ -680,7 +701,11 @@ mod stack {
             }
         }
         let group = UndoGroup {
-            payload: payload_for_change(ch),
+            payload: if changes.len() == 1 {
+                payload_for_change(ch)
+            } else {
+                UndoPayload::Changes(changes)
+            },
             state_before: before.point(),
             state_after: after.point(),
             kind,
@@ -804,7 +829,10 @@ mod stack {
         let Some(snap) = undo(field_id) else {
             return false;
         };
-        with_applying(field_id, || apply_snapshot(field_id, &snap));
+        with_applying(field_id, || {
+            sync_annotation_history(field_id, true);
+            apply_snapshot(field_id, &snap);
+        });
         true
     }
 
@@ -812,8 +840,44 @@ mod stack {
         let Some(snap) = redo(field_id) else {
             return false;
         };
-        with_applying(field_id, || apply_snapshot(field_id, &snap));
+        with_applying(field_id, || {
+            sync_annotation_history(field_id, false);
+            apply_snapshot(field_id, &snap);
+        });
         true
+    }
+
+    fn sync_annotation_history(field_id: &str, reverse: bool) {
+        let cell = manager_cell(field_id);
+        let st = cell.borrow();
+        let group = if reverse {
+            st.future.back()
+        } else {
+            st.past.back()
+        };
+        let Some(UndoGroup {
+            payload: UndoPayload::Changes(changes),
+            ..
+        }) = group
+        else {
+            return;
+        };
+        let mut edits = Vec::with_capacity(changes.len());
+        if reverse {
+            for change in changes.iter().rev() {
+                edits.push((
+                    change.range.start..change.range.start + change.new_text.len(),
+                    change.old_text.clone(),
+                ));
+            }
+        } else {
+            for change in changes {
+                edits.push((change.range.clone(), change.new_text.clone()));
+            }
+        }
+        drop(st);
+        let before = use_signal(&input_value_signal_key(field_id), String::new).peek();
+        crate::utils::text_annotations::apply_edits(field_id, &before, &edits);
     }
 
     pub fn can_undo(field_id: &str) -> bool {
@@ -947,6 +1011,13 @@ mod stubs {
 
     #[inline]
     pub fn note_field_after_edit(_field_id: &str) {}
+
+    pub(crate) fn note_cursor_edits(
+        _field_id: &str,
+        _before: &str,
+        _edits: &crate::utils::text_multi_cursor::CursorEdits,
+    ) {
+    }
 
     #[inline]
     pub fn undo_field(_field_id: &str) -> bool {

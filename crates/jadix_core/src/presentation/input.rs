@@ -5,6 +5,28 @@ use unicode_segmentation::UnicodeSegmentation;
 /// Maximum supported insertion constraint, measured in UTF-16 code units.
 pub const MAX_INPUT_LENGTH: usize = 1024 * 1024;
 
+/// Convert a native Unicode-scalar offset (GTK/Pango) to a UTF-8 byte boundary.
+/// Out-of-range positions clamp to the end, including native end sentinels.
+pub fn scalar_to_byte(text: &str, offset: usize) -> usize {
+    text.char_indices().nth(offset).map_or(text.len(), |(at, _)| at)
+}
+
+/// Convert a native Unicode-scalar position to the shared UTF-16 coordinate space.
+pub fn scalar_to_utf16(text: &str, offset: usize) -> usize {
+    text.chars().take(offset).map(char::len_utf16).sum()
+}
+
+/// Convert a shared selection to a native scalar position. A split surrogate
+/// rounds toward the start; a position beyond the string clamps to its end.
+pub fn utf16_to_scalar(text: &str, offset: usize) -> usize {
+    let mut units = 0;
+    for (index, ch) in text.chars().enumerate() {
+        units += ch.len_utf16();
+        if units > offset { return index; }
+    }
+    text.chars().count()
+}
+
 /// Longest prefix fitting after replacing a UTF-8 selection. Never cuts an
 /// inserted extended grapheme. Invalid ranges/limits return None. An empty
 /// result for nonempty insertion means reject the insertion and keep selection;
@@ -66,6 +88,20 @@ pub fn focus_reveal_delta(start: f64, end: f64, viewport: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_positions_preserve_supplementary_characters_and_combining_marks() {
+        let text = "a🦀e\u{301}中";
+        for (scalar, byte, utf16) in [(0,0,0),(1,1,1),(2,5,3),(3,6,4),(4,8,5),(5,11,6)] {
+            assert_eq!(scalar_to_byte(text, scalar), byte);
+            assert_eq!(scalar_to_utf16(text, scalar), utf16);
+            assert_eq!(utf16_to_scalar(text, utf16), scalar);
+        }
+        assert_eq!(utf16_to_scalar(text, 2), 1);
+        assert_eq!(scalar_to_byte(text, usize::MAX), text.len());
+        assert_eq!(scalar_to_utf16(text, usize::MAX), 6);
+        assert_eq!(utf16_to_scalar(text, usize::MAX), 5);
+        assert_eq!(utf16_to_scalar("", 1), 0);
+    }
     #[test]
     fn focus_reveal_keeps_visible_oversized_targets_and_reveals_hidden_ones() {
         for (start, end, viewport, expected) in [

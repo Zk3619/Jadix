@@ -19,6 +19,10 @@ struct State {
     timezone: Option<String>,
     window_locales: HashMap<u64, Locale>,
     window_timezones: HashMap<u64, String>,
+    window_fallbacks: HashMap<u64, Locale>,
+    system_locales: HashMap<u64, Locale>,
+    system_timezones: HashMap<u64, String>,
+    surface_catalogs: HashMap<u64, Catalog>,
     catalog: Catalog,
     defaults: Catalog,
     registered: HashSet<String>,
@@ -33,6 +37,10 @@ fn state() -> &'static RwLock<State> {
             timezone: None,
             window_locales: HashMap::new(),
             window_timezones: HashMap::new(),
+            window_fallbacks: HashMap::new(),
+            system_locales: HashMap::new(),
+            system_timezones: HashMap::new(),
+            surface_catalogs: HashMap::new(),
             catalog: Catalog::new(),
             defaults: Catalog::new(),
             registered: HashSet::new(),
@@ -49,12 +57,12 @@ fn write_state() -> std::sync::RwLockWriteGuard<'static, State> {
 }
 
 fn scope_token() -> u64 {
-    crate::core::reactivity::signal_key_scope()
+    crate::reactivity::signal_key_scope()
 }
 
 fn touch_generation_signal() {
     let g = generation();
-    let sig = crate::core::reactivity::use_signal("__jadix_i18n_generation", || 0u64);
+    let sig = crate::reactivity::use_signal("__jadix_i18n_generation", || 0u64);
     let _ = sig.get();
     if sig.peek() != g {
         sig.set(g);
@@ -71,10 +79,10 @@ pub fn generation() -> u64 {
 pub(crate) fn bump() {
     GENERATION.fetch_add(1, Ordering::SeqCst);
     NEED_REBUILD.store(true, Ordering::SeqCst);
-    crate::app::runtime::request_redraw_all();
-    if crate::core::reactivity::runtime_tls_alive() {
+    super::hooks::changed();
+    if crate::reactivity::runtime_tls_alive() {
         let g = generation();
-        crate::core::reactivity::use_signal("__jadix_i18n_generation", || 0u64).set(g);
+        crate::reactivity::use_signal("__jadix_i18n_generation", || 0u64).set(g);
     }
 }
 
@@ -88,12 +96,14 @@ pub fn current_locale() -> Locale {
     let g = read_state();
     g.window_locales
         .get(&tok)
+        .or_else(|| g.system_locales.get(&tok))
         .cloned()
         .unwrap_or_else(|| g.locale.clone())
 }
 
 pub fn current_fallback() -> Locale {
-    read_state().fallback.clone()
+    let g = read_state();
+    g.window_fallbacks.get(&scope_token()).cloned().unwrap_or_else(|| g.fallback.clone())
 }
 
 pub fn current_timezone() -> Option<String> {
@@ -101,6 +111,7 @@ pub fn current_timezone() -> Option<String> {
     let g = read_state();
     g.window_timezones
         .get(&tok)
+        .or_else(|| g.system_timezones.get(&tok))
         .cloned()
         .or_else(|| g.timezone.clone())
 }
@@ -132,11 +143,13 @@ pub fn set_global_locale_inner(locale: Locale) {
 
 pub fn set_fallback_inner(locale: Locale) {
     let mut g = write_state();
-    if g.fallback != locale {
-        g.fallback = locale;
-        drop(g);
-        bump();
-    }
+    let token = scope_token();
+    let changed = if token == 0 {
+        if g.fallback == locale { false } else { g.fallback = locale; true }
+    } else if g.window_fallbacks.get(&token) == Some(&locale) { false }
+    else { g.window_fallbacks.insert(token, locale); true };
+    drop(g);
+    if changed { bump(); }
 }
 
 pub fn set_timezone_inner(tz: Option<String>) {
@@ -166,12 +179,20 @@ pub fn set_timezone_inner(tz: Option<String>) {
 }
 
 pub fn add_bundle_inner(bundle: MessageBundle) {
-    write_state().catalog.add(bundle);
+    let mut state = write_state();
+    let token = scope_token();
+    if token == 0 { state.catalog.add(bundle); }
+    else { state.surface_catalogs.entry(token).or_default().add(bundle); }
+    drop(state);
     bump();
 }
 
 pub fn clear_overlays_inner() {
-    write_state().catalog.clear();
+    let mut state = write_state();
+    let token = scope_token();
+    if token == 0 { state.catalog.clear(); }
+    else { state.surface_catalogs.remove(&token); }
+    drop(state);
     bump();
 }
 
@@ -223,15 +244,16 @@ fn lookup_in(g: &State, loc: &Locale, key: &str) -> Option<String> {
     } else {
         loc.clone()
     };
-    if let Some(s) = g.catalog.get(&lookup_loc, key) {
-        return Some(s.to_string());
-    }
-    if g.fallback != lookup_loc {
-        if let Some(s) = g.catalog.get(&g.fallback, key) {
+    let fallback = g.window_fallbacks.get(&scope_token()).unwrap_or(&g.fallback);
+    let surface = g.surface_catalogs.get(&scope_token());
+    for candidate in [&lookup_loc, fallback, &Locale::en()] {
+        if let Some(s) = surface.and_then(|c| c.get_language(candidate, key))
+            .or_else(|| g.catalog.get_language(candidate, key))
+            .or_else(|| g.defaults.get_language(candidate, key)) {
             return Some(s.to_string());
         }
     }
-    g.defaults.get(&lookup_loc, key).map(str::to_string)
+    None
 }
 
 fn note_missing(locale: &Locale, key: &str) {
@@ -305,7 +327,7 @@ fn format_template(locale: &Locale, template: &str, args: &[(&str, &str)]) -> St
 }
 
 pub(super) fn interpolate_simple(template: &str, args: &[(&str, &str)]) -> String {
-    crate::i18n_interpolate(template, args)
+    message::format_message(template, &args.iter().map(|(n,v)| Arg::new(n,v)).collect::<Vec<_>>(), current_locale().language())
 }
 
 #[cfg(test)]
@@ -316,6 +338,10 @@ pub(crate) fn reset_for_test() {
     g.timezone = None;
     g.window_locales.clear();
     g.window_timezones.clear();
+    g.window_fallbacks.clear();
+    g.system_locales.clear();
+    g.system_timezones.clear();
+    g.surface_catalogs.clear();
     g.catalog.clear();
     g.defaults.clear();
     g.registered.clear();
@@ -332,4 +358,64 @@ pub(crate) fn with_lock<R>(body: impl FnOnce() -> R) -> R {
     let out = body();
     reset_for_test();
     out
+}
+
+/// Locale, catalog and timezone ownership for one surface, independent of its renderer.
+#[derive(Debug)]
+pub struct LocaleContext { token: u64, _ui: std::marker::PhantomData<std::rc::Rc<()>> }
+impl Default for LocaleContext { fn default() -> Self { Self::new() } }
+impl LocaleContext {
+    pub fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1 << 63);
+        let token = NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .expect("locale context IDs exhausted");
+        Self { token, _ui: std::marker::PhantomData }
+    }
+    /// Enter for translation, formatting and reactive tree construction. Panic-safe and nestable.
+    pub fn with<R>(&self, body: impl FnOnce() -> R) -> R {
+        struct Restore(u64);
+        impl Drop for Restore { fn drop(&mut self) { crate::reactivity::set_signal_key_scope(self.0); } }
+        let _restore = Restore(crate::reactivity::set_signal_key_scope(self.token));
+        body()
+    }
+    /// Host preference updates retain explicit application overrides.
+    pub fn update_environment(&self, locale: &str, timezone: Option<&str>) -> Result<(), String> {
+        let locale = Locale::parse(locale).ok_or("invalid locale")?;
+        let mut g = write_state();
+        let timezone = timezone.map(str::to_owned);
+        let changed = g.system_locales.get(&self.token) != Some(&locale)
+            || g.system_timezones.get(&self.token) != timezone.as_ref();
+        g.system_locales.insert(self.token, locale);
+        if let Some(timezone) = timezone { g.system_timezones.insert(self.token, timezone); }
+        else { g.system_timezones.remove(&self.token); }
+        drop(g);
+        if changed { self.with(bump); }
+        Ok(())
+    }
+    pub fn reset_overrides(&self) {
+        let mut g = write_state();
+        let changed = g.window_locales.remove(&self.token).is_some()
+            | g.window_timezones.remove(&self.token).is_some()
+            | g.window_fallbacks.remove(&self.token).is_some();
+        drop(g);
+        if changed { self.with(bump); }
+    }
+    pub fn dispose(&self) {
+        let mut g = write_state();
+        g.window_locales.remove(&self.token);
+        g.window_timezones.remove(&self.token);
+        g.window_fallbacks.remove(&self.token);
+        g.system_locales.remove(&self.token);
+        g.system_timezones.remove(&self.token);
+        g.surface_catalogs.remove(&self.token);
+    }
+}
+impl Drop for LocaleContext { fn drop(&mut self) { self.dispose(); } }
+
+pub fn available_locales() -> Vec<String> {
+    let g = read_state();
+    let mut locales = g.catalog.locales();
+    if let Some(catalog) = g.surface_catalogs.get(&scope_token()) { locales.extend(catalog.locales()); }
+    locales.extend(g.defaults.locales());
+    locales.sort(); locales.dedup(); locales
 }

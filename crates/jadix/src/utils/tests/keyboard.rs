@@ -1,6 +1,44 @@
 use super::*;
 
 #[test]
+fn horizontal_and_line_edges_preserve_unicode_and_empty_lines() {
+    let text = "甲🙂\r\n\né\u{301}z\n尾";
+    // Each row is (input byte, left, right, Home, End). Interior bytes floor
+    // to the scalar boundary; CR and combining marks remain individual scalars.
+    for (caret, left, right, home, end) in [
+        (0, 0, 3, 0, 8),
+        (1, 0, 3, 0, 8),
+        (3, 0, 7, 0, 8),
+        (4, 0, 7, 0, 8),
+        (7, 3, 8, 0, 8),
+        (8, 7, 9, 0, 8),
+        (9, 8, 10, 9, 9),
+        (10, 9, 12, 10, 15),
+        (11, 9, 12, 10, 15),
+        (12, 10, 14, 10, 15),
+        (13, 10, 14, 10, 15),
+        (14, 12, 15, 10, 15),
+        (15, 14, 16, 10, 15),
+        (16, 15, 19, 16, 19),
+        (17, 15, 19, 16, 19),
+        (19, 16, 19, 16, 19),
+        (usize::MAX, 16, 19, 16, 19),
+    ] {
+        assert_eq!(caret_move_left(text, caret), left, "left at {caret}");
+        assert_eq!(caret_move_right(text, caret), right, "right at {caret}");
+        assert_eq!(caret_move_left_line_aware(text, caret), left);
+        assert_eq!(caret_move_right_line_aware(text, caret), right);
+        assert_eq!(caret_line_home(text, caret), home, "Home at {caret}");
+        assert_eq!(caret_line_end(text, caret), end, "End at {caret}");
+    }
+    for text in ["", "\n", "甲\n"] {
+        assert_eq!(caret_move_right(text, usize::MAX), text.len());
+        assert_eq!(caret_line_home(text, usize::MAX), text.len());
+        assert_eq!(caret_line_end(text, usize::MAX), text.len());
+    }
+}
+
+#[test]
 fn select_all_and_extend_selection() {
     assert_eq!(select_all_range(""), None);
     assert_eq!(select_all_range("你好"), Some((0, "你好".len())));

@@ -9,19 +9,53 @@ readme = "README.md"
 
 [features]
 default = []
+fonts = ["dep:ttf-parser", "dep:sha2"]
+shader = ["dep:wgpu"]
+i18n = ["dep:icu", "dep:icu_provider_blob", "dep:writeable", "dep:toml"]
+performance = ["dep:windows-sys", "dep:libc"]
 system-environment = ["dep:windows-sys", "dep:libc"]
+terminal = ["dep:vte", "dep:unicode-width"]
+updater = ["dep:semver", "dep:sha2", "dep:ed25519-dalek"]
+updater-install = ["updater", "dep:zip", "dep:tar", "dep:flate2", "dep:windows-sys"]
 
 [dependencies]
+ttf-parser = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true, features = ["shader-translation"] }
+toml = { workspace = true, optional = true }
+icu = { workspace = true, optional = true, features = ["compiled_data", "sync", "serde", "unstable"] }
+icu_provider_blob = { workspace = true, optional = true, features = ["alloc"] }
+writeable = { workspace = true, optional = true }
+web-time.workspace = true
 log.workspace = true
 stacker.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 base64 = "=0.22.1"
+url = "2.5.8"
+percent-encoding.workspace = true
 unicode-segmentation.workspace = true
+vte = { version = "=0.15.0", optional = true }
+unicode-width = { version = "=0.2.3", optional = true }
+semver = { version = "=1.0.28", optional = true }
+sha2 = { version = "=0.10.9", optional = true }
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std", "fast", "zeroize"], optional = true }
+zip = { version = "=2.4.2", default-features = false, features = ["deflate-flate2", "flate2"], optional = true }
+tar = { version = "=0.4.46", default-features = false, optional = true }
+flate2 = { version = "=1.1.9", default-features = false, features = ["rust_backend"], optional = true }
+
+[[example]]
+name = "updater-tool"
+required-features = ["updater"]
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Time", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Time", "Win32_System_Threading", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_Storage_FileSystem", "Win32_Graphics_Gdi", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
 libc = { workspace = true, optional = true }
 
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+libc = { workspace = true, optional = true }

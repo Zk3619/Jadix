@@ -31,6 +31,8 @@ With `markdown`, `Document::markdown_with_raw_html(source, false)` displays raw 
 
 ## Documentation
 
+`syntax::SyntaxWorker` schedules immutable snapshots on a background thread with one replaceable pending job. With `syntax`, edits resume from a line checkpoint before the changed text; an unchanged suffix is reused only when both parser and highlight states match. Byte-identical snapshots reuse all colors while publishing the new revision. Language/theme changes parse from the beginning. Each worker retains one highlighted snapshot, sparse checkpoints spaced at least 4 KiB apart, and an additional checkpoint before the final line for streaming appends (at most 514 checkpoints under the 2 MiB source limit). Lines above 64 KiB or documents above 2 MiB return uncolored text and clear reuse. Cancellation discards obsolete results without waiting for the current parse. Source comparison and annotation copying remain linear; retained parser state sizes depend on grammar nesting, and there is no parser time deadline.
+
 [Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers application setup, platform integration, configuration, and API usage.
 
 ## License

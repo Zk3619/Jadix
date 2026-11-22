@@ -122,6 +122,130 @@ fn layer_callback_sees_phase_not_handle() {
     clear_overlay_stack();
 }
 
+#[test]
+fn modal_close_restores_live_descendant_focus_before_cleanup_and_preserves_external_focus() {
+    use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+    use crate::utils::roving::{focus_by_id, focus_id_only, is_restored_focus};
+    use std::{cell::RefCell, rc::Rc};
+    clear_overlay_stack();
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    let (_owner, ()) = create_root(|| {
+        let focus = use_signal("__jadix_button_focus_id", String::new);
+        let visible = use_signal("__jadix_focus_visible", || false);
+        let overlay = ModalOverlayOpts::from_content_parts(None, None, true, None);
+        let opts = ViewportModalLayerOpts::dialog_fade();
+        let open = Signal::new(true);
+        focus_by_id("modal-return-trigger");
+        *live.borrow_mut() = viewport_modal_layer("vm-focus-return", open, &overlay, opts, |_| {
+            Some(Element::new())
+        });
+        let mut found = false;
+        crate::app::runtime::try_update_element_by_template_id(
+            "vm-focus-return__focus_return_stage",
+            |stage| {
+                let mut late = Element::new();
+                late.focusable = true;
+                late.focus_id = Some("modal-late-item".into());
+                stage.children.push(late);
+                found = true;
+                crate::core::tree::LayoutStatus::Clean
+            },
+        );
+        assert!(found);
+        focus_id_only("modal-late-item");
+        open.set(false);
+        assert_eq!(focus.peek(), "modal-return-trigger");
+        assert!(visible.peek());
+        assert!(is_restored_focus("modal-return-trigger"));
+        let _ = viewport_modal_layer("vm-focus-return", open, &overlay, opts, |_| {
+            assert_eq!(
+                focus.peek(),
+                "modal-return-trigger",
+                "restore precedes body cleanup"
+            );
+            None
+        });
+        // Each newly opened modal owns its original return target, even if its
+        // body is rebuilt while a nested modal has focus.
+        open.set(true);
+        *live.borrow_mut() = viewport_modal_layer("vm-focus-return", open, &overlay, opts, |_| {
+            let mut item = Element::new();
+            item.focusable = true;
+            item.focus_id = Some("modal-parent-item".into());
+            Some(item)
+        });
+        focus_by_id("modal-parent-item");
+        let nested_open = Signal::new(true);
+        let mut nested = Element::new();
+        nested.focusable = true;
+        nested.focus_id = Some("modal-nested-item".into());
+        let _ = viewport_modal_layer("vm-focus-nested", nested_open, &overlay, opts, |_| {
+            Some(nested)
+        });
+        focus_by_id("modal-nested-item");
+        nested_open.set(false);
+        assert_eq!(focus.peek(), "modal-parent-item");
+        open.set(false);
+        assert_eq!(focus.peek(), "modal-return-trigger");
+        open.set(true);
+        focus_id_only("application-editor");
+        open.set(false);
+        assert_eq!(focus.peek(), "application-editor");
+    });
+    clear_test_reconcile_root();
+    clear_overlay_stack();
+}
+
+#[test]
+fn retained_modal_focus_return_is_consumed_once_and_preserves_pointer_modality() {
+    use crate::utils::roving::{focus_id_only, is_restored_focus};
+    clear_overlay_stack();
+    create_root(|| {
+        let focus = use_signal("__jadix_button_focus_id", String::new);
+        let visible = use_signal("__jadix_focus_visible", || false);
+        let open = Signal::new(false);
+        let overlay = ModalOverlayOpts::from_content_parts(None, None, true, None);
+        let opts = ViewportModalLayerOpts::dialog_fade();
+        let mut item = Element::new();
+        item.focusable = true;
+        item.focus_id = Some("retained-modal-item".into());
+        focus_id_only("retained-modal-trigger");
+        let _ = retained_viewport_modal_layer(
+            "vm-retained-focus",
+            open,
+            &overlay,
+            opts,
+            Element::new(),
+        );
+        assert!(!is_restored_focus("retained-modal-trigger"));
+        open.set(true);
+        let _ = retained_viewport_modal_layer("vm-retained-focus", open, &overlay, opts, item);
+        focus_id_only("retained-modal-item");
+        open.set(false);
+        let _ = retained_viewport_modal_layer(
+            "vm-retained-focus",
+            open,
+            &overlay,
+            opts,
+            Element::new(),
+        );
+        assert_eq!(focus.peek(), "retained-modal-trigger");
+        assert!(!visible.peek());
+        assert!(is_restored_focus("retained-modal-trigger"));
+        focus_id_only("retained-modal-item");
+        let _ = retained_viewport_modal_layer(
+            "vm-retained-focus",
+            open,
+            &overlay,
+            opts,
+            Element::new(),
+        );
+        assert_eq!(focus.peek(), "retained-modal-item");
+    });
+    clear_overlay_stack();
+}
+
 #[cfg(feature = "animation-base")]
 fn find_tid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
     if el.template_id.as_deref() == Some(want) {

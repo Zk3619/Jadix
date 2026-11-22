@@ -1,4 +1,37 @@
 use super::*;
+
+#[cfg(feature = "document-editing")]
+#[test]
+fn structured_fragment_splice_preserves_unicode_styles_and_block_boundaries() {
+    let original = Document::rich_text([RichTextBlock::paragraph([RichTextSpan::styled(
+        "left中right",
+        DocumentInlineStyle {
+            italic: true,
+            ..Default::default()
+        },
+    )])]);
+    let fragment = Document::from_html_fragment("<b>新</b><h2>标题</h2>").unwrap();
+    let pasted = original.replace_fragment(4..7, &fragment).unwrap();
+    assert_eq!(pasted.source().text(), "left新\n标题right");
+    assert_eq!(pasted.blocks()[1].kind, DocumentBlockKind::Heading(2));
+    assert!(pasted.blocks()[0]
+        .inlines
+        .iter()
+        .any(|inline| inline.text == "新" && inline.style.bold && !inline.style.italic));
+    assert!(pasted.blocks()[1]
+        .inlines
+        .iter()
+        .any(|inline| inline.text == "right" && inline.style.italic));
+    assert_eq!(
+        original.replace_fragment(5..7, &fragment).unwrap_err(),
+        DocumentEditError::NotCharBoundary
+    );
+    let deleted = original
+        .replace_fragment(4..7, &Document::rich_text([]))
+        .unwrap();
+    assert_eq!(deleted.source().text(), "leftright");
+    assert_eq!(original.source().text(), "left中right");
+}
 #[test]
 fn rich_atomic_blocks_keep_multiline_source_and_surrounding_paragraphs() {
     let document = Document::rich_text([

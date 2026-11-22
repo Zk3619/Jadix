@@ -106,6 +106,9 @@ pub struct EnvironmentSnapshot {
     /// currently leaves this at 1.0; it does not read Windows text-size scaling.
     pub font_scale: f32,
     pub lifecycle: Lifecycle,
+    /// Completed system sleep/resume cycles observed by this root's host.
+    #[serde(default)]
+    pub wake_count: u64,
 }
 impl Default for EnvironmentSnapshot {
     /// Deterministic fallback, not a claim about the machine's settings.
@@ -119,6 +122,7 @@ impl Default for EnvironmentSnapshot {
             reduced_motion: None,
             font_scale: 1.0,
             lifecycle: Lifecycle::Active,
+            wake_count: 0,
         }
     }
 }
@@ -337,15 +341,20 @@ impl Environment {
 ))]
 #[path = "environment_linux.rs"]
 mod linux;
+#[cfg(all(target_os = "macos", feature = "system-environment"))]
+#[path = "environment_macos.rs"]
+mod macos;
 #[path = "environment_watch.rs"]
 mod watch;
 #[cfg(all(windows, feature = "system-environment"))]
 #[path = "environment_windows.rs"]
 mod windows;
 pub use watch::SystemEnvironmentWatcher;
-/// Read the current OS preferences. Implemented for Windows and Linux;
+/// Read the current OS preferences. Implemented for Windows, macOS and Linux;
 /// other targets/configurations explicitly return Unsupported.
 pub fn system_snapshot() -> io::Result<EnvironmentSnapshot> {
+    #[cfg(all(target_os = "macos", feature = "system-environment"))]
+    { macos::snapshot() }
     #[cfg(all(windows, feature = "system-environment"))]
     {
         windows::snapshot()
@@ -359,7 +368,7 @@ pub fn system_snapshot() -> io::Result<EnvironmentSnapshot> {
         linux::snapshot()
     }
     #[cfg(not(all(
-        any(windows, all(target_os = "linux", not(target_env = "ohos"))),
+        any(windows, target_os = "macos", all(target_os = "linux", not(target_env = "ohos"))),
         feature = "system-environment"
     )))]
     {

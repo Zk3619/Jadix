@@ -55,10 +55,32 @@ fn enabled_navigation_preserves_indices_and_excludes_disabled_activation() {
     }
     assert!(take(id, 0).is_none());
     assert!(take(id, 1).is_some());
+    for (i, (top, height)) in [
+        (0.0, 20.0),
+        (20.0, 30.0),
+        (50.0, 70.0),
+        (120.0, 40.0),
+        (160.0, 80.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        update_bounds(id, i, [0.0, top, 100.0, height]);
+    }
+    assert_eq!(page_enabled(id, 1, 100.0, true), Some(3));
+    assert_eq!(page_enabled(id, 3, 100.0, false), Some(1));
+    assert_eq!(
+        page_enabled(id, 3, 100.0, true),
+        Some(3),
+        "pages never wrap"
+    );
+    assert_eq!(page_enabled(id, usize::MAX, 100.0, false), Some(3));
+    assert_eq!(page_enabled(id, 1, f32::NAN, true), Some(3));
     reset(id);
     push_enabled(id, Rc::new(|| {}), false);
     assert_eq!(enabled_edge(id, false), None);
     assert_eq!(move_enabled(id, 0, 1), None);
+    assert_eq!(page_enabled(id, 0, 100.0, true), None);
     assert!(take(id, 0).is_none());
     reset(id);
     assert_eq!(move_enabled(id, usize::MAX, -1), None);

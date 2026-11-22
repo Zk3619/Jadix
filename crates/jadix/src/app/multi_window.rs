@@ -221,9 +221,11 @@ impl WindowHandle {
         Ok(())
     }
 
-    /// Native move; invoke directly from a left-button press on a title drag region.
+    /// Native move; invoke on the UI thread directly from a left-button press on a title drag region.
     pub fn start_drag(&self) -> Result<(), String> {
-        self.upgrade()?.drag_window().map_err(|e| e.to_string())
+        let window = self.upgrade()?;
+        super::pointer_events::begin_native_pointer_handoff();
+        window.drag_window().map_err(|e| e.to_string())
     }
 
     /// Physical pointer distance before a custom title region starts moving.
@@ -379,7 +381,7 @@ impl WindowHandle {
         Ok(self.upgrade()?.is_resizable())
     }
 
-    /// Call from a pointer-down handler on a custom resize border.
+    /// Call on the UI thread from a pointer-down handler on a custom resize border.
     /// Rejects non-resizable windows before asking the OS to begin a resize.
     pub fn start_resize(&self, direction: winit::window::ResizeDirection) -> Result<(), String> {
         let window = self.upgrade()?;
@@ -389,6 +391,7 @@ impl WindowHandle {
         if window.is_maximized() || window.fullscreen().is_some() {
             return Err("maximized or fullscreen windows cannot be resized by their border".into());
         }
+        super::pointer_events::begin_native_pointer_handoff();
         window
             .start_window_resize(direction)
             .map_err(|e| e.to_string())

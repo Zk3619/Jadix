@@ -1,6 +1,48 @@
 use super::*;
 
 #[test]
+fn inline_changes_keep_absolute_graphemes_and_line_endings() {
+    let original = "same\r\n\te\u{301} 👩‍💻甲\r\nkeep\nremoved\n";
+    let modified = "same\r\n\to\u{308} 👩‍🚀乙\r\nkeep\n";
+    let diff = DiffDocument::new(original, modified);
+    let old: Vec<_> = diff
+        .original_inline_changes()
+        .iter()
+        .map(|r| &original[r.clone()])
+        .collect();
+    let new: Vec<_> = diff
+        .modified_inline_changes()
+        .iter()
+        .map(|r| &modified[r.clone()])
+        .collect();
+    assert_eq!(old, ["e\u{301}", "👩‍💻甲"]);
+    assert_eq!(new, ["o\u{308}", "👩‍🚀乙"]);
+    assert!(!diff.has_coarse_inline_changes());
+    let inserted = DiffDocument::new("ab\r\n", "axb\r\n");
+    assert!(inserted.original_inline_changes().is_empty());
+    assert_eq!(inserted.modified_inline_changes(), &[1..2]);
+    let removed = DiffDocument::new("axb", "ab");
+    assert_eq!(removed.original_inline_changes(), &[1..2]);
+    assert!(removed.modified_inline_changes().is_empty());
+    let endings = DiffDocument::new("a\r\n", "a\n");
+    assert!(endings.original_inline_changes().is_empty());
+    assert!(endings.modified_inline_changes().is_empty());
+}
+
+#[test]
+fn oversized_inline_pairs_fall_back_without_including_crlf() {
+    let original = format!("{}\r\n", "🙂".repeat(3_000));
+    let modified = format!("{}\r\n", "👩".repeat(3_000));
+    let diff = DiffDocument::new(original.clone(), modified.clone());
+    assert!(diff.has_coarse_inline_changes());
+    assert_eq!(diff.original_inline_changes(), &[0..original.len() - 2]);
+    assert_eq!(diff.modified_inline_changes(), &[0..modified.len() - 2]);
+    assert_eq!(diff.rows(DiffMode::Split).len(), 1);
+    assert_eq!(diff.original().text(), original);
+    assert_eq!(diff.modified().text(), modified);
+}
+
+#[test]
 fn unified_and_split_keep_source_line_coordinates() {
     let diff = DiffDocument::new("a\nb\nc\n", "a\nx\ny\nc\n");
     assert_eq!(diff.rows(DiffMode::Unified).len(), 5);

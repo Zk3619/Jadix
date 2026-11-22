@@ -1,4 +1,4 @@
-use super::{wheel_delta_for_scroll_range, wheel_delta_logical_px, WHEEL_LINE_HEIGHT_PX};
+use super::{WHEEL_LINE_HEIGHT_PX, wheel_delta_for_scroll_range, wheel_delta_logical_px};
 use winit::dpi::PhysicalPosition;
 use winit::event::MouseScrollDelta;
 

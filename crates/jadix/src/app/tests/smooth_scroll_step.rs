@@ -1,4 +1,4 @@
-use super::{snap_scroll_offset_to_device_px, wheel_scroll_target, SmoothScrollAxis};
+use super::{SmoothScrollAxis, snap_scroll_offset_to_device_px, wheel_scroll_target};
 
 #[test]
 fn gentle_wheel_notch_accelerates_from_rest() {

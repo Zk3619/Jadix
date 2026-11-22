@@ -2,6 +2,39 @@ use super::*;
 use crate::core::tree::Element;
 
 #[test]
+fn semantic_link_exposes_only_live_actions_across_disable_enable() {
+    use std::{cell::Cell, rc::Rc};
+    let calls = Rc::new(Cell::new(0));
+    let mut root: Element = crate::primitives::link("a11y-link")
+        .text("Docs")
+        .accessibility_label("打开文档")
+        .on_activate({
+            let calls = calls.clone();
+            move || calls.set(calls.get() + 1)
+        })
+        .into();
+    let target = node_id_for_key("a11y-link");
+    let request = ActionRequest {
+        action: Action::Click,
+        target_tree: TreeId::ROOT,
+        target_node: target,
+        data: None,
+    };
+    for disabled in [false, true, false] {
+        crate::primitives::apply_disabled(&mut root, disabled);
+        let update = tree_update_from_elements(&root, None);
+        let node = &update.nodes.iter().find(|(id, _)| *id == target).unwrap().1;
+        assert_eq!(node.role(), Role::Link);
+        assert_eq!(node.label(), Some("打开文档"));
+        assert_eq!(node.is_disabled(), disabled);
+        assert_eq!(node.supports_action(Action::Click), !disabled);
+        assert_eq!(node.supports_action(Action::Focus), !disabled);
+        assert_eq!(dispatch_accesskit_action(&root, &request), !disabled);
+    }
+    assert_eq!(calls.get(), 2);
+}
+
+#[test]
 fn numeric_value_actions_require_a_live_enabled_handler_and_finite_payload() {
     use std::{cell::Cell, rc::Rc};
     let calls = Rc::new(Cell::new(0));
@@ -16,15 +49,13 @@ fn numeric_value_actions_require_a_live_enabled_handler_and_finite_payload() {
     let mut root = Element::new().child(control);
     let update = tree_update_from_elements(&root, None);
     let target = node_id_for_key("numeric-control");
-    assert!(
-        update
-            .nodes
-            .iter()
-            .find(|(id, _)| *id == target)
-            .unwrap()
-            .1
-            .supports_action(Action::SetValue)
-    );
+    assert!(update
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == target)
+        .unwrap()
+        .1
+        .supports_action(Action::SetValue));
     let request = |data| ActionRequest {
         action: Action::SetValue,
         target_tree: TreeId::ROOT,
@@ -50,15 +81,13 @@ fn numeric_value_actions_require_a_live_enabled_handler_and_finite_payload() {
             &request(Some(ActionData::NumericValue(73.0)))
         ));
         let update = tree_update_from_elements(&root, None);
-        assert!(
-            !update
-                .nodes
-                .iter()
-                .find(|(id, _)| *id == target)
-                .unwrap()
-                .1
-                .supports_action(Action::SetValue)
-        );
+        assert!(!update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == target)
+            .unwrap()
+            .1
+            .supports_action(Action::SetValue));
         root.children[0].attrs.remove(disabled);
     }
     root.children.clear();
@@ -398,53 +427,143 @@ fn parses_menu_listbox_and_menubar_roles() {
 }
 
 #[test]
+fn virtual_set_semantics_parse_aria_and_clear_on_rebuild() {
+    let mut el = Element::new().focus_id("virtual-set");
+    let for_map = HashMap::new();
+    for role in ["option", "listboxoption", "list_box_option"] {
+        el.set_attr("accesskit_role", role);
+        assert_eq!(build_node(&el, &for_map).role(), Role::ListBoxOption);
+    }
+    for (autocomplete, expected) in [
+        ("inline", Some(accesskit::AutoComplete::Inline)),
+        ("list", Some(accesskit::AutoComplete::List)),
+        ("both", Some(accesskit::AutoComplete::Both)),
+        ("none", None),
+        ("invalid", None),
+    ] {
+        el.set_attr("aria-autocomplete", autocomplete);
+        assert_eq!(build_node(&el, &for_map).auto_complete(), expected);
+    }
+    for (position, size, expected_position, expected_size) in [
+        ("1", "5000", Some(0), Some(5000)),
+        ("5000", "5000", Some(4999), Some(5000)),
+        ("0", "0", None, None),
+        ("-1", "-1", None, None),
+        ("4", "3", None, Some(3)),
+        ("invalid", "invalid", None, None),
+        (
+            "999999999999999999999999999999",
+            "999999999999999999999999999999",
+            None,
+            None,
+        ),
+    ] {
+        el.set_attr("aria-posinset", position);
+        el.set_attr("aria-setsize", size);
+        let node = build_node(&el, &for_map);
+        assert_eq!(node.position_in_set(), expected_position);
+        assert_eq!(node.size_of_set(), expected_size);
+    }
+    el.attrs.remove("aria-posinset");
+    el.attrs.remove("aria-setsize");
+    el.set_attr("aria-autocomplete", "list");
+    el.set_attr("aria-busy", "true");
+    el.set_attr("accesskit_size_of_set", "0");
+    let before = tree_update_from_elements(&el, None);
+    let id = node_id_for_key("virtual-set");
+    let before = &before.nodes.iter().find(|(key, _)| *key == id).unwrap().1;
+    assert!(before.is_busy());
+    assert_eq!(before.size_of_set(), Some(0));
+    for busy in ["false", "invalid"] {
+        el.set_attr("aria-busy", busy);
+        el.attrs.remove("aria-autocomplete");
+        el.attrs.remove("accesskit_size_of_set");
+        let after = tree_update_from_elements(&el, None);
+        let after = &after.nodes.iter().find(|(key, _)| *key == id).unwrap().1;
+        assert!(!after.is_busy());
+        assert_eq!(after.auto_complete(), None);
+        assert_eq!(after.size_of_set(), None);
+        assert_eq!(after.position_in_set(), None);
+    }
+}
+
+#[test]
 fn accessibility_relations_resolve_to_unique_accesskit_nodes() {
-    let mut control = Element::new().focus_id("relation-control");
-    control.attrs.insert("id".into(), "combo".into());
-    control
-        .attrs
-        .insert("aria-activedescendant".into(), "option-b".into());
-    control
-        .attrs
-        .insert("aria-controls".into(), "popup missing".into());
-    control
-        .attrs
-        .insert("accesskit_role".into(), "combobox".into());
+    let (_owner, ()) = crate::core::reactivity::create_root(|| {
+        let value = use_signal(&input_value_signal_key("relation-control"), String::new);
+        value.set("Beta query".into());
+        let mut control = Element::new().focus_id("input:relation-control");
+        control.attrs.insert("aria-expanded".into(), "true".into());
+        control.attrs.insert("aria-multiselectable".into(), "false".into());
+        control.attrs.insert("id".into(), "combo".into());
+        control
+            .attrs
+            .insert("aria-activedescendant".into(), "option-b".into());
+        control
+            .attrs
+            .insert("aria-controls".into(), "popup missing".into());
+        control
+            .attrs
+            .insert("accesskit_role".into(), "combobox".into());
 
-    let mut option_a = Element::new().focus_id("relation-option-a");
-    option_a.attrs.insert("id".into(), "option-a".into());
-    option_a
-        .attrs
-        .insert("accesskit_role".into(), "listboxoption".into());
-    let mut option_b = Element::new().focus_id("relation-option-b");
-    option_b.attrs.insert("id".into(), "option-b".into());
-    option_b
-        .attrs
-        .insert("accesskit_role".into(), "listboxoption".into());
-    let mut popup = Element::new().focus_id("relation-popup");
-    popup.attrs.insert("id".into(), "popup".into());
-    popup
-        .attrs
-        .insert("accesskit_role".into(), "listbox".into());
+        let mut option_a = Element::new().focus_id("relation-option-a");
+        option_a.attrs.insert("id".into(), "option-a".into());
+        option_a
+            .attrs
+            .insert("accesskit_role".into(), "listboxoption".into());
+        option_a.attrs.insert("aria-disabled".into(), "true".into());
+        option_a.attrs.insert("aria-multiselectable".into(), "invalid".into());
+        let mut option_b = Element::new().focus_id("relation-option-b");
+        option_b.attrs.insert("id".into(), "option-b".into());
+        option_b
+            .attrs
+            .insert("aria-selected".into(), "false".into());
+        option_b
+            .attrs
+            .insert("accesskit_role".into(), "listboxoption".into());
+        let mut popup = Element::new().focus_id("relation-popup");
+        popup.attrs.insert("id".into(), "popup".into());
+        popup.attrs.insert("aria-multiselectable".into(), "true".into());
+        popup
+            .attrs
+            .insert("accesskit_role".into(), "listbox".into());
 
-    let root = Element::new()
-        .child(control)
-        .child(option_a)
-        .child(option_b)
-        .child(popup);
-    let update = tree_update_from_elements(&root, None);
-    let control_id = node_id_for_key("relation-control");
-    let option_b_id = node_id_for_key("relation-option-b");
-    let popup_id = node_id_for_key("relation-popup");
-    let control_node = update
-        .nodes
-        .iter()
-        .find(|(id, _)| *id == control_id)
-        .map(|(_, node)| node)
-        .expect("control node");
+        let root = Element::new()
+            .child(control)
+            .child(option_a)
+            .child(option_b)
+            .child(popup);
+        let update = tree_update_from_elements(&root, None);
+        let control_id = node_id_for_key("input:relation-control");
+        let option_b_id = node_id_for_key("relation-option-b");
+        let popup_id = node_id_for_key("relation-popup");
+        let control_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == control_id)
+            .map(|(_, node)| node)
+            .expect("control node");
 
-    assert_eq!(control_node.active_descendant(), Some(option_b_id));
-    assert_eq!(control_node.controls(), &[popup_id]);
+        assert_eq!(control_node.active_descendant(), Some(option_b_id));
+        assert_eq!(control_node.controls(), &[popup_id]);
+        assert_eq!(control_node.is_expanded(), Some(true));
+        assert!(!control_node.is_multiselectable());
+        assert!(update.nodes.iter().find(|(id, _)| *id == popup_id).unwrap().1.is_multiselectable());
+        assert_eq!(control_node.value(), Some("Beta query"));
+        let option = &update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == option_b_id)
+            .unwrap()
+            .1;
+        assert_eq!(option.is_selected(), Some(false));
+        let disabled = &update.nodes.iter()
+            .find(|(id, _)| *id == node_id_for_key("relation-option-a"))
+            .unwrap().1;
+        assert!(disabled.is_disabled());
+        assert!(!disabled.is_multiselectable());
+        assert!(!disabled.supports_action(Action::Click));
+    });
 }
 
 #[test]
@@ -874,4 +993,61 @@ fn progress_indicator_ignores_nonfinite_numeric_values() {
             .1;
         assert_eq!(node.numeric_value(), None);
     }
+}
+
+#[test]
+fn custom_checkable_controls_expose_checked_and_readonly_semantics() {
+    for (role, checked, expected) in [
+        ("checkbox", "true", Some(Toggled::True)),
+        ("checkbox", "false", Some(Toggled::False)),
+        ("checkbox", "mixed", Some(Toggled::Mixed)),
+        ("switch", "true", Some(Toggled::True)),
+        ("radio", "false", Some(Toggled::False)),
+        ("radio", "mixed", None),
+        ("tab", "true", None),
+    ] {
+        for readonly in ["true", "false"] {
+            let mut control = Element::new();
+            control.set_attr("accesskit_role", role);
+            control.set_attr("aria-label", "Task");
+            control.set_attr("aria-checked", checked);
+            control.set_attr("aria-readonly", readonly);
+            let update = tree_update_from_elements(&Element::new().child(control), None);
+            let node = &update
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some("Task"))
+                .unwrap()
+                .1;
+            assert_eq!(node.toggled(), expected, "{role} {checked}");
+            assert_eq!(node.is_read_only(), readonly == "true");
+            assert!(!node.supports_action(Action::Click));
+        }
+    }
+}
+
+#[test]
+fn hidden_ancestors_and_readonly_semantics_reject_stale_actions() {
+    use std::{cell::Cell, rc::Rc};
+    use jadix_core::presentation::accessibility::Accessibility;
+    let calls = Rc::new(Cell::new(0));
+    let observed = calls.clone();
+    let child = Element::new().focus_id("stale-ax-target").on_click(move || observed.set(observed.get() + 1));
+    let mut root = Element::new().child(child);
+    let request = ActionRequest { action: Action::Click, target_tree: TreeId::ROOT,
+        target_node: node_id_for_key("stale-ax-target"), data: None };
+    assert!(dispatch_accesskit_action(&root, &request));
+    for attr in ["aria-hidden", "aria-disabled", "aria-readonly"] {
+        root.children[0].set_attr(attr, "true");
+        assert!(!dispatch_accesskit_action(&root, &request));
+        root.children[0].attrs.remove(attr);
+    }
+    Accessibility { read_only: true, ..Default::default() }.write_attributes(&mut root.children[0].attrs);
+    assert!(!dispatch_accesskit_action(&root, &request));
+    root.children[0].attrs.remove("jadix-accessibility");
+    root.children[0].attrs.remove("aria-readonly");
+    root.set_attr("aria-hidden", "true");
+    assert!(!dispatch_accesskit_action(&root, &request));
+    assert!(!tree_update_from_elements(&root, None).nodes.iter().any(|(id, _)| *id == request.target_node));
+    assert_eq!(calls.get(), 1);
 }

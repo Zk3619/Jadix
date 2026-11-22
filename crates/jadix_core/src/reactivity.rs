@@ -32,6 +32,7 @@ use std::sync::OnceLock;
 thread_local! {
     static RUNTIME: RefCell<Rc<Runtime>> = RefCell::new(Runtime::new());
     static APP_QUIT_HANDLERS: RefCell<HashMap<usize, Rc<RefCell<AppQuitHandler>>>> = RefCell::new(HashMap::new());
+    static QUIT_REQUEST_HANDLERS: RefCell<std::collections::BTreeMap<usize, Rc<RefCell<Box<dyn FnMut() -> bool>>>>> = RefCell::default();
     /// Non-zero while a secondary window is the active input/render scope.
     /// Remaps a small set of process-global `__jadix_*` keys so focus / IME stay per-window.
     static SIGNAL_KEY_SCOPE: Cell<u64> = const { Cell::new(0) };
@@ -39,8 +40,56 @@ thread_local! {
 
 pub type AppQuitFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
 pub type AppQuitHandler = Box<dyn FnMut() -> AppQuitFuture + 'static>;
+pub const APP_QUIT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
 
 static NEXT_APP_QUIT_HANDLER_ID: AtomicUsize = AtomicUsize::new(1);
+
+/// Register an application exit decision. Returning `false` keeps the application alive.
+/// Decisions run before cleanup or native teardown, in registration order. Owner disposal
+/// unregisters the decision; a rejected request leaves all cleanup handlers available.
+pub fn on_quit_request(handler: impl FnMut() -> bool + 'static) {
+    let id = NEXT_APP_QUIT_HANDLER_ID.fetch_add(1, Ordering::Relaxed);
+    QUIT_REQUEST_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().insert(id, Rc::new(RefCell::new(Box::new(handler))));
+    });
+    if current_owner().is_some() {
+        on_cleanup(move || { QUIT_REQUEST_HANDLERS.with(|handlers| { handlers.borrow_mut().remove(&id); }); });
+    }
+}
+
+/// Ask application policy before accepting a host close request. Reentrant requests are
+/// rejected, and callbacks can safely dispose owners or register another decision.
+pub fn app_quit_requested() -> bool {
+    let handlers = QUIT_REQUEST_HANDLERS.with(|handlers| handlers.borrow().values().cloned().collect::<Vec<_>>());
+    handlers.into_iter().all(|handler| handler.try_borrow_mut().is_ok_and(|mut handler| handler()))
+}
+
+/// Event-loop driven shutdown shared by native hosts. No blocking wait is performed.
+#[derive(Default)]
+pub struct AppQuitCleanup {
+    started: bool,
+    futures: Vec<AppQuitFuture>,
+    deadline: Option<std::time::Instant>,
+}
+
+impl AppQuitCleanup {
+    pub fn begin(&mut self, now: std::time::Instant) -> bool {
+        if self.started { return true; }
+        if !app_quit_requested() { return false; }
+        self.started = true;
+        self.futures = take_app_quit_futures();
+        self.deadline = Some(now + APP_QUIT_TIMEOUT);
+        true
+    }
+
+    /// Returns true once cleanup completes or the shared 200 ms deadline expires.
+    pub fn poll(&mut self, now: std::time::Instant, waker: &std::task::Waker) -> bool {
+        if !self.started { return false; }
+        if self.deadline.is_none_or(|deadline| now >= deadline) || poll_app_quit_futures(&mut self.futures, waker) {
+            self.futures.clear(); self.deadline = None; true
+        } else { false }
+    }
+}
 
 /// Run asynchronous cleanup when the final application window quits.
 ///
@@ -77,10 +126,18 @@ pub fn take_app_quit_futures() -> Vec<AppQuitFuture> {
     })
 }
 
+/// Poll each remaining cleanup future once, removing completed work.
+pub fn poll_app_quit_futures(futures: &mut Vec<AppQuitFuture>, waker: &std::task::Waker) -> bool {
+    let mut context = std::task::Context::from_waker(waker);
+    futures.retain_mut(|future| future.as_mut().poll(&mut context).is_pending());
+    futures.is_empty()
+}
+
 /// Keys that must not be shared between the primary window and secondaries.
 const WINDOW_LOCAL_SIGNAL_KEYS: &[&str] = &[
     "__jadix_button_focus_id",
     "__jadix_focus_visible",
+    "__jadix_restored_focus_id",
     "__jadix_ime_active",
 ];
 
@@ -287,6 +344,8 @@ pub struct Runtime {
     isolated_discarded_read_count: Cell<usize>,
     /// Debug warn once per signal id for discarded isolated reads.
     isolated_discarded_warned: RefCell<HashSet<SignalId>>,
+    garbage_pending: Cell<bool>,
+    last_collection: Cell<std::time::Instant>,
 }
 
 impl Runtime {
@@ -327,6 +386,8 @@ impl Runtime {
             flushed_effects: RefCell::new(Vec::new()),
             isolated_discarded_read_count: Cell::new(0),
             isolated_discarded_warned: RefCell::new(HashSet::new()),
+            garbage_pending: Cell::new(false),
+            last_collection: Cell::new(std::time::Instant::now()),
         })
     }
 
@@ -475,11 +536,16 @@ fn owner_depth(rt: &Runtime, id: OwnerId) -> u32 {
 }
 
 fn dispose_owner(rt: &Runtime, id: OwnerId) {
+    rt.garbage_pending.set(true);
     *rt.batch_depth.borrow_mut() += 1;
     let _guard = BatchGuard;
     // Iterative teardown: Gallery mounts create tall owner trees; recursive dispose
     // STATUS_STACK_OVERFLOW on Windows default stacks.
+    // Descendant parents are retired before their cleanups run. Recovery must
+    // target the surviving ancestor of the entire subtree, not a removed node.
+    let recovery_owner = rt.owners.borrow().get(&id).and_then(|node| node.parent);
     let mut stack = vec![id];
+    let mut failure = None;
     while let Some(id) = stack.pop() {
         let Some(mut node) = rt.owners.borrow_mut().remove(&id) else {
             continue;
@@ -492,7 +558,9 @@ fn dispose_owner(rt: &Runtime, id: OwnerId) {
         }
 
         while let Some(cleanup) = node.cleanups.pop() {
-            cleanup();
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(cleanup)) {
+                if failure.is_none() { failure = Some(payload); }
+            }
         }
 
         stack.extend(std::mem::take(&mut node.children));
@@ -523,6 +591,14 @@ fn dispose_owner(rt: &Runtime, id: OwnerId) {
             *rt.root_owner.borrow_mut() = None;
         }
     }
+    // Finish releasing the entire graph even when one destructor fails. During
+    // unwinding the original panic owns recovery; never cause a double panic.
+    if let Some(payload) = failure {
+        if !std::thread::panicking() {
+            if let Some(owner) = recovery_owner { crate::error_boundary::report_panic(owner, payload); }
+            else { std::panic::resume_unwind(payload); }
+        }
+    }
 }
 
 fn dispose_owner_children(rt: &Runtime, id: OwnerId) {
@@ -536,9 +612,13 @@ fn dispose_owner_children(rt: &Runtime, id: OwnerId) {
         .get_mut(&id)
         .map(|n| std::mem::take(&mut n.children))
         .unwrap_or_default();
+    let mut failure = None;
     for child in children {
-        dispose_owner(rt, child);
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| dispose_owner(rt, child))) {
+            if failure.is_none() { failure = Some(payload); }
+        }
     }
+    if let Some(payload) = failure { std::panic::resume_unwind(payload); }
 }
 
 fn dispose_effect_inner(rt: &Runtime, id: EffectId, also_dispose_owner: bool) {
@@ -606,12 +686,38 @@ fn track_signal_read(rt: &Runtime, signal_id: SignalId) {
     }
 }
 
+// Restore observer context even when application code unwinds into a boundary.
+struct RuntimeFrame<'a> {
+    rt: &'a Runtime,
+    effect: Option<EffectId>, memo: Option<MemoId>, owner: Option<OwnerId>,
+    dependencies: usize, depth: usize,
+}
+impl<'a> RuntimeFrame<'a> {
+    fn new(rt: &'a Runtime) -> Self {
+        Self { rt, effect: *rt.current_effect.borrow(), memo: *rt.current_memo.borrow(),
+            owner: *rt.current_owner.borrow(), dependencies: rt.dep_stack.borrow().len(),
+            depth: rt.effect_run_depth.get() }
+    }
+}
+impl Drop for RuntimeFrame<'_> {
+    fn drop(&mut self) {
+        *self.rt.current_effect.borrow_mut() = self.effect;
+        *self.rt.current_memo.borrow_mut() = self.memo;
+        *self.rt.current_owner.borrow_mut() = self.owner;
+        self.rt.dep_stack.borrow_mut().truncate(self.dependencies);
+        self.rt.effect_run_depth.set(self.depth);
+    }
+}
+struct RunningFlag<'a>(&'a Cell<bool>);
+impl Drop for RunningFlag<'_> { fn drop(&mut self) { self.0.set(false); } }
+
 fn run_effect(rt: &Runtime, effect_id: EffectId) {
     // Writing a subscribed signal from inside this body notifies us. Re-entering
     // would `borrow_mut` the same `FnMut` (ComboboxInput label sync).
     if *rt.current_effect.borrow() == Some(effect_id) {
         return;
     }
+    let frame = RuntimeFrame::new(rt);
     let depth = rt.effect_run_depth.get() + 1;
     rt.effect_run_depth.set(depth);
     if depth > 512 {
@@ -632,6 +738,7 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
         return;
     };
     let (owner, phase, effect_fn) = state;
+    if crate::error_boundary::owner_failed(owner) { return; }
     // Mount-time `run_effect` (create) is not a flush; only record `flush_pending` executions.
     if rt.flushing_pending.get() {
         rt.flushed_effects.borrow_mut().push((effect_id, phase));
@@ -639,6 +746,7 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
 
     // Solid: dispose previous child scopes before re-running.
     dispose_owner_children(rt, owner);
+    if crate::error_boundary::owner_failed(owner) { return; }
     if let Some(node) = rt.owners.borrow_mut().get_mut(&owner) {
         node.binding_slots.clear();
     }
@@ -659,11 +767,13 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
     let prev_effect = *rt.current_effect.borrow();
     let prev_owner = *rt.current_owner.borrow();
     *rt.current_effect.borrow_mut() = Some(effect_id);
+    *rt.current_memo.borrow_mut() = None;
     *rt.current_owner.borrow_mut() = Some(owner);
     let _window_scope = enter_owner_window_scope(rt, owner);
 
     // GPUI `#[stacksafe]` analog: only grow when remaining < 64 KiB.
-    with_ui_build_stack(|| (*effect_fn.borrow_mut())());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
+        with_ui_build_stack(|| (*effect_fn.borrow_mut())())));
 
     let new_deps = rt
         .dep_stack
@@ -687,8 +797,9 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
 
     *rt.current_effect.borrow_mut() = prev_effect;
     *rt.current_owner.borrow_mut() = prev_owner;
+    drop(frame);
+    if let Err(payload) = result { crate::error_boundary::report_panic(owner, payload); }
     flush_deferred_effects(rt);
-    rt.effect_run_depth.set(depth - 1);
 }
 
 fn flush_deferred_effects(rt: &Runtime) {
@@ -698,6 +809,7 @@ fn flush_deferred_effects(rt: &Runtime) {
         return;
     }
     rt.flushing_deferred.set(true);
+    let _running = RunningFlag(&rt.flushing_deferred);
     let mut rounds = 0usize;
     // Each id at most once per drain. `reactive_anchor` reconcile-miss used to
     // `schedule_effect` into this same Vec; with `flushing_deferred` true that
@@ -717,8 +829,12 @@ fn flush_deferred_effects(rt: &Runtime) {
             panic!("flush_deferred_effects exceeded 100k rounds — likely effect create loop");
         }
         ids.sort_by_key(|id| effect_phase_depth(rt, *id));
-        for id in ids {
-            run_effect(rt, id);
+        let mut ids = ids.into_iter();
+        while let Some(id) = ids.next() {
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_effect(rt, id))) {
+                rt.deferred_effects.borrow_mut().splice(0..0, ids);
+                std::panic::resume_unwind(payload);
+            }
         }
     }
     if rounds > 0 {
@@ -844,7 +960,8 @@ fn run_memo(rt: &Runtime, memo_id: MemoId) -> bool {
     else {
         return false;
     };
-    if !was_dirty {
+    let frame = RuntimeFrame::new(rt);
+    if !was_dirty || crate::error_boundary::owner_failed(owner) {
         return false;
     }
 
@@ -869,7 +986,7 @@ fn run_memo(rt: &Runtime, memo_id: MemoId) -> bool {
     *rt.current_effect.borrow_mut() = None;
     let _window_scope = enter_owner_window_scope(rt, owner);
 
-    let changed = (*compute.borrow_mut())();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (*compute.borrow_mut())()));
 
     let new_deps = rt.dep_stack.borrow_mut().pop().unwrap_or_default();
     rt.memo_deps.borrow_mut().insert(memo_id, new_deps);
@@ -883,6 +1000,8 @@ fn run_memo(rt: &Runtime, memo_id: MemoId) -> bool {
     *rt.current_owner.borrow_mut() = prev_owner;
     *rt.current_effect.borrow_mut() = prev_effect;
 
+    drop(frame);
+    let changed = match result { Ok(changed) => changed, Err(payload) => std::panic::resume_unwind(payload) };
     if changed {
         // A pull inside batch must notify just like a queued recomputation. Do
         // not flush here: the caller may still be collecting memo/effect deps.
@@ -963,6 +1082,7 @@ fn flush_pending(rt: &Runtime) {
         return;
     }
     rt.flushing_pending.set(true);
+    let _running = RunningFlag(&rt.flushing_pending);
     loop {
         let memo_chunk: Vec<MemoId> = {
             let mut q = rt.pending_memos.borrow_mut();
@@ -985,8 +1105,21 @@ fn flush_pending(rt: &Runtime) {
                     .map(|m| m.depth)
                     .unwrap_or(u32::MAX)
             });
-            for memo_id in ordered {
-                ensure_memo_fresh(rt, memo_id);
+            let mut ordered = ordered.into_iter();
+            while let Some(memo_id) = ordered.next() {
+                let owner = rt.memos.borrow().get(&memo_id).map(|memo| memo.owner);
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ensure_memo_fresh(rt, memo_id)));
+                if let Err(payload) = result {
+                    // Preserve unrelated work if no boundary accepts this failure.
+                    let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        if let Some(owner) = owner { crate::error_boundary::report_panic(owner, payload); }
+                        else { std::panic::resume_unwind(payload); }
+                    }));
+                    if let Err(payload) = handled {
+                        for pending in ordered { enqueue_pending_memo(rt, pending); }
+                        std::panic::resume_unwind(payload);
+                    }
+                }
             }
             // More memos may have been enqueued; continue loop.
             if !rt.pending_memos.borrow().is_empty() {
@@ -1005,9 +1138,7 @@ fn flush_pending(rt: &Runtime) {
                 }
                 drop(q);
                 drop(set);
-                for job in jobs {
-                    with_ui_build_stack(job);
-                }
+                run_deferred_jobs(rt, jobs);
                 continue;
             }
             let drained: Vec<EffectId> = q.drain(..).collect();
@@ -1036,8 +1167,13 @@ fn flush_pending(rt: &Runtime) {
                 .map(|e| e.depth)
                 .unwrap_or(u32::MAX)
         });
-        for effect_id in now {
-            run_effect(rt, effect_id);
+        let mut now = now.into_iter();
+        while let Some(effect_id) = now.next() {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_effect(rt, effect_id)));
+            if let Err(payload) = result {
+                for pending in now { enqueue_pending_effect(rt, pending); }
+                std::panic::resume_unwind(payload);
+            }
         }
         // Effects may have dirtied more memos / effects.
         if rt.pending_memos.borrow().is_empty() && rt.pending_effects.borrow().is_empty() {
@@ -1046,16 +1182,36 @@ fn flush_pending(rt: &Runtime) {
                 rt.flushing_pending.set(false);
                 return;
             }
-            for job in jobs {
-                with_ui_build_stack(job);
-            }
+            run_deferred_jobs(rt, jobs);
             // Deferred writes may enqueue more work — continue the loop.
         }
     }
 }
 
+/// Settle queued reactive work outside a batch or an in-flight observer.
+pub fn flush() {
+    let rt = RUNTIME.with(|slot| slot.borrow().clone());
+    if *rt.batch_depth.borrow() == 0 && rt.current_effect.borrow().is_none() {
+        flush_pending(&rt);
+    }
+}
+
+fn run_deferred_jobs(rt: &Runtime, jobs: Vec<Box<dyn FnOnce()>>) {
+    let mut jobs = jobs.into_iter();
+    while let Some(job) = jobs.next() {
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| with_ui_build_stack(job))) {
+            rt.deferred_fns.borrow_mut().splice(0..0, jobs);
+            std::panic::resume_unwind(payload);
+        }
+    }
+}
+
 fn enqueue_deferred_fn(rt: &Runtime, f: Box<dyn FnOnce()>) {
-    rt.deferred_fns.borrow_mut().push(f);
+    let owner = *rt.current_owner.borrow();
+    rt.deferred_fns.borrow_mut().push(Box::new(move || {
+        if let Some(owner) = owner { crate::error_boundary::run_owned_callback(owner, f); }
+        else { f(); }
+    }));
 }
 
 fn notify_signal_subscribers(rt: &Runtime, signal_id: SignalId) {
@@ -1241,6 +1397,46 @@ impl<T: Clone + 'static> Signal<T> {
             let typed = any_val.downcast_ref::<T>().expect("Signal type mismatch");
             f(typed)
         })
+    }
+
+    /// Borrow without cloning or subscribing to this signal. Reads of other
+    /// signals inside `f` retain their normal tracking behavior.
+    /// Panics if disposed, or if `f` mutably borrows this same signal.
+    pub fn with_untracked<R>(&self, f: impl FnOnce(&T) -> R) -> R {
+        RUNTIME.with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            let any_val_rc = rt
+                .signals
+                .borrow()
+                .get(&self.id)
+                .cloned()
+                .expect("Signal::with_untracked on disposed signal");
+            let any_val = any_val_rc.borrow();
+            f(any_val.downcast_ref::<T>().expect("Signal type mismatch"))
+        })
+    }
+
+    /// Mutate without cloning the old value or comparing it for equality, then
+    /// notify subscribers, even when `f` leaves the value unchanged. Returns the
+    /// closure's result. Use [`Self::update`] when equality suppression is needed.
+    /// Panics if disposed; `f` must not read or write this same signal.
+    pub fn update_in_place<R>(&self, f: impl FnOnce(&mut T) -> R) -> R {
+        let result = RUNTIME.with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            let any_val_rc = rt
+                .signals
+                .borrow()
+                .get(&self.id)
+                .cloned()
+                .expect("Signal::update_in_place on disposed signal");
+            let mut any_val = any_val_rc.borrow_mut();
+            f(any_val.downcast_mut::<T>().expect("Signal type mismatch"))
+        });
+        RUNTIME.with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            notify_signal_subscribers(&rt, self.id);
+        });
+        result
     }
 }
 
@@ -1494,6 +1690,54 @@ pub fn root_bare_get_count() -> usize {
     ui_root_effect_dep_count()
 }
 
+/// Release sparse reactive graph storage at an idle host boundary. This never
+/// renumbers identities or resets allocation counters, so retired handles stay
+/// retired. Collection is throttled to once per second after owner disposal and
+/// is skipped inside reactive work; hosts may poll on every event-loop turn.
+pub fn collect_reactive_garbage() -> bool {
+    RUNTIME.with(|runtime| {
+        let rt = runtime.borrow();
+        if !rt.garbage_pending.get()
+            || rt.last_collection.get().elapsed() < std::time::Duration::from_secs(1)
+            || *rt.batch_depth.borrow() != 0 || rt.effect_run_depth.get() != 0
+            || rt.current_memo.borrow().is_some() || rt.flushing_pending.get()
+            || rt.flushing_deferred.get() || !rt.pending_effects.borrow().is_empty()
+            || !rt.pending_memos.borrow().is_empty() || !rt.deferred_fns.borrow().is_empty()
+        { return false; }
+        macro_rules! trim {
+            ($storage:expr) => {{
+                let mut storage = $storage.borrow_mut();
+                if storage.capacity() > storage.len().saturating_mul(4).saturating_add(64) {
+                    storage.shrink_to_fit();
+                }
+            }};
+        }
+        // Empty adjacency sets survive dependency changes and disposed consumers.
+        rt.signal_subscribers.borrow_mut().retain(|_, set| !set.is_empty());
+        rt.signal_memo_subscribers.borrow_mut().retain(|_, set| !set.is_empty());
+        rt.silent_signal_subscribers.borrow_mut().retain(|_, set| !set.is_empty());
+        for set in rt.signal_subscribers.borrow_mut().values_mut() {
+            if set.capacity() > set.len().saturating_mul(4).saturating_add(64) { set.shrink_to_fit(); }
+        }
+        for set in rt.signal_memo_subscribers.borrow_mut().values_mut() {
+            if set.capacity() > set.len().saturating_mul(4).saturating_add(64) { set.shrink_to_fit(); }
+        }
+        trim!(rt.owners); trim!(rt.signals); trim!(rt.effects); trim!(rt.memos);
+        trim!(rt.named_signals); trim!(rt.named_signal_types); trim!(rt.unowned_signals);
+        trim!(rt.signal_memos); trim!(rt.signal_subscribers); trim!(rt.signal_memo_subscribers);
+        trim!(rt.silent_signal_subscribers); trim!(rt.effect_deps); trim!(rt.memo_deps);
+        trim!(rt.pending_effects); trim!(rt.pending_effect_set);
+        trim!(rt.pending_memos); trim!(rt.pending_memo_set);
+        trim!(rt.deferred_effects); trim!(rt.deferred_fns); trim!(rt.dep_stack);
+        // Diagnostic warnings must not retain identities after their values die.
+        rt.isolated_discarded_warned.borrow_mut().retain(|id| rt.signals.borrow().contains_key(id));
+        trim!(rt.isolated_discarded_warned); trim!(rt.flushed_effects);
+        rt.garbage_pending.set(false);
+        rt.last_collection.set(std::time::Instant::now());
+        true
+    })
+}
+
 /// Whether `id` still refers to a live effect slot (not yet disposed).
 pub fn effect_is_alive(id: EffectId) -> bool {
     RUNTIME.with(|rt_rc| rt_rc.borrow().effects.borrow().contains_key(&id))
@@ -1708,21 +1952,35 @@ where
             *rt.root_owner.borrow_mut() = Some(id);
         }
         *rt.current_owner.borrow_mut() = Some(id);
+        let restore = OwnerRestore(prev_owner);
+        let handle = OwnerHandle { id, disposed: Cell::new(false) };
         let out = f();
-        *rt.current_owner.borrow_mut() = prev_owner;
+        drop(restore);
         if prev_root.is_none() {
             // Keep this as root_owner until disposed.
         } else {
             *rt.root_owner.borrow_mut() = prev_root;
         }
         (
-            OwnerHandle {
-                id,
-                disposed: Cell::new(false),
-            },
+            handle,
             out,
         )
     })
+}
+
+/// Create a disposable child scope that inherits the current owner's contexts.
+/// The parent also disposes this scope; dropping its handle early is idempotent.
+pub fn create_scope<R>(f: impl FnOnce() -> R) -> (OwnerHandle, R) {
+    let (id, previous) = RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        let parent = ensure_owner(&rt);
+        let id = create_child_owner(&rt, parent);
+        (id, rt.current_owner.replace(Some(id)))
+    });
+    let handle = OwnerHandle { id, disposed: Cell::new(false) };
+    let _restore = OwnerRestore(previous);
+    let result = with_ui_build_stack(f);
+    (handle, result)
 }
 
 /// Current owner id, if any.
@@ -2106,24 +2364,11 @@ pub fn untrack<F, R>(f: F) -> R
 where
     F: FnOnce() -> R,
 {
-    RUNTIME.with(|rt_rc| {
-        let prev_effect = {
-            let rt = rt_rc.borrow();
-            let prev = *rt.current_effect.borrow();
-            *rt.current_effect.borrow_mut() = None;
-            prev
-        };
-        let prev_memo = {
-            let rt = rt_rc.borrow();
-            let prev = *rt.current_memo.borrow();
-            *rt.current_memo.borrow_mut() = None;
-            prev
-        };
-        let out = f();
-        *rt_rc.borrow().current_effect.borrow_mut() = prev_effect;
-        *rt_rc.borrow().current_memo.borrow_mut() = prev_memo;
-        out
-    })
+    let rt = RUNTIME.with(|slot| slot.borrow().clone());
+    let _frame = RuntimeFrame::new(&rt);
+    *rt.current_effect.borrow_mut() = None;
+    *rt.current_memo.borrow_mut() = None;
+    f()
 }
 
 struct BatchGuard;
@@ -2138,7 +2383,7 @@ impl Drop for BatchGuard {
                 *depth -= 1;
                 *depth == 0
             };
-            if should_flush {
+            if should_flush && !std::thread::panicking() {
                 flush_pending(&rt);
             }
         });
@@ -2246,7 +2491,7 @@ where
         let rt = rt_rc.borrow();
         let effect_id = *rt.current_effect.borrow();
         rt.dep_stack.borrow_mut().push(HashSet::new());
-        let out = f();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
         let discarded = rt.dep_stack.borrow_mut().pop().unwrap_or_default();
         if let Some(effect_id) = effect_id {
             for sig_id in discarded {
@@ -2269,7 +2514,7 @@ where
                 }
             }
         }
-        out
+        match result { Ok(out) => out, Err(payload) => std::panic::resume_unwind(payload) }
     })
 }
 
@@ -2370,17 +2615,15 @@ where
         let initial = {
             let prev_owner = *rt.current_owner.borrow();
             *rt.current_owner.borrow_mut() = Some(owner);
-            let v = untrack(&mut compute);
-            *rt.current_owner.borrow_mut() = prev_owner;
-            v
+            let _restore = OwnerRestore(prev_owner);
+            untrack(&mut compute)
         };
         let signal = {
             // Create backing signal under the memo owner.
             let prev_owner = *rt.current_owner.borrow();
             *rt.current_owner.borrow_mut() = Some(owner);
-            let s = rt.create_signal(initial);
-            *rt.current_owner.borrow_mut() = prev_owner;
-            s
+            let _restore = OwnerRestore(prev_owner);
+            rt.create_signal(initial)
         };
 
         let memo_id = MemoId(NEXT_MEMO_ID.fetch_add(1, Ordering::Relaxed));
@@ -2487,20 +2730,8 @@ impl<T: Clone + Eq + std::hash::Hash + 'static> Selector<T> {
                 let selected = self.selected;
                 let owner = self.owner;
                 let key_for_memo = key.clone();
-                let memo = untrack(|| {
-                    RUNTIME.with(|rt_rc| {
-                        let rt = rt_rc.borrow();
-                        let prev_owner = *rt.current_owner.borrow();
-                        let prev_effect = *rt.current_effect.borrow();
-                        *rt.current_owner.borrow_mut() = Some(owner);
-                        // Don't attach the memo-creating work to the reader effect.
-                        *rt.current_effect.borrow_mut() = None;
-                        let m = create_memo(move || selected.with(|s| s == &key_for_memo));
-                        *rt.current_owner.borrow_mut() = prev_owner;
-                        *rt.current_effect.borrow_mut() = prev_effect;
-                        m
-                    })
-                });
+                let memo = untrack(|| with_owner(owner, ||
+                    create_memo(move || selected.with(|s| s == &key_for_memo))));
                 cache.insert(key, memo);
                 memo
             }
@@ -2557,3 +2788,59 @@ where
 #[cfg(test)]
 #[path = "tests/reactivity.rs"]
 mod tests;
+
+#[cfg(test)]
+mod garbage_tests {
+    use super::*;
+
+    fn ready() {
+        RUNTIME.with(|rt| rt.borrow().last_collection.set(std::time::Instant::now() - std::time::Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn idle_collection_releases_peak_capacity_without_reviving_handles() {
+        let (persistent, source) = create_root(|| create_signal(1usize));
+        let (temporary, old) = create_root(|| {
+            let mut old = Vec::new();
+            for _ in 0..20_000 {
+                old.push(create_signal(0usize));
+                create_effect(move || { source.get(); });
+            }
+            old
+        });
+        let peak = RUNTIME.with(|rt| rt.borrow().signals.borrow().capacity());
+        drop(temporary);
+        ready();
+        assert!(collect_reactive_garbage());
+        assert!(old.iter().all(|handle| !handle.is_alive()));
+        assert!(source.is_alive());
+        let capacity = RUNTIME.with(|rt| rt.borrow().signals.borrow().capacity());
+        assert!(capacity < peak / 4, "peak={peak}, retained={capacity}");
+        assert!(reactivity_debug_snapshot().signal_effect_edges.is_empty());
+        let (replacement, fresh) = create_root(|| create_signal(7usize));
+        assert!(!old.iter().any(|handle| handle.id == fresh.id));
+        source.set(2);
+        assert_eq!(fresh.get(), 7);
+        drop(replacement);
+        drop(persistent);
+    }
+
+    #[test]
+    fn collection_defers_during_batches_and_keeps_live_subscriptions() {
+        let (owner, (source, count)) = create_root(|| {
+            let source = create_signal(1usize);
+            let count = Rc::new(Cell::new(0));
+            create_effect({ let count = count.clone(); move || { source.get(); count.set(count.get() + 1); } });
+            (source, count)
+        });
+        let (temporary, ()) = create_root(|| {});
+        drop(temporary);
+        ready();
+        batch(|| { source.set(2); assert!(!collect_reactive_garbage()); });
+        assert!(collect_reactive_garbage());
+        source.set(3);
+        assert_eq!(count.get(), 3);
+        assert!(!collect_reactive_garbage());
+        drop(owner);
+    }
+}

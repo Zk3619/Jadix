@@ -146,9 +146,11 @@ fn shift_alt_reversing_end_keeps_origin_caret() {
     let origin = 3;
     let l1 = "abcdefgh\n".len();
     let right = gesture_carets(s, origin, l1 + 6, true);
-    assert!(right
-        .iter()
-        .all(|c| { caret_line_and_local(s, c.caret).1 == caret_line_and_local(s, origin).1 }));
+    assert!(
+        right
+            .iter()
+            .all(|c| { caret_line_and_local(s, c.caret).1 == caret_line_and_local(s, origin).1 })
+    );
     assert_eq!(right[0].caret, origin);
     assert_eq!(right[0].anchor, 6);
     let left = gesture_carets(s, origin, l1 + 1, true);
