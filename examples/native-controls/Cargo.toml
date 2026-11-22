@@ -5,12 +5,14 @@ edition.workspace = true
 publish = false
 
 [features]
-uikit = ["jadix_native/uikit"]
+linux = ["jadix_native/linux", "jadix_components/i18n"]
+uikit = ["jadix_native/uikit", "jadix_components/i18n"]
+appkit = ["jadix_native/appkit", "jadix_components/i18n"]
 consistent-ui = ["jadix_native/consistent-ui"]
 windows = ["jadix_native/windows", "dep:windows-sys", "dep:windows"]
 native-gpu = ["windows", "jadix_native/windows-gpu"]
 native-code = ["windows", "jadix_native/code"]
-native-shell = ["windows", "dep:jadix_shell", "jadix_shell/native-host", "jadix_shell/native-vm", "jadix_shell/native-store"]
+native-shell = ["dep:jadix_shell", "jadix_shell/native-host", "jadix_shell/native-vm", "jadix_shell/native-store"]
 ohos = ["jadix_native/ohos"]
 extended = []
 selection = []
@@ -19,6 +21,11 @@ large-list = []
 notes = []
 field-workflow = []
 gpu = ["jadix_components/gpu"]
+
+[[bin]]
+name = "native-linux"
+path = "src/linux.rs"
+required-features = ["linux"]
 
 [[bin]]
 name = "native-windows"
@@ -89,12 +96,13 @@ required-features = ["windows"]
 [[bin]]
 name = "native-tsx"
 path = "src/shell_windows.rs"
-required-features = ["native-shell"]
+required-features = ["native-shell", "windows"]
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
+log.workspace = true
 jadix_components = { path = "../../crates/jadix_components", default-features = false, features = ["macros", "theme-shadcn"] }
 jadix_native.workspace = true
 jadix_core.workspace = true
@@ -116,6 +124,7 @@ windows-sys = { workspace = true, optional = true, features = ["Win32_Foundation
 windows = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Accessibility"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
+jadix_components = { path = "../../crates/jadix_components", default-features = false, features = ["i18n"] }
 jadix_native = { workspace = true, features = ["android"] }
 jni.workspace = true
 

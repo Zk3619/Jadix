@@ -1,6 +1,6 @@
 use jadix_components::{authoring::native::ElementProjection, prelude::*};
 use jadix_native::{
-    presentation::*, wire, BackendError, HeadlessRoot, ResourceKind, ResourceLimits,
+    BackendError, HeadlessRoot, ResourceKind, ResourceLimits, presentation::*, wire,
 };
 
 fn option(value: &str, enabled: bool) -> SelectOption {
@@ -25,6 +25,11 @@ fn descriptor(value: &str) -> NodeDescriptor {
         accessible_expanded: None,
         accessible_description: None,
         accessible_name: None,
+        interaction: Default::default(),
+        keyboard: Default::default(),
+        navigation_keys: Vec::new(),
+        accessibility: Default::default(),
+        accessibility_relations: Default::default(),
         style: Default::default(),
     }
 }
@@ -328,8 +333,10 @@ fn select_schema_requires_bounded_options_and_string_event_revisions() {
             valid
         );
     }
-    assert!(!jadix_components::schema::portable_components()
-        .unwrap()
-        .iter()
-        .any(|schema| schema.name == "Select"));
+    assert!(
+        !jadix_components::schema::portable_components()
+            .unwrap()
+            .iter()
+            .any(|schema| schema.name == "Select")
+    );
 }

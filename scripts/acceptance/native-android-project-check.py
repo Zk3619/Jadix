@@ -48,7 +48,7 @@ def process_recovery(run, adb, package, nonce, output):
     nodes = tree("process-initial.xml")
     counter = next(node for node in nodes if re.fullmatch(r"Count: \d+", node.get("text", "")))
     expected_count = int(counter.attrib["text"].split(": ")[1]) + 1
-    tap(next(node for node in nodes if node.get("class") == "android.widget.Button" and node.get("text", "").lower() == "continue"))
+    tap(next(node for node in nodes if node.get("class") == "android.widget.Button" and (node.get("text") or node.get("content-desc", "")).lower() == "continue"))
     tap(next(node for node in nodes if node.get("class") == "android.widget.EditText"))
     value = "recovery_" + nonce
     observe("shell", "input", "text", value)
@@ -72,14 +72,23 @@ def process_recovery(run, adb, package, nonce, output):
     if not before_pid.isdecimal():
         raise ValueError("one identified application process required")
     observe("shell", "input", "keyevent", "KEYCODE_HOME")
+    OWNED.wait_for_saved_background(run, adb, package, output)
+    observe("shell", "am", "kill", package)
+    result = run(adb + ["shell", "pidof", package], allow_failure=True)
+    if result.stdout.strip():
+        activities = observe("shell", "dumpsys", "activity", "activities")
+        if not OWNED.resumed_elsewhere(activities, package):
+            raise RuntimeError("Home did not move the test activity to the background")
+        observe("shell", "run-as", package, "kill", "-9", before_pid)
     deadline = time.monotonic() + 10
     while True:
-        observe("shell", "am", "kill", package)
         result = run(adb + ["shell", "pidof", package], allow_failure=True)
         if result.returncode == 1 and not result.stdout.strip():
             break
         if time.monotonic() >= deadline:
-            raise RuntimeError("background process did not exit after am kill")
+            observe("shell", "dumpsys", "activity", "processes")
+            observe("shell", "dumpsys", "window", "windows")
+            raise RuntimeError("background process survived the verified termination request")
         time.sleep(0.1)
     observe("shell", "am", "start", "-W", "-n", component)
     after_pid = observe("shell", "pidof", package)
@@ -89,7 +98,7 @@ def process_recovery(run, adb, package, nonce, output):
     receipt = {"passed": True, "before_pid": before_pid, "after_pid": after_pid,
                "nonce": nonce, "package_name": package, "counter": expected_count,
                "value": value, "checked": True,
-               "termination": "Home then am kill; old process absence verified before restart",
+               "termination": "am kill after Home, then run-as SIGKILL if the OS retained the background process; absence verified before restart",
                "limits": ["Activity saved-task checkpoint only; no power-loss, force-stop, physical-device or document-journal acceptance."]}
     (output / "process-recovery.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
     return receipt
@@ -137,8 +146,8 @@ def main():
 
     try:
         sdk = run(adb + ["shell", "getprop", "ro.build.version.sdk"]).stdout.strip()
-        if not sdk.isdecimal() or int(sdk) < 28:
-            raise ValueError("project requires Android API 28 or later")
+        if not sdk.isdecimal() or int(sdk) < 26:
+            raise ValueError("project requires Android API 26 or later")
         report["sdk"] = int(sdk)
         with OWNED.owned_install(run, adb, apk, report, package=package):
             result = run(adb + ["shell", "am", "instrument", "-r", "-w", "-e", "jadix.nonce", arguments.nonce,

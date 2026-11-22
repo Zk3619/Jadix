@@ -16,13 +16,13 @@
         "protocol": 1,
         "sdk": "0.1.0",
         "minimum_host": "0.1.0",
-        "component_schema": "ecb12da69216279cd4ba96e0585e8f74ef9f7b7ab4e38120efe6350d96d58dea",
+        "component_schema": "852c4381c3be499a67cfb4aa9b26f49a366e2ff519dfeb6a17a5dea01e4d5d7d",
         "capabilities": [],
         "entry": "panel.bundle.js",
         "resources": {
           "panel.bundle.js": {
-            "sha256": "c296f51b11392f7169c656e3e9e3b7daca3b670f5f7cb5ddc53a2034c326e897",
-            "bytes": 21613
+            "sha256": "a19406394b1015301c9c6eac4051d54bee2edec002d9ca0006d446ea1fb25913",
+            "bytes": 149665
           }
         },
         "permissions": {
@@ -32,7 +32,7 @@
         "storage_version": 1,
         "migration_from": []
       },
-      "signature": "b8b138c18cb5431ff726b0a85b77fcd938e9daef3b3dbd9ae5f1c1b6e51657244725a3f7af7aa3613252af120ff53025cbfea43e18c85624b9aef83e6c078206"
+      "signature": "88482295cc05e08bc11a38819c903cf7513e80b18b87f8aa5b4b1c149805417f1d7e6e1a69e88170170b7e6340218122d56a237f08b53b91c85a2b76d010a707"
     },
     "2": {
       "manifest": {
@@ -46,13 +46,13 @@
         "protocol": 1,
         "sdk": "0.1.0",
         "minimum_host": "0.1.0",
-        "component_schema": "ecb12da69216279cd4ba96e0585e8f74ef9f7b7ab4e38120efe6350d96d58dea",
+        "component_schema": "852c4381c3be499a67cfb4aa9b26f49a366e2ff519dfeb6a17a5dea01e4d5d7d",
         "capabilities": [],
         "entry": "panel.bundle.js",
         "resources": {
           "panel.bundle.js": {
-            "sha256": "c296f51b11392f7169c656e3e9e3b7daca3b670f5f7cb5ddc53a2034c326e897",
-            "bytes": 21613
+            "sha256": "a19406394b1015301c9c6eac4051d54bee2edec002d9ca0006d446ea1fb25913",
+            "bytes": 149665
           }
         },
         "permissions": {
@@ -64,7 +64,7 @@
           1
         ]
       },
-      "signature": "c91731da3d40f7dac5834c05841de177454b43362c90574c78885c25f07540cfca1a613adf14ae87318e17000fc66df0dfbeae18a1ff39578e4c7d6c01ccbd02"
+      "signature": "ae5be359a0f46dc2ac03978b923b9dc18a16136e65a53e27e3db199a623d5c658a24b18a4fe811666dafbef72523aa82937251b5878b7ba940ff0b3959fbad0c"
     },
     "3": {
       "manifest": {
@@ -78,7 +78,7 @@
         "protocol": 1,
         "sdk": "0.1.0",
         "minimum_host": "0.1.0",
-        "component_schema": "ecb12da69216279cd4ba96e0585e8f74ef9f7b7ab4e38120efe6350d96d58dea",
+        "component_schema": "852c4381c3be499a67cfb4aa9b26f49a366e2ff519dfeb6a17a5dea01e4d5d7d",
         "capabilities": [],
         "entry": "panel.bundle.js",
         "resources": {
@@ -94,7 +94,7 @@
         "storage_version": 1,
         "migration_from": []
       },
-      "signature": "fda6868c6c8527138372e8cb83fefab640b33d5555da7c54d5773e8727b94da9f410b4bbaae7ce1747c04b20ae6db83421e9812dcdfe84a04a4fff4039cd610f"
+      "signature": "f59573a20afe91848d876dfea2427c2dd030136106e1594811c12eb789466361ecb70981d92e1aeac1b4d51cf6fb55072bb083100c771683f3ed5ce3f295b000"
     }
   }
 }

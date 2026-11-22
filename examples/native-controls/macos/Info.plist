@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>org.jadix.native-controls</string>
+<key>CFBundleName</key><string>Jadix Native Controls</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>NSMicrophoneUsageDescription</key><string>Transcribe speech when you start a dictation session.</string>
+<key>NSSpeechRecognitionUsageDescription</key><string>Convert your speech to text in the requested dictation session.</string>
+</dict></plist>

@@ -7,7 +7,12 @@ fn grid_ownership_coordinates_and_duplicate_cells_fail_before_host_publication()
     let editor = roots[0].clone();
     roots[0].id = NodeId::new(root.model().id());
     roots[0].descriptor.content = NodeContent::Container;
-    roots[0].descriptor.accessible_role = Some(AccessibleRole::GridCell { row: 1, column: 2 });
+    roots[0].descriptor.accessible_role = Some(AccessibleRole::GridCell {
+        row: 1,
+        column: 2,
+        row_span: 2,
+        column_span: 2,
+    });
     roots[0].children.push(editor);
     let cell = roots.remove(0);
     let mut grid = cell.clone();
@@ -21,14 +26,17 @@ fn grid_ownership_coordinates_and_duplicate_cells_fail_before_host_publication()
     header.id = NodeId::new(root.model().id());
     header.children.clear();
     header.descriptor.content = NodeContent::Text("Column 2".into());
-    header.descriptor.accessible_role = Some(AccessibleRole::GridColumnHeader { column: 2 });
+    header.descriptor.accessible_role = Some(AccessibleRole::GridColumnHeader {
+        column: 2,
+        column_span: 2,
+    });
     grid.children.push(header);
     let mut roots = vec![grid];
     root.present(&mut roots, [320.0, 480.0], 0).unwrap();
     let revision = root.model().revision();
     let publications = root.host().publishes.get();
     let valid = roots.clone();
-    for case in 0..9 {
+    for case in 0..11 {
         let mut candidate = valid.clone();
         match case {
             0 => {
@@ -55,6 +63,8 @@ fn grid_ownership_coordinates_and_duplicate_cells_fail_before_host_publication()
                     Some(AccessibleRole::GridCell {
                         row: u32::MAX,
                         column: 2,
+                        row_span: 1,
+                        column_span: 1,
                     })
             }
             5 => {
@@ -65,12 +75,33 @@ fn grid_ownership_coordinates_and_duplicate_cells_fail_before_host_publication()
             }
             6 => {
                 candidate[0].children[1].descriptor.accessible_role =
-                    Some(AccessibleRole::GridColumnHeader { column: 4 })
+                    Some(AccessibleRole::GridColumnHeader {
+                        column: 4,
+                        column_span: 1,
+                    })
             }
             7 => {
                 let mut duplicate = candidate[0].children[1].clone();
                 duplicate.id = NodeId::new(root.model().id());
                 candidate[0].children.push(duplicate);
+            }
+            8 => {
+                candidate[0].children[0].descriptor.accessible_role =
+                    Some(AccessibleRole::GridCell {
+                        row: 1,
+                        column: 2,
+                        row_span: 3,
+                        column_span: 1,
+                    })
+            }
+            9 => {
+                candidate[0].children[0].descriptor.accessible_role =
+                    Some(AccessibleRole::GridCell {
+                        row: 1,
+                        column: 2,
+                        row_span: 0,
+                        column_span: 1,
+                    })
             }
             _ => {
                 let header = candidate[0].children.pop().unwrap();
@@ -187,11 +218,21 @@ fn tree_actions_require_live_enabled_semantic_items_and_matching_capabilities() 
 use std::{cell::Cell, rc::Rc};
 
 struct Host {
+    environment: Option<jadix_native::environment::EnvironmentSnapshot>,
     publishes: Rc<Cell<usize>>,
     disposals: Rc<Cell<usize>>,
     fail: bool,
+    scroll_stops: usize,
 }
 impl PlatformHost for Host {
+    fn read_environment(&self) -> Result<Option<jadix_native::environment::EnvironmentSnapshot>, String> {
+        Ok(self.environment.clone())
+    }
+    fn stop_scroll(&mut self, _: NodeId) -> Result<(), String> {
+        self.scroll_stops += 1;
+        Ok(())
+    }
+
     fn measure(
         &mut self,
         request: MeasureRequest,
@@ -218,10 +259,45 @@ impl PlatformHost for Host {
 }
 fn host(fail: bool) -> Host {
     Host {
+        environment: None,
         publishes: Rc::new(Cell::new(0)),
         disposals: Rc::new(Cell::new(0)),
         fail,
+        scroll_stops: 0,
     }
+}
+
+#[test]
+fn host_preferences_refresh_atomically_without_scaling_twice_or_replacing_editor() {
+    use jadix_native::environment::{EnvironmentSnapshot, LayoutDirection};
+    let mut host = host(false);
+    let initial = EnvironmentSnapshot { font_scale: 1.5, layout_direction: Some(LayoutDirection::RightToLeft), ..Default::default() };
+    host.environment = Some(initial.clone());
+    let mut root = NativeRoot::new(host);
+    assert!(root.refresh_environment().unwrap());
+    assert!(!root.refresh_environment().unwrap());
+    let mut nodes = nodes(root.model().id());
+    let id = nodes[0].id;
+    let original_size = nodes[0].descriptor.style.font_size;
+    root.present(&mut nodes, [320.0, 480.0], 1).unwrap();
+    root.event(&PlatformEvent { node: id, payload: EventPayload::Focus }).unwrap();
+    for _ in 0..3 {
+        root.present(&mut nodes, [320.0, 480.0], 1).unwrap();
+        assert_eq!(root.model().node(id).unwrap().descriptor.style.font_size, original_size * 1.5);
+        assert_eq!(root.model().node(id).unwrap().descriptor.style.direction, Some(LayoutDirection::RightToLeft));
+        assert_eq!(nodes[0].descriptor.style.font_size, original_size);
+        assert_eq!(root.model().focused(), Some(id));
+    }
+    root.host_mut().environment.as_mut().unwrap().font_scale = f32::NAN;
+    let revision = root.model().revision();
+    assert!(root.refresh_environment().is_err());
+    assert_eq!(root.environment_snapshot(), Some(&initial));
+    assert_eq!(root.model().revision(), revision);
+    root.host_mut().environment = None;
+    assert!(!root.refresh_environment().unwrap());
+    assert_eq!(root.environment_snapshot(), Some(&initial));
+    root.dispose();
+    assert!(root.refresh_environment().is_err());
 }
 fn nodes(root: RootId) -> Vec<PresentationNode> {
     vec![PresentationNode {
@@ -239,6 +315,10 @@ fn nodes(root: RootId) -> Vec<PresentationNode> {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             accessible_description: None,
             accessible_name: None,
@@ -450,4 +530,28 @@ fn wire_preserves_decimal_identity_and_utf16_edit_validation() {
         wire::decode_event(&malformed.to_string(), root.model()),
         Err(BackendError::WrongRoot)
     );
+}
+
+#[test]
+fn stopping_scroll_rejects_stale_nodes_and_disposed_roots_before_host_access() {
+    let mut root = NativeRoot::new(host(false));
+    let mut roots = nodes(root.model().id());
+    let input = roots[0].id;
+    let mut scroll = roots[0].clone();
+    scroll.id = NodeId::new(root.model().id());
+    scroll.descriptor.content = NodeContent::Scroll;
+    let scroll_id = scroll.id;
+    roots.push(scroll);
+    root.present(&mut roots, [320.0, 480.0], 0).unwrap();
+    assert!(root.stop_scroll(input).is_err());
+    assert_eq!(root.host().scroll_stops, 0);
+    root.stop_scroll(scroll_id).unwrap();
+    assert_eq!(root.host().scroll_stops, 1);
+    roots.pop();
+    root.present(&mut roots, [320.0, 480.0], 0).unwrap();
+    assert!(root.stop_scroll(scroll_id).is_err());
+    assert_eq!(root.host().scroll_stops, 1);
+    root.dispose();
+    assert!(root.stop_scroll(scroll_id).is_err());
+    assert_eq!(root.host().scroll_stops, 1);
 }

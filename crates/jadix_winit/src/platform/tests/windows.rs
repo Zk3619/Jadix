@@ -6,7 +6,284 @@ use crate::event_loop::{ActiveEventLoop, EventLoop};
 use crate::raw_window_handle::HasWindowHandle;
 use crate::window::{WindowAttributes, WindowId};
 use windows_sys::Win32::Foundation::{HWND as WinHwnd, LPARAM, POINT};
+use windows_sys::Win32::UI::Input::Ime::{
+    ImmGetContext, ImmGetOpenStatus, ImmReleaseContext, ImmSetOpenStatus,
+};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+#[test]
+#[ignore = "real HWND; exercises the installed Windows IME with system keyboard input"]
+fn native_real_ime_composition_reaches_preedit_and_commit_events() {
+    use crate::event::Ime;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        ActivateKeyboardLayout, GetKeyboardLayout, LoadKeyboardLayoutW, UnloadKeyboardLayout,
+        SetActiveWindow, SetFocus, HKL, KLF_ACTIVATE, VK_SPACE, VK_RETURN,
+    };
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow, ShowWindow, SW_SHOW,
+    };
+
+    struct ImeRestore {
+        hwnd: WinHwnd,
+        chinese_layout: HKL,
+        previous_layout: HKL,
+        was_open: bool,
+    }
+    impl Drop for ImeRestore {
+        fn drop(&mut self) {
+            unsafe {
+                let ime = ImmGetContext(self.hwnd);
+                if !ime.is_null() {
+                    ImmSetOpenStatus(ime, i32::from(self.was_open));
+                    ImmReleaseContext(self.hwnd, ime);
+                }
+                ActivateKeyboardLayout(self.previous_layout, KLF_ACTIVATE);
+                UnloadKeyboardLayout(self.chinese_layout);
+            }
+        }
+    }
+
+    struct Harness {
+        events: std::sync::Arc<std::sync::Mutex<Vec<Ime>>>,
+        _restore: Option<ImeRestore>,
+        _window: Option<Box<dyn crate::window::Window>>,
+        started: Instant,
+    }
+    impl ApplicationHandler for Harness {
+        fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            let window = event_loop
+                .create_window(
+                    WindowAttributes::default()
+                        .with_surface_size(crate::dpi::LogicalSize::new(420, 240)),
+                )
+                .unwrap();
+            let handle = window.window_handle().unwrap();
+            let crate::raw_window_handle::RawWindowHandle::Win32(raw) = handle.as_raw() else {
+                panic!("Win32 window expected")
+            };
+            let hwnd = raw.hwnd.get() as WinHwnd;
+
+            let layout_name = [
+                b'0' as u16,
+                b'0' as u16,
+                b'0' as u16,
+                b'0' as u16,
+                b'0' as u16,
+                b'8' as u16,
+                b'0' as u16,
+                b'4' as u16,
+                0,
+            ];
+            let previous_layout = unsafe { GetKeyboardLayout(0) };
+            let chinese_layout = unsafe { LoadKeyboardLayoutW(layout_name.as_ptr(), KLF_ACTIVATE) };
+            assert!(!chinese_layout.is_null(), "Microsoft Chinese IME layout is required");
+            unsafe { ActivateKeyboardLayout(chinese_layout, KLF_ACTIVATE) };
+
+            #[allow(deprecated)]
+            window.set_ime_allowed(true);
+            let ime = unsafe { ImmGetContext(hwnd) };
+            assert!(!ime.is_null(), "the window must have a real IME context");
+            let was_open = unsafe { ImmGetOpenStatus(ime) } != 0;
+            assert_ne!(unsafe { ImmSetOpenStatus(ime, 1) }, 0, "open the installed IME");
+            unsafe { ImmReleaseContext(hwnd, ime) };
+            self._restore = Some(ImeRestore {
+                hwnd,
+                chinese_layout,
+                previous_layout,
+                was_open,
+            });
+            unsafe { ShowWindow(hwnd, SW_SHOW) };
+            unsafe {
+                let foreground = GetForegroundWindow();
+                let foreground_thread = GetWindowThreadProcessId(foreground, std::ptr::null_mut());
+                let current_thread = GetCurrentThreadId();
+                let attached = AttachThreadInput(current_thread, foreground_thread, 1) != 0;
+                SetForegroundWindow(hwnd);
+                SetActiveWindow(hwnd);
+                SetFocus(hwnd);
+                if attached {
+                    AttachThreadInput(current_thread, foreground_thread, 0);
+                }
+            }
+            assert_eq!(unsafe { GetForegroundWindow() }, hwnd);
+
+            let keys = [b'N' as u16, b'I' as u16, b'H' as u16, b'A' as u16, b'O' as u16];
+            let mut input = Vec::with_capacity(keys.len() * 2 + 4);
+            for key in keys.into_iter().chain([VK_SPACE, VK_RETURN]) {
+                input.push(INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: key,
+                            wScan: 0,
+                            dwFlags: 0,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                });
+                input.push(INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: key,
+                            wScan: 0,
+                            dwFlags: KEYEVENTF_KEYUP,
+                            time: 0,
+                            dwExtraInfo: 0,
+                        },
+                    },
+                });
+            }
+            assert_eq!(
+                unsafe { SendInput(input.len() as u32, input.as_ptr(), std::mem::size_of::<INPUT>() as i32) },
+                input.len() as u32,
+                "send real keyboard input through the active Chinese IME"
+            );
+            self._window = Some(window);
+        }
+
+        fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, _: WindowId, event: WindowEvent) {
+            if let WindowEvent::Ime(ime) = event {
+                let committed = matches!(&ime, Ime::Commit(text) if !text.is_empty());
+                self.events.lock().unwrap().push(ime);
+                if committed {
+                    event_loop.exit();
+                }
+            }
+        }
+
+        fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+            if self.started.elapsed() >= Duration::from_secs(12) {
+                event_loop.exit();
+            } else {
+                event_loop.set_control_flow(crate::event_loop::ControlFlow::WaitUntil(
+                    Instant::now() + Duration::from_millis(25),
+                ));
+            }
+        }
+    }
+
+    let mut builder = EventLoop::builder();
+    builder.with_any_thread(true);
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let harness = Harness {
+        events: events.clone(),
+        _restore: None,
+        _window: None,
+        started: Instant::now(),
+    };
+    builder.build().unwrap().run_app(harness).unwrap();
+    let events = events.lock().unwrap();
+    assert!(
+        events.iter().any(|event| matches!(event, Ime::Preedit(text, _) if !text.is_empty())),
+        "real IME must emit non-empty preedit, got {:?}",
+        *events
+    );
+    assert!(
+        events.iter().any(|event| matches!(event, Ime::Commit(text) if !text.is_empty())),
+        "real IME must commit a candidate, got {:?}",
+        *events
+    );
+}
+
+#[test]
+#[ignore = "real HWND; moves an owned foreign-procedure window across a foreground switch"]
+fn native_owned_foreign_window_never_reads_winit_window_data() {
+    use windows_sys::Win32::Foundation::GetLastError;
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::System::Threading::AttachThreadInput;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, GetForegroundWindow, GetWindow,
+        GetWindowThreadProcessId, GW_OWNER, GWLP_USERDATA, SetForegroundWindow,
+        SetWindowLongPtrW, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_NOSIZE,
+        SWP_NOZORDER, SW_SHOW, WS_POPUP,
+    };
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{SetActiveWindow, SetFocus};
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    struct Harness;
+    impl ApplicationHandler for Harness {
+        fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            let window = event_loop.create_window(WindowAttributes::default()).unwrap();
+            let handle = window.window_handle().unwrap();
+            let crate::raw_window_handle::RawWindowHandle::Win32(raw) = handle.as_raw() else {
+                panic!("Win32 window expected")
+            };
+            let hwnd = raw.hwnd.get() as WinHwnd;
+            unsafe { SetForegroundWindow(hwnd) };
+            let foreign = unsafe {
+                CreateWindowExW(
+                    0,
+                    wide("STATIC").as_ptr(),
+                    wide("foreign helper").as_ptr(),
+                    WS_POPUP,
+                    10,
+                    10,
+                    80,
+                    40,
+                    hwnd,
+                    std::ptr::null_mut(),
+                    GetModuleHandleW(std::ptr::null()),
+                    std::ptr::null(),
+                )
+            };
+            assert!(!foreign.is_null());
+            assert_eq!(unsafe { GetWindow(foreign, GW_OWNER) }, hwnd);
+            unsafe { SetWindowLongPtrW(foreign, GWLP_USERDATA, 1) };
+            unsafe {
+                ShowWindow(foreign, SW_SHOW);
+                let foreground = GetForegroundWindow();
+                let foreground_thread = GetWindowThreadProcessId(foreground, std::ptr::null_mut());
+                let current_thread = GetWindowThreadProcessId(hwnd, std::ptr::null_mut());
+                let attached = AttachThreadInput(current_thread, foreground_thread, 1) != 0;
+                SetForegroundWindow(foreign);
+                SetActiveWindow(foreign);
+                SetFocus(foreign);
+                if attached {
+                    AttachThreadInput(current_thread, foreground_thread, 0);
+                }
+            }
+            assert_eq!(unsafe { GetForegroundWindow() }, foreign, "switch foreground to foreign HWND");
+            assert_ne!(
+                unsafe {
+                    SetWindowPos(
+                        hwnd,
+                        std::ptr::null_mut(),
+                        24,
+                        24,
+                        0,
+                        0,
+                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                    )
+                },
+                0,
+                "move parent while the foreign owned HWND is foreground (last error {})",
+                unsafe { GetLastError() }
+            );
+            assert_eq!(unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowLongPtrW(foreign, GWLP_USERDATA) }, 1);
+            unsafe {
+                SetForegroundWindow(hwnd);
+                DestroyWindow(foreign);
+            }
+            event_loop.exit();
+        }
+
+        fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+
+    let mut builder = EventLoop::builder();
+    builder.with_any_thread(true);
+    builder.build().unwrap().run_app(Harness).unwrap();
+}
 
 #[test]
 #[ignore = "real HWND; run in a separate interactive Windows process"]

@@ -28,6 +28,10 @@ fn radio_uses_native_checked_provider_and_updates_style_without_recreating_contr
             accessible_role: Some(AccessibleRole::RadioItem { tab_stop: true }),
             accessible_selected: Some(true),
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             style: style::NodeStyle {
                 width: Some(180.0),

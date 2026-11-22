@@ -71,6 +71,11 @@ mod application {
             let tree = PresentationNode {
                 id: NodeId::new(root.model().id()),
                 descriptor: NodeDescriptor {
+                interaction: Default::default(),
+                keyboard: Default::default(),
+                navigation_keys: vec![],
+                accessibility: Default::default(),
+                accessibility_relations: Default::default(),
                     content: NodeContent::Container,
                     frame: Rect::default(),
                     accessible_role: None,

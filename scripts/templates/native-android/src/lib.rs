@@ -21,6 +21,11 @@ pub struct NativeApp<Host: PlatformHost> {
 }
 
 impl<Host: PlatformHost> NativeApp<Host> {
+    pub(crate) fn new_with_content(host: Host, viewport: [f32; 2], content: jadix_core::window::WindowContent) -> Result<Self, String> {
+        if content.factory != "main" { return Err("unknown window content factory".into()); }
+        Self::new(host, viewport, 0, content.argument.unwrap_or_default())
+    }
+
     pub fn new(
         host: Host,
         viewport: [f32; 2],
@@ -30,9 +35,12 @@ impl<Host: PlatformHost> NativeApp<Host> {
         if value.len() > 64 * 1024 {
             return Err("initial input is too large".into());
         }
-        let root = NativeRoot::new(host);
-        let projection = ElementProjection::with_lifetime(root.model().lifetime());
-        let (owner, (count, value, checked, element)) = create_root(|| {
+        let mut root = NativeRoot::new(host);
+        root.refresh_environment().map_err(|error| error.to_string())?;
+        let projection = ElementProjection::with_lifetime(root.model().lifetime()).with_locale_context(root.locale_context());
+        let declarations = root.host().window_declarations();
+        let (owner, (count, value, checked, element)) = root.with_locale(|| create_root(|| {
+            if let Some(declarations) = declarations { jadix_core::window::provide_window_declarations(declarations); }
             let count = create_signal(count);
             let value = create_signal(value);
             let checked = create_signal(false);
@@ -62,7 +70,7 @@ impl<Host: PlatformHost> NativeApp<Host> {
                 .child(editor.h(48.0))
                 .child(consent.h(48.0));
             (count, value, checked, element)
-        });
+        }));
         let mut app = Self {
             root,
             projection,
@@ -79,6 +87,7 @@ impl<Host: PlatformHost> NativeApp<Host> {
     }
 
     fn render(&mut self) -> Result<(), String> {
+        self.root.refresh_environment().map_err(|error| error.to_string())?;
         let mut nodes = vec![self
             .projection
             .snapshot(&mut self.element)
@@ -86,6 +95,10 @@ impl<Host: PlatformHost> NativeApp<Host> {
         self.root
             .present(&mut nodes, self.viewport, self.environment)
             .map_err(|error| error.to_string())?;
+        if self.projection.apply_layout(&mut self.element, |id| self.root.model().node(id).map(|node| node.descriptor.frame)) {
+            use jadix_native::host::PlatformHost;
+            self.root.host_mut().schedule_reactive_wake(Some(std::time::Duration::ZERO));
+        }
         Ok(())
     }
 

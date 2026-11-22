@@ -1,7 +1,7 @@
 #![cfg(feature = "consistent-ui")]
 
 use jadix_native::presentation::style::NodeStyle;
-use jadix_native::{environment::*, host::*, layout::*, presentation::*, ConsistentTheme};
+use jadix_native::{ConsistentTheme, environment::*, host::*, layout::*, presentation::*};
 
 #[derive(Default)]
 struct Host {
@@ -46,6 +46,10 @@ fn editor(root: RootId) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
         },
         children: vec![],
@@ -91,19 +95,21 @@ fn opt_in_theme_relayouts_without_mutating_authoring_or_replacing_control_identi
         font_size: f32::INFINITY,
         ..theme
     };
-    assert!(root
-        .present_consistent(&roots, [320.0, 480.0], &preferences.environment(), &invalid)
-        .is_err());
+    assert!(
+        root.present_consistent(&roots, [320.0, 480.0], &preferences.environment(), &invalid)
+            .is_err()
+    );
     assert_eq!(root.host().publications, publications);
     owner.dispose();
-    assert!(root
-        .present_consistent(
+    assert!(
+        root.present_consistent(
             &roots,
             [320.0, 480.0],
             &preferences.environment(),
             &ConsistentTheme::default()
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
@@ -124,11 +130,24 @@ fn native_default_and_explicit_styles_remain_available() {
     assert_eq!(result[0].descriptor.style.foreground, [1, 2, 3, 255]);
     assert_eq!(result[0].descriptor.style.background, [4, 5, 6, 255]);
     assert_eq!(result[0].descriptor.style.font_family, "custom-font");
+    roots[0].descriptor.style.view = Some(jadix_native::presentation::style::ViewAppearance {
+        control: jadix_native::presentation::style::ControlAppearance::Plain,
+        ..Default::default()
+    });
+    let result = ConsistentTheme::default()
+        .project(&roots, &EnvironmentSnapshot::default())
+        .unwrap();
+    assert_eq!(
+        result[0].descriptor.style.view.as_ref().unwrap().control,
+        jadix_native::presentation::style::ControlAppearance::Plain
+    );
     let mut invalid = roots.clone();
     invalid[0].descriptor.style.min_height = f32::NAN;
-    assert!(ConsistentTheme::default()
-        .project(&invalid, &EnvironmentSnapshot::default())
-        .is_err());
+    assert!(
+        ConsistentTheme::default()
+            .project(&invalid, &EnvironmentSnapshot::default())
+            .is_err()
+    );
 }
 
 #[test]
@@ -159,6 +178,10 @@ fn consistent_layout_direction_flows_to_shared_row_layout_and_respects_authored_
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
         },
         children: vec![],
@@ -179,6 +202,10 @@ fn consistent_layout_direction_flows_to_shared_row_layout_and_respects_authored_
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
         },
         children: vec![child],
@@ -225,6 +252,10 @@ fn consistent_theme_projects_control_colors_to_actionable_nodes() {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
         },
         children: vec![],
@@ -277,6 +308,10 @@ fn consistent_theme_projects_control_colors_to_actionable_nodes() {
         .unwrap();
 
     assert_eq!(projected[0].descriptor.style.background, theme.dark_control);
+    assert_eq!(
+        projected[0].descriptor.style.view.as_ref().unwrap().control,
+        jadix_native::presentation::style::ControlAppearance::Consistent
+    );
     assert_eq!(projected[1].descriptor.style.background, theme.dark_control);
     assert_eq!(projected[2].descriptor.style.background, [8, 9, 10, 255]);
     assert_eq!(
@@ -317,6 +352,10 @@ fn high_contrast_theme_uses_opt_in_palette_and_preserves_authored_colors() {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
         },
         children: vec![],

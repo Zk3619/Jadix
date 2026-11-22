@@ -58,7 +58,13 @@ pub extern "system" fn Java_dev_jadix_nativeui_NativeView_nativeCreate(
             .get_string(&text)
             .map_err(|error| error.to_string())?
             .into();
-        let host = AndroidHost::new(&env, &peer).map_err(|error| error.to_string())?;
+        let mut host = AndroidHost::new(&env, &peer).map_err(|error| error.to_string())?;
+        host.set_window_factory(|host, viewport, content| {
+            let app = NativeApp::new_with_content(host, viewport, content)?;
+            let token = app.root.model().id().token();
+            APPS.with(|apps| apps.borrow_mut().insert(token.clone(), app));
+            Ok(token)
+        });
         let app = NativeApp::new(
             host,
             [width, height],

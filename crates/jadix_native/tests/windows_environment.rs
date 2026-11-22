@@ -30,6 +30,10 @@ fn real_windows_preferences_and_native_edit_survive_environment_updates() {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             style: style::NodeStyle {
                 width: Some(340.0),

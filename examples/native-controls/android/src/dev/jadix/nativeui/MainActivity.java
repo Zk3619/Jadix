@@ -13,6 +13,8 @@ public final class MainActivity extends Activity {
     String stateError;
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
+        android.util.Log.i("JadixNativeState", "Activity create saved=" + (saved != null)
+                + " stateId=" + (saved == null ? null : saved.getString("nativeStateId")));
         content = new NativeView(this);
         setContentView(content);
         if (Build.VERSION.SDK_INT >= 30) {
@@ -27,7 +29,14 @@ public final class MainActivity extends Activity {
             stateStore.activate();
             if (saved != null) {
                 if (saved.containsKey("nativeStateError")) throw new java.io.IOException("previous save failed");
-                if (saved.containsKey("nativeStateId")) content.restore(stateStore.read());
+                if (saved.containsKey("nativeStateId")) {
+                    String state = stateStore.read();
+                    content.restore(state);
+                    org.json.JSONObject restored = new org.json.JSONObject(content.state());
+                    android.util.Log.i("JadixNativeState", "Restored stateId=" + stateStore.id
+                            + " count=" + restored.optLong("count", -1)
+                            + " valueLength=" + restored.optString("value").length());
+                }
                 else if (saved.containsKey("nativeState")) content.restore(saved.getString("nativeState"));
                 else if (saved.containsKey("count") || saved.containsKey("value")) {
                     org.json.JSONObject legacy = new org.json.JSONObject(content.state());
@@ -44,11 +53,18 @@ public final class MainActivity extends Activity {
             stateStore.activate();
             reportStateError("Saved state unavailable; opened a new page", error);
         }
+        content.handleIntent(getIntent(), saved == null);
+        content.installBackHandler(this);
     }
+    @Override protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent); setIntent(intent); content.handleIntent(intent, false);
+    }
+
     @Override protected void onSaveInstanceState(Bundle saved) {
         try {
             stateStore.write(content.state());
             saved.putString("nativeStateId", stateStore.id);
+            android.util.Log.i("JadixNativeState", "Saved stateId=" + stateStore.id);
         } catch (Exception error) {
             saved.putBoolean("nativeStateError", true);
             reportStateError("Could not save the latest page state", error);
@@ -60,6 +76,7 @@ public final class MainActivity extends Activity {
         android.util.Log.e("JadixNativeState", message, error);
         android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_LONG).show();
     }
+    @Override public void onBackPressed() { content.requestClose(this::finish); }
     @Override protected void onDestroy() {
         content.close();
         if (isFinishing() && stateStore != null) stateStore.delete();

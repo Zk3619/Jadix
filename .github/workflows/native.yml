@@ -389,3 +389,44 @@ jobs:
           path: |
             target/native/ios
             target/native/ios-runtime
+
+  linux-native:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install native system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev libwebkitgtk-6.0-dev libgstreamer-plugins-base1.0-dev libfontconfig1-dev libssl-dev libegl1-mesa-dev libgles2-mesa-dev gstreamer1.0-plugins-base dbus-daemon curl pkg-config
+      - name: Verify SDK
+        working-directory: crates/jadix_shell/sdk
+        run: npm ci && npm run check:generated && npm test && npm run typecheck
+      - name: Verify shared services and GTK adapter without a display
+        run: |
+          set -o pipefail
+          mkdir -p linux-evidence
+          cargo test --locked -p jadix_net --features native-websocket --lib 2>&1 | tee linux-evidence/network.log
+          cargo test --locked -p jadix_core -p jadix_native -p jadix_shell --features jadix_native/linux,jadix_shell/native-linux,jadix_shell/native-vm,jadix_shell/native-store,jadix_core/shader,jadix_core/updater-install,jadix_core/fonts,jadix_core/terminal,jadix_core/system-environment --lib --tests -- --test-threads=1 2>&1 | tee linux-evidence/tests.log
+          python3 -m unittest discover -s scripts/tests -p test_native_linux.py -v 2>&1 | tee linux-evidence/workflow.log
+          cargo build --locked -p jadix_native_controls --features linux,consistent-ui --bin native-linux 2>&1 | tee linux-evidence/build.log
+      - name: Build and verify the standalone Linux template
+        run: |
+          python3 scripts/native.py create "$RUNNER_TEMP/jadix-linux-demo" --name jadix-linux-demo --platform linux --output linux-evidence/create.json
+          python3 scripts/native.py build --platform linux --project "$RUNNER_TEMP/jadix-linux-demo" --output linux-evidence/build.json
+          python3 scripts/native.py inspect --artifact linux-evidence/build.json --output linux-evidence/inspect.json
+          python3 scripts/native.py package --artifact linux-evidence/build.json --output linux-evidence/package.json
+          python3 scripts/native.py verify --package linux-evidence/package-files/native-linux.zip --output linux-evidence/verify.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-native-headless-evidence
+          path: linux-evidence

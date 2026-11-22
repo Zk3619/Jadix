@@ -1,0 +1,8 @@
+{
+  "id": "@APPLICATION_ID@",
+  "name": "@NAME@",
+  "version": "0.1.0",
+  "executable": "bin/@NAME@",
+  "schemes": ["@NAME@"],
+  "assets": []
+}

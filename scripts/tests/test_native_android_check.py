@@ -14,36 +14,85 @@ SPEC.loader.exec_module(CHECK)
 
 
 class NativeAndroidCheckTests(unittest.TestCase):
+    def test_process_termination_requires_os_acknowledged_saved_state(self):
+        for have, icicle in (("haveState", "icicle"), ("mHaveState", "mIcicle")):
+            home = "mResumedActivity: ActivityRecord{a u0 com.android.launcher/.Home t1}\n"
+            record = ("* Hist #0: ActivityRecord{b u0 dev.jadix.nativeui/.MainActivity t2}\n"
+                      "  packageName=dev.jadix.nativeui processName=dev.jadix.nativeui\n"
+                      f"  {have}=true {icicle}=Bundle[mParcelledData.dataSize=732]\n"
+                      "  state=STOPPED stopped=true\n")
+            self.assertTrue(CHECK.saved_background_activity(home + record, "dev.jadix.nativeui"))
+            for invalid in (record, home, home + record.replace("STOPPED", "STOPPING"),
+                            home + record.replace("STOPPED", "PAUSED"),
+                            home + record.replace(have + "=true", have + "=false"),
+                            home + record.replace(icicle + "=Bundle[mParcelledData.dataSize=732]", icicle + "=null"),
+                            home + record.replace("packageName=dev.jadix.nativeui ", "packageName=dev.jadix.nativeui.other "),
+                            home + record + record.replace("STOPPED", "PAUSED")):
+                self.assertFalse(CHECK.saved_background_activity(invalid, "dev.jadix.nativeui"))
+
+    def test_background_proof_accepts_old_and_current_activity_formats(self):
+        for prefix in ("mResumedActivity:", "topResumedActivity=", "ResumedActivity:"):
+            line = "  " + prefix + " ActivityRecord{abcd u0 com.android.launcher/.Home t1}"
+            self.assertTrue(CHECK.resumed_elsewhere(line, "dev.jadix.nativeui"))
+            self.assertFalse(CHECK.resumed_elsewhere(line.replace("com.android.launcher", "dev.jadix.nativeui"), "dev.jadix.nativeui"))
+            self.assertFalse(CHECK.resumed_elsewhere(line + "\n  topResumedActivity=ActivityRecord{ef u0 dev.jadix.nativeui/.MainActivity t2}", "dev.jadix.nativeui"))
+        self.assertFalse(CHECK.resumed_elsewhere("no resumed activity", "dev.jadix.nativeui"))
+
+    def test_keyboard_precondition_uses_explicit_os_visibility(self):
+        for name in ("mInputShown", "mIsInputViewShown", "isInputViewShown"):
+            self.assertTrue(CHECK.ime_visible(name + "=true"))
+            self.assertFalse(CHECK.ime_visible(name + "=false"))
+        self.assertFalse(CHECK.ime_visible("mShowRequested=true"))
+        self.assertFalse(CHECK.ime_visible("mInputShown=false\nmIsInputViewShown=true"))
+        self.assertTrue(CHECK.ime_visible("mInputShown=true\nmIsInputViewShown=false"))
+
+    def test_capability_receipt_rejects_stale_partial_and_failed_runs(self):
+        value = {"schema": 1, "token": "fresh", "passed": True, "api": 36,
+                 "checks": ["shared-html/native-round-trip", "native-rich-edit/pasted-style", "selection/os-long-press-handle-copy-ancestor-handoff", "web/async-promise",
+                            "web/rejection-navigation-disposal", "media/decode-ended-seek-rate-loop-pause-dispose",
+                            "sound/bytes-decode-overlap-32-voices-stop-unload", "audio/preload-paused-rate-seek-loop-os-focus-dispose",
+                            "touch/synthetic-motion-event-tilt", "notification/request-error-preserves-os-authorization", "environment/os-locale-contrast",
+                            "auth/custom-tab-ephemeral-callback-lifecycle"],
+                 "authority": "Android instrumentation, shared Rust HTML policy, OS HTML importer, WebView JavaScript, MediaPlayer/PCM decoding and OS audio focus; programmatic actions, injected selection touch, OS Copy and internal readback"}
+        def log(item):
+            return "INSTRUMENTATION_RESULT: jadix_capabilities=" + json.dumps(item) + "\nINSTRUMENTATION_RESULT: stream=JADIX_NATIVE_CAPABILITIES_PASS\nINSTRUMENTATION_CODE: -1"
+        valid = log(value)
+        self.assertEqual(CHECK.capability_receipt(valid, "fresh", 36), value)
+        for invalid in (valid + "\n" + valid, valid.replace("PASS", "FAIL"), valid.replace("fresh", "stale"), valid.replace("-1", "0")):
+            with self.assertRaises(ValueError): CHECK.capability_receipt(invalid, "fresh", 36)
+        for key, item in (("schema", True), ("api", 26), ("checks", value["checks"][:-1]), ("authority", "mock")):
+            with self.assertRaises(ValueError): CHECK.capability_receipt(log(dict(value, **{key: item})), "fresh", 36)
+
     def test_extended_acceptance_requires_explicit_ime_proof(self):
-        marker = "JADIX_NATIVE_CHECKS_PASS: extensions=true; switch_checked=true; retained_editing_checked=true; retained_editors=3;"
+        marker = "JADIX_NATIVE_CHECKS_PASS: extensions=true; autofill_transaction_probe=true; switch_checked=true; retained_editing_checked=true; retained_editors=3;"
         self.assertFalse(CHECK.instrumentation_passed(marker, True))
         self.assertFalse(CHECK.instrumentation_passed(marker + "; dialog_ime_checked=false", True))
         self.assertTrue(CHECK.instrumentation_passed(marker + "; dialog_ime_checked=true", True))
         self.assertFalse(CHECK.instrumentation_passed(marker + "; dialog_ime_checked=true; JADIX_NATIVE_CHECKS_FAIL", True))
-        self.assertTrue(CHECK.instrumentation_passed("JADIX_NATIVE_CHECKS_PASS: extensions=false; retained_editing_checked=true; retained_editors=1;", False))
+        self.assertTrue(CHECK.instrumentation_passed("JADIX_NATIVE_CHECKS_PASS: extensions=false; autofill_transaction_probe=true; retained_editing_checked=true; retained_editors=1;", False))
 
     def test_acceptance_requires_current_retained_editing_proof(self):
-        marker = "JADIX_NATIVE_CHECKS_PASS: extensions=true; switch_checked=true; dialog_ime_checked=true;"
+        marker = "JADIX_NATIVE_CHECKS_PASS: extensions=true; autofill_transaction_probe=true; switch_checked=true; dialog_ime_checked=true;"
         self.assertFalse(CHECK.instrumentation_passed(marker, True))
         self.assertFalse(CHECK.instrumentation_passed(marker + " retained_editing_checked=false; retained_editors=3;", True))
         self.assertFalse(CHECK.instrumentation_passed(marker + " retained_editing_checked=true; retained_editors=1;", True))
         self.assertTrue(CHECK.instrumentation_passed(marker + " retained_editing_checked=true; retained_editors=3;", True))
 
     def test_extended_acceptance_rejects_receipts_without_switch_proof(self):
-        marker = "JADIX_NATIVE_CHECKS_PASS: extensions=true; dialog_ime_checked=true; retained_editing_checked=true; retained_editors=3;"
+        marker = "JADIX_NATIVE_CHECKS_PASS: extensions=true; autofill_transaction_probe=true; dialog_ime_checked=true; retained_editing_checked=true; retained_editors=3;"
         self.assertFalse(CHECK.instrumentation_passed(marker, True))
         self.assertFalse(CHECK.instrumentation_passed(marker + " switch_checked=false;", True))
         self.assertTrue(CHECK.instrumentation_passed(marker + " switch_checked=true;", True))
 
     def test_proof_must_belong_to_one_complete_receipt(self):
-        marker = "JADIX_NATIVE_CHECKS_PASS: extensions=true; dialog_ime_checked=true; retained_editing_checked=true; retained_editors=3;"
+        marker = "JADIX_NATIVE_CHECKS_PASS: extensions=true; autofill_transaction_probe=true; dialog_ime_checked=true; retained_editing_checked=true; retained_editors=3;"
         self.assertFalse(CHECK.instrumentation_passed(marker + "\nother output: switch_checked=true;", True))
         self.assertFalse(CHECK.instrumentation_passed(marker + " switch_checked=true;\n" + marker, True))
         self.assertFalse(CHECK.instrumentation_passed(marker + " switch_checked=true; switch_checked=false;", True))
         self.assertTrue(CHECK.instrumentation_passed("INSTRUMENTATION_RESULT: stream=" + marker + " switch_checked=true;\nINSTRUMENTATION_CODE: -1", True))
 
     def test_receipt_values_are_exact(self):
-        marker = "JADIX_NATIVE_CHECKS_PASS: extensions=true; dialog_ime_checked=true; retained_editing_checked=true; retained_editors=3; switch_checked=true;"
+        marker = "JADIX_NATIVE_CHECKS_PASS: extensions=true; autofill_transaction_probe=true; dialog_ime_checked=true; retained_editing_checked=true; retained_editors=3; switch_checked=true;"
         for source, replacement in [("extensions=true", "extensions=trueish"), ("retained_editors=3", "retained_editors=30"), ("switch_checked=true", "switch_checked=trueish")]:
             self.assertFalse(CHECK.instrumentation_passed(marker.replace(source, replacement), True))
 
@@ -96,7 +145,7 @@ class NativeAndroidCheckTests(unittest.TestCase):
 
     def editing_fixture(self, token="fresh-token", rows=100):
         checks = ["unicode-commit", "copy", "cut", "paste", "undo", "redo", "history-after-republish-reorder", "controlled-reset-clears-history"]
-        return {"schema": 1, "token": token, "passed": True, "retained_rows": rows, "key_events": 42, "editors": [{"control": label, "checks": checks.copy(), "native_identity_retained": True, "business_roundtrip": True} for label in ("Name / 中文", "Multiline / 多行")], "password_checks": ["unicode-paste", "copy-blocked", "cut-blocked", "public-state-isolation"], "clipboard_restored": True, "event_authority": "Instrumentation-injected clipboard/undo shortcuts; programmatic InputConnection seed, selection, controlled reset and sibling perturbation; soft keyboard suppressed"}
+        return {"schema": 1, "token": token, "passed": True, "retained_rows": rows, "key_events": 42, "editors": [{"control": label, "checks": checks.copy(), "native_identity_retained": True, "business_roundtrip": True} for label in ("Name / 中文", "Multiline / 多行")], "password_checks": ["unicode-paste", "copy-blocked", "cut-blocked", "public-state-isolation"], "clipboard_restored": True, "clipboard_restore": "exact", "event_authority": "Instrumentation-injected clipboard/undo shortcuts; programmatic InputConnection seed, selection, controlled reset and sibling perturbation; soft keyboard suppressed"}
 
     def editing_log(self, receipt):
         return "INSTRUMENTATION_RESULT: jadix_editing=" + json.dumps(receipt) + chr(10) + "INSTRUMENTATION_RESULT: stream=JADIX_NATIVE_EDITING_PASS" + chr(10) + "INSTRUMENTATION_CODE: -1"
@@ -287,7 +336,7 @@ class NativeAndroidCheckTests(unittest.TestCase):
             directory = Path(temporary)
             apk = directory / "sample.apk"
             apk.write_bytes(b"fixture")
-            expected = {"application": "controls", "package_name": "dev.jadix.nativeui", "extended": True,
+            expected = {"application": "controls", "package_name": "dev.jadix.nativeui", "min_sdk": 26, "extended": True,
                         "retained_rows": 100, "apk_bytes": 7, "apk_sha256": hashlib.sha256(b"fixture").hexdigest()}
             for field, value in [(None, None), ("application", "selection"), ("package_name", "user.app"),
                                  ("extended", False), ("retained_rows", 1000), ("retained_rows", True),

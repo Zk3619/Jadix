@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.jadix.popover">
-    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="35" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <queries><intent><action android:name="android.speech.RecognitionService" /></intent></queries>
     <instrumentation android:name="dev.jadix.nativeui.PopoverChecks" android:targetPackage="dev.jadix.popover" android:label="Jadix Popover checks" />
-    <application android:label="Jadix Popover" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:debuggable="true" android:extractNativeLibs="true" android:allowBackup="false">
-        <activity android:name="dev.jadix.nativeui.MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+    <application android:enableOnBackInvokedCallback="true" android:label="Jadix Popover" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:debuggable="true" android:extractNativeLibs="true" android:allowBackup="false">
+        <provider android:name="dev.jadix.nativeui.NativeShareProvider" android:authorities="dev.jadix.popover.jadix.share" android:exported="false" android:grantUriPermissions="true" />
+        <receiver android:name="dev.jadix.nativeui.NativeShare$ChosenReceiver" android:exported="false" />
+        <activity android:name="dev.jadix.nativeui.MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize" android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

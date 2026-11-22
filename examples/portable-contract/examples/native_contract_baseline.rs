@@ -1,5 +1,5 @@
 use jadix_native::presentation::hybrid::{host::*, policy::*, *};
-use jadix_native::{layout::*, presentation::*, HeadlessRoot};
+use jadix_native::{HeadlessRoot, layout::*, presentation::*};
 use std::time::Instant;
 
 struct ReferenceAdapter;
@@ -36,6 +36,11 @@ fn node(root: RootId, content: NodeContent) -> PresentationNode {
             accessible_expanded: None,
             accessible_description: None,
             accessible_name: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
+            accessibility_relations: Default::default(),
             style: Default::default(),
         },
         children: vec![],
@@ -127,7 +132,9 @@ fn main() {
         let p95 = percentile(&mut changed, 95);
         let idle_p95 = percentile(&mut idle, 95);
         let hybrid_p95 = percentile(&mut composition, 95);
-        println!("{{\"rows\":{rows},\"samples\":30,\"changed_p50_ms\":{p50},\"changed_p95_ms\":{p95},\"idle_p95_ms\":{idle_p95},\"hybrid_p95_ms\":{hybrid_p95},\"idle_measurements\":{idle_measurements},\"idle_commits\":0}}");
+        println!(
+            "{{\"rows\":{rows},\"samples\":30,\"changed_p50_ms\":{p50},\"changed_p95_ms\":{p95},\"idle_p95_ms\":{idle_p95},\"hybrid_p95_ms\":{hybrid_p95},\"idle_measurements\":{idle_measurements},\"idle_commits\":0}}"
+        );
         backend.dispose();
     }
 }

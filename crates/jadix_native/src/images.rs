@@ -21,6 +21,8 @@ mod http_windows;
 
 mod disk;
 pub use disk::ImageDiskCache;
+#[cfg(any(feature = "apple", feature = "android", feature = "linux", feature = "windows"))]
+pub(crate) mod svg;
 
 const MAX_SOURCE_BYTES: usize = 768 * 1024 - 24;
 
@@ -119,6 +121,20 @@ pub struct ImageLoader {
     worker_active: Arc<AtomicBool>,
 }
 
+impl ImageLimits {
+    pub fn is_valid(&self) -> bool {
+        !(self.bindings == 0
+            || self.bindings > 128
+            || self.pending == 0
+            || self.pending > 8
+            || self.source_bytes == 0
+            || self.source_bytes > MAX_SOURCE_BYTES
+            || self.cache_bytes > 32 * 1024 * 1024
+            || self.cache_entries > 128
+            || self.cache_age > Duration::from_secs(86400))
+    }
+}
+
 impl ImageLoader {
     pub fn new(
         lifetime: RootLifetime,
@@ -147,18 +163,7 @@ impl ImageLoader {
         if lifetime.is_disposed() {
             return Err(ImageError::Disposed);
         }
-        if limits.bindings == 0
-            || limits.bindings > 128
-            || limits.pending == 0
-            || limits.pending > 8
-            || limits.source_bytes == 0
-            || limits.source_bytes > MAX_SOURCE_BYTES
-            || limits.cache_bytes > 32 * 1024 * 1024
-            || limits.cache_entries > 128
-            || limits.cache_age > Duration::from_secs(86400)
-        {
-            return Err(ImageError::Limits);
-        }
+        if !limits.is_valid() { return Err(ImageError::Limits); }
         let (sender, jobs) = sync_channel::<Job>(limits.pending);
         let (finished, receiver) = sync_channel(limits.pending);
         let disk_enabled = disk.is_some();
@@ -211,15 +216,7 @@ impl ImageLoader {
                             Ok,
                         )
                         .and_then(|loaded| {
-                            let uri = format!(
-                                "data:image/png;base64,{}",
-                                base64::engine::general_purpose::STANDARD.encode(&loaded.bytes)
-                            );
-                            let content = NodeContent::Image {
-                                source: uri.clone(),
-                                alt: String::new(),
-                            };
-                            content.image_dimensions().ok_or(ImageError::Format)?;
+                            let uri = image_uri(&loaded.bytes)?;
                             if !disk_hit && !job.cancelled.load(Ordering::Acquire) {
                                 if let Some(Ok(cache)) = &mut disk {
                                     if let Err(error) = cache.write(&job.source, &loaded) {
@@ -498,7 +495,7 @@ impl ImageLoader {
 
     pub fn inspection(&self) -> serde_json::Value {
         serde_json::json!({"bindings":self.bindings.len(),"cache_entries":self.cache.len(),"cache_bytes":self.cache_bytes,
-            "source_byte_limit":self.limits.source_bytes,"network_available":cfg!(all(windows,feature="windows")),"source_values_redacted":true,
+            "source_byte_limit":self.limits.source_bytes,"network_available":cfg!(any(all(windows,feature="windows"), all(target_os="linux",not(target_env="ohos"),feature="linux"))),"source_values_redacted":true,
             "disk_enabled":self.disk_enabled,"disk_file_sources_only":false,
             "url_cache_policy":"explicit max-age; no stale fallback; no-store/private/no-cache/Vary/Set-Cookie rejected",
             "disk_entries":self.disk_stats.entries.load(Ordering::Acquire),
@@ -523,9 +520,49 @@ impl Drop for ImageLoader {
     }
 }
 
+fn image_uri(bytes: &[u8]) -> Result<String, ImageError> {
+    #[cfg(any(feature = "apple", feature = "android", feature = "linux", feature = "windows"))]
+    let expanded = svg::source_bytes(bytes).ok_or(ImageError::Format)?;
+    #[cfg(any(feature = "apple", feature = "android", feature = "linux", feature = "windows"))]
+    let bytes = expanded.as_ref();
+    #[cfg(any(feature = "apple", feature = "android", feature = "linux", feature = "windows"))]
+    let mime = {
+        let mime = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") { "image/png" }
+            else if bytes.starts_with(b"\xff\xd8\xff") { "image/jpeg" }
+            else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") { "image/gif" }
+            else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") { "image/webp" }
+            else if bytes.starts_with(b"BM") { "image/bmp" }
+            else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") { "image/tiff" }
+            else if bytes.starts_with(&[0, 0, 1, 0]) { "image/x-icon" }
+            else if bytes.starts_with(b"icns") { "image/icns" }
+            else if svg::rasterize(bytes, 1, 1, 3).is_some() { "image/svg+xml" }
+            else { return Err(ImageError::Format); };
+        if mime != "image/svg+xml" {
+            let size = imagesize::blob_size(bytes).map_err(|_|ImageError::Format)?;
+            if size.width == 0 || size.height == 0 || size.width > 4096 || size.height > 4096 || size.width.saturating_mul(size.height) > 4 * 1024 * 1024 { return Err(ImageError::Limits); }
+        }
+        mime
+    };
+    #[cfg(not(any(feature = "apple", feature = "android", feature = "linux", feature = "windows")))]
+    let mime = "image/png";
+    let uri = format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes));
+    if uri.len() > 1024 * 1024 { return Err(ImageError::Limits); }
+    #[cfg(not(any(feature = "apple", feature = "android", feature = "linux", feature = "windows")))]
+    NodeContent::Image { source: uri.clone(), alt: String::new() }.image_dimensions().ok_or(ImageError::Format)?;
+    Ok(uri)
+}
+
+#[cfg(all(windows, feature = "windows"))]
+pub(crate) fn load_uri(source: &ImageSource, cancelled: &Arc<AtomicBool>) -> Result<String, ImageError> {
+    if cancelled.load(Ordering::Acquire) { return Err(ImageError::Cancelled); }
+    let loaded = fetch(source, cancelled, MAX_SOURCE_BYTES, Duration::from_secs(30))?;
+    if cancelled.load(Ordering::Acquire) { return Err(ImageError::Cancelled); }
+    image_uri(&loaded.bytes)
+}
+
 fn fetch(
     source: &ImageSource,
-    cancelled: &AtomicBool,
+    cancelled: &Arc<AtomicBool>,
     limit: usize,
     cache_age: Duration,
 ) -> Result<Loaded, ImageError> {
@@ -567,7 +604,26 @@ fn fetch(
             {
                 http_windows::fetch(url, cancelled, limit)
             }
-            #[cfg(not(all(windows, feature = "windows")))]
+            #[cfg(all(target_os = "linux", not(target_env = "ohos"), feature = "linux"))]
+            {
+                let cancellation = cancelled.clone();
+                let mut request = jadix_net::HttpRequest::get(url);
+                request.max_response_bytes = limit;
+                request.timeout = Duration::from_secs(10);
+                let started = Instant::now();
+                let response = jadix_net::native_https::HttpsClient::new("/usr/bin/curl")
+                    .get_cancellable(request, move || cancellation.load(Ordering::Acquire))
+                    .map_err(|error| match error.kind {
+                        jadix_net::HttpErrorKind::Cancelled => ImageError::Cancelled,
+                        jadix_net::HttpErrorKind::BodyTooLarge => ImageError::Limits,
+                        _ => ImageError::Source,
+                    })?;
+                if response.status != 200 { return Err(ImageError::Source); }
+                let expires = jadix_net::cache::freshness(&response.headers, std::time::SystemTime::now(), started.elapsed())
+                    .and_then(|age| Instant::now().checked_add(age.min(cache_age)));
+                Ok(Loaded { bytes: response.body.to_vec(), expires })
+            }
+            #[cfg(not(any(all(windows, feature = "windows"), all(target_os = "linux", not(target_env = "ohos"), feature = "linux"))))]
             {
                 let _ = url;
                 Err(ImageError::Unsupported)

@@ -1,6 +1,6 @@
 use jadix_components::{authoring::native::ElementProjection, prelude::*};
 use jadix_core::reactivity::create_root;
-use jadix_native::{host::NativeRoot, presentation::*, windows::WindowsHost};
+use jadix_native::{host::{NativeRoot, PlatformHost}, presentation::*, windows::WindowsHost};
 use std::io::Write;
 
 fn main() {
@@ -11,13 +11,28 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    if jadix_native::windows::run_update_helper()? { return Ok(()); }
+    let activation = jadix_core::deep_link::ApplicationActivation {
+        identifier: "dev.jadix.@NAME@".into(), arguments: Vec::new(),
+        file_extensions: Default::default(),
+        deep_links: jadix_core::deep_link::DeepLinkConfig {
+            schemes: std::collections::BTreeSet::from([format!("jadix-{}", "@NAME@".replace('_', "-"))]), ..Default::default()
+        },
+    };
     let arguments: Vec<_> = std::env::args().skip(1).collect();
     let probe = match arguments.as_slice() {
         [] => None,
+        [mode] if mode == "--register-protocols" => { WindowsHost::register_activation_protocols(&activation)?; return Ok(()); }
+        [mode] if mode == "--unregister-protocols" => { WindowsHost::unregister_activation_protocols(&activation)?; return Ok(()); }
+        [mode] if mode == "--register-files" => { WindowsHost::register_activation_files(&activation)?; return Ok(()); }
+        [mode] if mode == "--unregister-files" => { WindowsHost::unregister_activation_files(&activation)?; return Ok(()); }
+        [mode] if mode == "-JadixToastActivated" => None,
         [mode, nonce, output] if mode == "--probe" && !nonce.is_empty() && nonce.len() <= 128 => Some((nonce, output)),
-        _ => return Err("Usage: @NAME@ [--probe NONCE NEW_REPORT_JSON]".into()),
+        _ if activation.launch_links(&jadix_core::deep_link::ApplicationLaunch::current()?, jadix_core::deep_link::DeepLinkSource::ColdStart)?.len() == arguments.len() => None,
+        _ => return Err("Usage: @NAME@ [URL_OR_REGISTERED_FILE... | --register-protocols | --unregister-protocols | --register-files | --unregister-files | --probe NONCE NEW_REPORT_JSON]".into()),
     };
-    let host = WindowsHost::new("@NAME@", [640, 480])?;
+    let mut host = WindowsHost::new("@NAME@", [640, 480])?;
+    if probe.is_none() && !host.configure_activation(activation)? { host.dispose(); return Ok(()); }
     let mut root = NativeRoot::new(host);
     let mut projection = ElementProjection::with_lifetime(root.model().lifetime());
     let (owner, (count, mut element)) = create_root(|| {

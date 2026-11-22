@@ -67,6 +67,10 @@ fn node(id: NodeId, content: NodeContent, children: Vec<PresentationNode>) -> Pr
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             accessible_description: None,
             accessible_name: None,
@@ -167,6 +171,10 @@ fn duplicate_foreign_or_unsupported_snapshots_do_not_change_the_tree() {
         text_editing: false,
         focus: false,
         scrolling: false,
+        inline_raster_sources: false,
+        inline_svg_sources: false,
+        local_image_sources: false,
+        remote_image_sources: false,
     };
     let mut root = HeadlessRoot::with_capabilities(capabilities);
     let id = NodeId::new(root.id());

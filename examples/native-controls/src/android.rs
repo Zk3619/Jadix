@@ -1,4 +1,7 @@
+#[cfg(not(feature = "native-shell"))]
 use super::PlatformApp as NativeApp;
+#[cfg(feature = "native-shell")]
+use super::shell::ShellApp as NativeApp;
 use jadix_native::android::AndroidHost;
 use jni::{
     objects::{JClass, JObject, JString},
@@ -39,18 +42,31 @@ pub extern "system" fn Java_dev_jadix_nativeui_NativeView_nativeCreate(
             .get_string(&text)
             .map_err(|error| error.to_string())?
             .into();
-        let host = AndroidHost::new(&env, &peer).map_err(|error| error.to_string())?;
+        let mut host = AndroidHost::new(&env, &peer).map_err(|error| error.to_string())?;
+        host.set_window_factory(|host, viewport, content| {
+            let app = NativeApp::new_with_content(host, viewport, content)?;
+            let token = app_token(&app);
+            APPS.with(|apps| apps.borrow_mut().insert(token.clone(), app));
+            Ok(token)
+        });
         let app = NativeApp::new(
             host,
             [width, height],
             usize::try_from(count).map_err(|error| error.to_string())?,
             text,
         )?;
-        let token = app.root.model().id().token();
+        let token = app_token(&app);
         APPS.with(|apps| apps.borrow_mut().insert(token.clone(), app));
         Ok(token)
     })();
     output(&mut env, result)
+}
+
+fn app_token(app: &NativeApp<AndroidHost>) -> String {
+    #[cfg(feature = "native-shell")]
+    { app.app.root().model().id().token() }
+    #[cfg(not(feature = "native-shell"))]
+    { app.root.model().id().token() }
 }
 
 fn with_app(
@@ -63,15 +79,20 @@ fn with_app(
             .get_string(&token)
             .map_err(|error| error.to_string())?
             .into();
-        APPS.with(|apps| {
+        let (result, wakes) = APPS.with(|apps| {
             let mut apps = apps
                 .try_borrow_mut()
                 .map_err(|_| String::from("reentrant native event"))?;
-            action(
-                apps.get_mut(&token)
-                    .ok_or_else(|| String::from("disposed native root"))?,
-            )
-        })
+            let app = apps.get_mut(&token).ok_or_else(|| String::from("disposed native root"))?;
+            let result = action(app);
+            #[cfg(feature = "native-shell")]
+            let wakes = app.app.take_web_wakes();
+            #[cfg(not(feature = "native-shell"))]
+            let wakes: Vec<jadix_core::web_evaluation::EvaluationBatch> = Vec::new();
+            Ok::<_, String>((result, wakes))
+        })?;
+        for wake in wakes { wake.wake(); }
+        result
     })();
     output(env, result)
 }
@@ -202,9 +223,9 @@ pub extern "system" fn Java_dev_jadix_nativeui_NativeView_nativeDispose(
         .map_err(|error| error.to_string());
     match result {
         Ok(token) => {
-            APPS.with(|apps| {
-                apps.borrow_mut().remove(&token);
-            });
+            let app = APPS.with(|apps| apps.borrow_mut().remove(&token));
+            // Disposal may wake host work that reenters this registry.
+            drop(app);
         }
         Err(error) => {
             let _ = env.throw_new("java/lang/IllegalStateException", error);

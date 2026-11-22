@@ -1296,6 +1296,10 @@ impl PlatformHost for OhosHost {
             text_editing: true,
             focus: true,
             scrolling: true,
+            inline_raster_sources: false,
+            inline_svg_sources: false,
+            local_image_sources: false,
+            remote_image_sources: false,
         }
     }
 

@@ -64,6 +64,7 @@ impl<Host: PlatformHost> DataTable<Host> {
             label.descriptor.accessible_role = Some(AccessibleRole::GridColumnHeader {
                 column: u32::try_from(*index)
                     .map_err(|_| "header column exceeds semantic range")?,
+                column_span: 1,
             });
             label.descriptor.accessible_name = Some(format!("Column {key:04}"));
             bodies[side].children.push(label);

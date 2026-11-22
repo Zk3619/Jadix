@@ -8,39 +8,60 @@ description = "Portable native presentation, platform hosts and layout for Jadix
 readme = "README.md"
 
 [dependencies]
-jadix_core.workspace = true
+jadix_core = { workspace = true, features = ["updater", "fonts"] }
 jadix_layout.workspace = true
 taffy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+log.workspace = true
+jadix_net = { workspace = true, features = ["json"] }
 unicode-segmentation.workspace = true
 base64 = "=0.22.1"
 sha2 = "=0.10.9"
 jadix_animation = { workspace = true, optional = true, features = ["animation-base"] }
-jadix_document = { workspace = true, features = ["checkpoint"] }
+jadix_document = { workspace = true, features = ["checkpoint", "document-editing"] }
+resvg = { version = "=0.48.1", optional = true, default-features = false, features = ["system-fonts", "text", "raster-images"] }
+flate2 = { version = "=1.1.9", optional = true }
+imagesize = { version = "=0.15.0", optional = true }
 
 [dev-dependencies]
 
 [features]
 default = []
 consistent-ui = []
+performance = ["jadix_core/performance"]
 motion = ["dep:jadix_animation"]
 code = ["jadix_document/syntax"]
-android = ["dep:jni"]
+android = ["jadix_core/shader", "dep:jni", "motion", "jadix_core/terminal", "performance", "i18n", "jadix_core/system-environment", "dep:resvg", "dep:flate2", "dep:imagesize"]
 dom = ["dep:wasm-bindgen", "dep:web-sys", "dep:js-sys"]
-uikit = []
-windows = ["dep:windows-sys", "dep:windows", "dep:windows-core", "dep:ttf-parser", "jadix_core/system-environment"]
-windows-gpu = ["windows", "dep:wgpu", "dep:rwh_06", "dep:pollster"]
+uikit = ["apple"]
+i18n = ["jadix_core/i18n"]
+appkit = ["apple"]
+apple = ["performance", "i18n", "jadix_core/system-environment", "jadix_core/terminal", "jadix_core/updater-install", "jadix_document/document-editing", "dep:resvg", "dep:flate2", "dep:imagesize"]
+windows = ["dep:resvg", "dep:flate2", "dep:imagesize", "jadix_core/updater-install", "dep:windows-sys", "dep:windows", "dep:windows-core", "dep:windows-numerics", "dep:windows-collections", "dep:ttf-parser", "dep:wry", "dep:rwh_06", "jadix_core/system-environment", "jadix_core/terminal", "performance", "i18n", "motion", "jadix_net/native-https", "jadix_net/native-websocket"]
+windows-gpu = ["windows", "jadix_core/shader", "dep:wgpu", "dep:rwh_06", "dep:pollster"]
 ohos = []
+linux = ["dep:gtk4", "dep:glow", "jadix_core/shader", "jadix_core/updater-install", "dep:webkit6", "dep:gstreamer", "dep:gstreamer-app", "dep:pangocairo", "dep:resvg", "dep:flate2", "dep:imagesize", "motion", "performance", "i18n", "jadix_core/terminal", "jadix_core/system-environment", "jadix_net/native-https", "jadix_net/native-websocket"]
+
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
+gtk4 = { version = "=0.11.5", optional = true, features = ["v4_14"] }
+glow = { version = "=0.17.0", optional = true }
+pangocairo = { version = "0.22", optional = true }
+webkit6 = { version = "=0.6.1", optional = true, features = ["v2_42"] }
+gstreamer = { version = "0.25", optional = true, features = ["v1_22"] }
+gstreamer-app = { version = "0.25", optional = true, features = ["v1_22"] }
 
 [target.'cfg(windows)'.dependencies]
+wry = { workspace = true, optional = true }
 windows-core = { workspace = true, optional = true }
+windows-numerics = { workspace = true, optional = true }
+windows-collections = { workspace = true, optional = true }
 ttf-parser = { workspace = true, optional = true }
 wgpu = { workspace = true, optional = true, features = ["dx12"] }
 rwh_06 = { workspace = true, optional = true }
 pollster = { version = "0.4", optional = true }
-windows = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Accessibility"] }
-windows-sys = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Networking_WinHttp", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Time", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { workspace = true, optional = true, features = ["ApplicationModel_DataTransfer", "Media_Core", "Media_Playback", "Storage", "Storage_Streams", "Win32_Media_MediaFoundation", "Win32_Media_Audio", "Win32_Media_Audio_XAudio2", "Win32_Media_Speech", "Win32_Globalization", "Foundation", "Data_Xml_Dom", "UI_Notifications", "Win32_Foundation", "Win32_Graphics_Imaging", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite", "Win32_Graphics_Dxgi_Common", "Win32_System_Com", "Win32_System_Registry", "Win32_UI_Notifications", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Accessibility", "Win32_UI_Controls_RichEdit", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Networking_WinHttp", "Win32_Security", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_Time", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_Controls_Dialogs", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true, optional = true }
@@ -49,3 +70,6 @@ jni = { workspace = true, optional = true }
 wasm-bindgen = { workspace = true, optional = true }
 js-sys = { version = "0.3", optional = true }
 web-sys = { workspace = true, optional = true, features = ["Window", "Document", "Element", "Node", "NodeList", "HtmlElement", "HtmlImageElement", "HtmlDialogElement", "MouseEvent", "HtmlCollection", "HtmlInputElement", "HtmlSelectElement", "HtmlOptionElement", "HtmlTextAreaElement", "HtmlButtonElement", "CssStyleDeclaration", "DomRect", "Event", "EventTarget", "InputEvent", "CompositionEvent", "FocusEvent", "FocusOptions", "ScrollIntoViewOptions", "ScrollLogicalPosition", "KeyboardEvent", "FontFaceSet"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+zip = { version = "2", default-features = false }

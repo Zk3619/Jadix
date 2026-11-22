@@ -39,6 +39,11 @@ mod application {
         PresentationNode {
             id,
             descriptor: NodeDescriptor {
+                interaction: Default::default(),
+                keyboard: Default::default(),
+                navigation_keys: vec![],
+                accessibility: Default::default(),
+                accessibility_relations: Default::default(),
                 content,
                 frame: Rect::default(),
                 accessible_role: None,

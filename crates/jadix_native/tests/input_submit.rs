@@ -20,6 +20,10 @@ fn submission_requires_a_fresh_revision_enabled_input_and_committed_composition(
         accessible_role: None,
         accessible_selected: None,
         accessible_expanded: None,
+        interaction: Default::default(),
+        keyboard: Default::default(),
+        navigation_keys: Vec::new(),
+        accessibility: Default::default(),
         accessibility_relations: Default::default(),
     };
     model

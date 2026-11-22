@@ -12,6 +12,10 @@ fn descriptor(content: NodeContent) -> NodeDescriptor {
         accessible_role: None,
         accessible_selected: None,
         accessible_expanded: None,
+        interaction: Default::default(),
+        keyboard: Default::default(),
+        navigation_keys: Vec::new(),
+        accessibility: Default::default(),
         accessibility_relations: Default::default(),
         accessible_description: None,
         accessible_name: None,
@@ -53,7 +57,7 @@ fn failed_batch_does_not_publish_partial_tree_or_revision() {
         commit(
             &mut root,
             vec![
-                create(parent, None, 0, button()),
+                create(parent, None, 0, NodeContent::Text("leaf".into())),
                 create(child, Some(parent), 0, button())
             ]
         ),

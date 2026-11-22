@@ -17,6 +17,7 @@ fn setup() -> (
         id: NodeId::new(model.id()),
         descriptor: NodeDescriptor {
             content: NodeContent::Textarea {
+                max_length: None,
                 value: String::new(),
                 placeholder: String::new(),
                 enabled: true,
@@ -27,6 +28,10 @@ fn setup() -> (
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             accessible_description: None,
             accessible_name: None,
@@ -44,6 +49,7 @@ fn setup() -> (
 
 fn update(model: &mut HeadlessRoot, nodes: &mut [PresentationNode], source: &str, revision: u64) {
     nodes[0].descriptor.content = NodeContent::Textarea {
+        max_length: None,
         value: source.into(),
         placeholder: String::new(),
         enabled: true,
@@ -171,7 +177,7 @@ fn cancellation_node_removal_foreign_roots_and_owner_disposal_reject_late_result
 #[test]
 fn document_line_language_and_output_budgets_do_not_expand_native_nodes() {
     let (mut model, mut nodes, mut worker, receive) = setup();
-    for source in ["a".repeat(8193), "\n".repeat(4096), "a\n".repeat(70_000)] {
+    for source in ["a".repeat(64 * 1024 + 1), "\n".repeat(2 * 1024 * 1024 + 1)] {
         assert!(matches!(
             worker.request(&model, TextDocument::new(source), "rs", false),
             Err(SyntaxError::Limits)
@@ -190,5 +196,34 @@ fn document_line_language_and_output_budgets_do_not_expand_native_nodes() {
     assert!(result.plain_fallback);
     assert_eq!(result.spans.len(), 1);
     assert_eq!(result.spans[0].text, source);
+    assert_eq!(model.roots().len(), 1);
+}
+
+#[test]
+fn visible_syntax_keeps_large_documents_colored_without_expanding_native_nodes() {
+    let (mut model, mut nodes, mut worker, receive) = setup();
+    let source = "let value = \"中文🙂\";\r\n".repeat(10_000);
+    update(&mut model, &mut nodes, &source, 1);
+    worker
+        .request_visible(
+            &model,
+            TextDocument::new(source.clone()),
+            "rs",
+            false,
+            0..20,
+        )
+        .unwrap();
+    let result = wait(&mut worker, &model, &receive);
+    assert!(!result.plain_fallback);
+    assert!(result.spans.iter().any(|span| span.color.is_some()));
+    assert_eq!(
+        result
+            .spans
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect::<String>(),
+        source
+    );
+    assert!(result.spans.len() < 2048);
     assert_eq!(model.roots().len(), 1);
 }

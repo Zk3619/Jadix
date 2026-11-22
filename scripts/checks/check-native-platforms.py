@@ -83,7 +83,7 @@ def main():
             windows = sys.platform == "win32"
             host = "windows-x86_64" if windows else "darwin-x86_64" if sys.platform == "darwin" else "linux-x86_64"
             llvm = Path(environment["NDK_HOME"]) / "toolchains/llvm/prebuilt" / host / "bin"
-            environment["CC_aarch64_linux_android"] = str(llvm / ("aarch64-linux-android28-clang" + (".cmd" if windows else "")))
+            environment["CC_aarch64_linux_android"] = str(llvm / ("aarch64-linux-android26-clang" + (".cmd" if windows else "")))
             environment["AR_aarch64_linux_android"] = str(llvm / ("llvm-ar.exe" if windows else "llvm-ar"))
         result = subprocess.run(command, cwd=root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf8", errors="replace")
         log = output / f"{name}.log"

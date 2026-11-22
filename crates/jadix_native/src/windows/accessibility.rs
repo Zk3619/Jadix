@@ -1,14 +1,15 @@
-use windows::core::{GUID, PCWSTR};
 use windows::Win32::Foundation::{HWND, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
-    COINIT_APARTMENTTHREADED,
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    CoUninitialize,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
-    CAccPropServices, IAccPropServices, PROPID_ACC_DESCRIPTION, PROPID_ACC_NAME, PROPID_ACC_ROLE,
+    ANNO_THIS, CAccPropServices, CreateStdAccessibleObject, IAccPropServer, IAccPropServer_Impl,
+    IAccPropServices, IAccessible, PROPID_ACC_DESCRIPTION, PROPID_ACC_NAME, PROPID_ACC_ROLE,
     PROPID_ACC_STATE,
 };
+use windows::core::{BOOL, Error, GUID, Interface, PCWSTR, implement};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CHILDID_SELF, OBJID_CLIENT, STATE_SYSTEM_COLLAPSED, STATE_SYSTEM_EXPANDED,
     STATE_SYSTEM_SELECTABLE, STATE_SYSTEM_SELECTED,
@@ -78,13 +79,17 @@ impl Accessibility {
                             STATE_SYSTEM_COLLAPSED
                         }
                     });
-                    let state = selectable | expansion;
-                    properties.SetHwndProp(
+                    let server: IAccPropServer = SemanticState {
+                        window: window as usize,
+                        state: selectable | expansion,
+                    }.into();
+                    properties.SetHwndPropServer(
                         HWND(window),
                         OBJID_CLIENT as u32,
                         CHILDID_SELF,
-                        PROPID_ACC_STATE,
-                        &VARIANT::from(state as i32),
+                        &[PROPID_ACC_STATE],
+                        &server,
+                        ANNO_THIS,
                     )
                 }
             }
@@ -161,6 +166,53 @@ impl Accessibility {
             }
         }
         .map_err(|error| format!("set native accessible {label}: {error}"))
+    }
+}
+
+// Query the standard proxy on every request so semantic selection/expansion never
+// replaces live focus, pressed, visibility, or disabled states. Unlike
+// AccessibleObjectFromWindow, CreateStdAccessibleObject bypasses our annotations.
+#[implement(IAccPropServer)]
+struct SemanticState {
+    window: usize,
+    state: u32,
+}
+
+impl IAccPropServer_Impl for SemanticState_Impl {
+    fn GetPropValue(
+        &self,
+        _: *const u8,
+        _: u32,
+        property: &GUID,
+        value: *mut VARIANT,
+        has_property: *mut BOOL,
+    ) -> windows::core::Result<()> {
+        if value.is_null() || has_property.is_null() {
+            return Err(Error::from_hresult(windows::Win32::Foundation::E_POINTER));
+        }
+        unsafe {
+            has_property.write(BOOL(0));
+        }
+        if *property != PROPID_ACC_STATE {
+            return Ok(());
+        }
+        let mut standard: Option<IAccessible> = None;
+        unsafe {
+            CreateStdAccessibleObject(
+                HWND(self.window as *mut _),
+                OBJID_CLIENT,
+                &IAccessible::IID,
+                &mut standard as *mut _ as *mut _,
+            )?;
+            let standard =
+                standard.ok_or_else(|| Error::from_hresult(windows::Win32::Foundation::E_FAIL))?;
+            let state = standard.get_accState(&VARIANT::from(CHILDID_SELF as i32))?;
+            value.write(VARIANT::from(
+                state.Anonymous.Anonymous.Anonymous.lVal | self.state as i32,
+            ));
+            has_property.write(BOOL(1));
+        }
+        Ok(())
     }
 }
 

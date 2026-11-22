@@ -48,6 +48,9 @@ compile_error!("popover requires its own native controls page without other samp
 #[path = "popover.rs"]
 mod popover_sample;
 
+#[cfg(all(feature = "uikit", feature = "appkit"))]
+compile_error!("select one Apple native host feature per artifact");
+
 pub mod dock;
 mod editing;
 #[cfg(not(feature = "gpu"))]
@@ -55,25 +58,46 @@ pub mod notes;
 pub mod table;
 pub mod tree;
 pub mod workbench;
+#[cfg(feature = "native-shell")]
+pub mod shell;
+#[cfg(all(target_os = "android", feature = "native-shell", any(feature = "notes", feature = "selection", feature = "popover", feature = "field-workflow", feature = "extended", feature = "large-list", feature = "gpu")))]
+compile_error!("the Android Shell entry requires its own application without other sample features");
 #[cfg(all(
     feature = "notes",
     not(feature = "gpu"),
     not(feature = "field-workflow")
 ))]
-#[cfg(any(target_os = "android", target_arch = "wasm32", feature = "uikit"))]
+#[cfg(any(
+    target_os = "android",
+    target_arch = "wasm32",
+    feature = "uikit",
+    feature = "appkit"
+))]
 type PlatformApp<Host> = notes::NotesApp<Host>;
 #[cfg(all(
     not(all(feature = "notes", not(feature = "gpu"))),
     not(feature = "field-workflow")
 ))]
-#[cfg(any(target_os = "android", target_arch = "wasm32", feature = "uikit"))]
+#[cfg(any(
+    target_os = "android",
+    target_arch = "wasm32",
+    feature = "uikit",
+    feature = "appkit"
+))]
 type PlatformApp<Host> = NativeApp<Host>;
 #[cfg(all(feature = "field-workflow", not(feature = "gpu")))]
-#[cfg(any(target_os = "android", target_arch = "wasm32", feature = "uikit"))]
+#[cfg(any(
+    target_os = "android",
+    target_arch = "wasm32",
+    feature = "uikit",
+    feature = "appkit"
+))]
 type PlatformApp<Host> = field::FieldApp<Host>;
 
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(feature = "appkit")]
+mod appkit;
 #[cfg(feature = "uikit")]
 mod apple;
 #[cfg(all(
@@ -128,7 +152,6 @@ pub struct NativeApp<Host: PlatformHost> {
     clippy::useless_conversion,
     reason = "shared authoring also compiles with GPU builders"
 )]
-#[cfg(any(not(feature = "selection"), feature = "gpu", feature = "extended"))]
 fn label(value: impl ToString, height: f32) -> Element {
     let element: Element = text(value.to_string()).into();
     element.h(height).flex_shrink(0.0)
@@ -333,17 +356,39 @@ fn editor_dialog(value: Signal<String>) -> Element {
 }
 
 impl<Host: PlatformHost> NativeApp<Host> {
+    pub fn root(&self) -> &NativeRoot<Host> { &self.root }
+    pub fn root_mut(&mut self) -> &mut NativeRoot<Host> { &mut self.root }
+
     pub fn new(
         host: Host,
         viewport: [f32; 2],
         count: usize,
         value: String,
     ) -> Result<Self, String> {
-        let root = NativeRoot::new(host);
+        Self::new_with_page(host, viewport, count, value, None)
+    }
+
+    fn new_with_page(
+        host: Host,
+        viewport: [f32; 2],
+        count: usize,
+        value: String,
+        custom_page: Option<&dyn Fn(Signal<usize>, Signal<String>) -> Element>,
+    ) -> Result<Self, String> {
+        let mut root = NativeRoot::new(host);
+        root.refresh_environment().map_err(|error| error.to_string())?;
         let projection = ElementProjection::with_lifetime(root.model().lifetime());
-        let (owner, (count, value, element, extensions)) = create_root(|| {
+        #[cfg(all(any(feature = "linux", feature = "appkit", feature = "uikit", target_os = "android"), not(feature = "gpu")))]
+        let projection = projection.with_locale_context(root.locale_context());
+        let build = || create_root(|| {
+            if let Some(windows) = root.host().window_declarations() {
+                jadix_core::window::provide_window_declarations(windows);
+            }
             let count = create_signal(count);
             let value = create_signal(value);
+            if let Some(custom_page) = custom_page {
+                return (count, value, custom_page(count, value), None);
+            }
             #[cfg(not(all(feature = "extended", not(feature = "gpu"))))]
             let element = page(count, value);
             #[cfg(not(all(feature = "extended", not(feature = "gpu"))))]
@@ -414,6 +459,10 @@ impl<Host: PlatformHost> NativeApp<Host> {
             };
             (count, value, element, extensions)
         });
+        #[cfg(any(feature = "linux", feature = "appkit", feature = "uikit", target_os = "android"))]
+        let (owner, (count, value, element, extensions)) = root.with_locale(build);
+        #[cfg(not(any(feature = "linux", feature = "appkit", feature = "uikit", target_os = "android")))]
+        let (owner, (count, value, element, extensions)) = build();
         let mut app = Self {
             root,
             projection,
@@ -429,7 +478,23 @@ impl<Host: PlatformHost> NativeApp<Host> {
         Ok(app)
     }
 
+    #[cfg(any(feature = "linux", feature = "appkit", feature = "uikit", target_os = "android"))]
+    fn new_with_content(host: Host, viewport: [f32; 2], content: jadix_core::window::WindowContent) -> Result<Self, String> {
+        #[cfg(not(any(feature = "notes", feature = "field-workflow")))]
+        {
+            if !matches!(content.factory.as_str(), "settings" | "document") { return Err("unknown window content factory".into()); }
+            let document = content.factory == "document";
+            let title = content.argument.unwrap_or_else(|| if document { "Document" } else { "Settings" }.into());
+            let settings = |_, value| vstack().p(16.0).gap(8.0).child(label(title.clone(), 32.0))
+                .child(input("display-name").value_signal(value).placeholder(if document { "Document content" } else { "Display name" })).into();
+            Self::new_with_page(host, viewport, 0, String::new(), Some(&settings))
+        }
+        #[cfg(any(feature = "notes", feature = "field-workflow"))]
+        { let _ = (host, viewport, content); Err("unknown window content factory".into()) }
+    }
+
     pub fn render(&mut self) -> Result<(), String> {
+        self.root.refresh_environment().map_err(|error| error.to_string())?;
         let mut nodes = vec![self
             .projection
             .snapshot(&mut self.element)
@@ -437,6 +502,11 @@ impl<Host: PlatformHost> NativeApp<Host> {
         self.root
             .present(&mut nodes, self.viewport, self.environment)
             .map_err(|error| error.to_string())?;
+        #[cfg(not(feature = "gpu"))]
+        if self.projection.apply_layout(&mut self.element, |id| self.root.model().node(id).map(|node| node.descriptor.frame)) {
+            use jadix_native::host::PlatformHost;
+            self.root.host_mut().schedule_reactive_wake(Some(std::time::Duration::ZERO));
+        }
         #[cfg(not(feature = "gpu"))]
         if let Some(node) = self.projection.take_focus_request(&self.element) {
             self.root
@@ -468,12 +538,27 @@ impl<Host: PlatformHost> NativeApp<Host> {
     ) -> Result<bool, String> {
         if matches!(
             event.payload,
-            EventPayload::Activate
+            EventPayload::Scroll { .. }
+                | EventPayload::ScrollActivity(_)
+                | EventPayload::ScrollZoom { .. }
+                | EventPayload::Interaction(_)
+                | EventPayload::Key(_)
+                | EventPayload::Shortcut { .. }
+                | EventPayload::AccessibilityAction { .. }
+                | EventPayload::Hosted { .. }
+                | EventPayload::Focus | EventPayload::FocusVisible | EventPayload::Blur
+                | EventPayload::Hover { .. } | EventPayload::PointerMove { .. }
+                | EventPayload::ScrollViewport { .. }
+                | EventPayload::Activate
+                | EventPayload::ImageLoad(_)
                 | EventPayload::Edit { .. }
                 | EventPayload::Submit { .. }
                 | EventPayload::Select { .. }
                 | EventPayload::Toggle { .. }
                 | EventPayload::Dismiss { .. }
+                | EventPayload::PopoverCancel { .. }
+                | EventPayload::PopoverLifecycle { .. }
+                | EventPayload::PopoverPosition { .. }
                 | EventPayload::Navigate { .. }
         ) {
             self.projection
@@ -555,5 +640,30 @@ impl<Host: PlatformHost> Drop for NativeApp<Host> {
         self.root.dispose();
         self.projection.dispose();
         self.owner.take();
+    }
+}
+
+#[cfg(all(feature = "linux", target_os = "linux", not(target_env = "ohos")))]
+impl NativeApp<jadix_native::linux::GtkHost> {
+    pub fn register_linux_windows(host: &mut jadix_native::linux::GtkHost) -> Result<(), String> {
+        use jadix_native::linux::gtk4::prelude::*;
+        for factory in ["settings", "document"] {
+            host.register_window_factory(factory, move |host, argument| {
+                let viewport = [host.window().default_width() as f32, host.window().default_height() as f32];
+                Self::new_with_content(host, viewport, jadix_core::window::WindowContent {
+                    factory: factory.into(), argument: argument.map(str::to_owned),
+                }).map(|app| Box::new(app) as Box<dyn jadix_native::linux::WindowApplication>)
+            })?;
+        }
+        Ok(())
+    }
+}
+#[cfg(all(feature = "linux", target_os = "linux", not(target_env = "ohos")))]
+impl jadix_native::linux::WindowApplication for NativeApp<jadix_native::linux::GtkHost> {
+    fn host(&self) -> &jadix_native::linux::GtkHost { self.root.host() }
+    fn host_mut(&mut self) -> &mut jadix_native::linux::GtkHost { self.root.host_mut() }
+    fn tick(&mut self) -> Result<(), String> {
+        self.poll_events()?;
+        self.resize(self.root.host().viewport(), 0)
     }
 }

@@ -18,6 +18,13 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
 
 public final class NativeChecks extends Instrumentation {
+    private static final class OversizedAutofillProbe extends android.view.View {
+        OversizedAutofillProbe(Activity activity) { super(activity); }
+        @Override public void onProvideAutofillStructure(android.view.ViewStructure structure, int flags) {
+            throw new IllegalStateException("synthetic autofill transport failure", new android.os.TransactionTooLargeException());
+        }
+    }
+
     private int expectedRows = 100;
     private boolean discardNextState;
     @Override public void callActivityOnCreate(Activity activity, Bundle saved) {
@@ -32,7 +39,7 @@ public final class NativeChecks extends Instrumentation {
         if (arguments != null) expectedRows = Integer.parseInt(arguments.getString("jadix.rows", "100"));
         start();
     }
-    private void require(boolean condition, String message) {
+    private static void require(boolean condition, String message) {
         if (!condition) throw new AssertionError(message);
     }
     private void requireSafeViewport(MainActivity activity) {
@@ -53,6 +60,211 @@ public final class NativeChecks extends Instrumentation {
         android.graphics.Rect expected = new android.graphics.Rect(windowPosition[0] + left, windowPosition[1] + top, windowPosition[0] + decor.getWidth() - right, windowPosition[1] + decor.getHeight() - bottom);
         android.graphics.Rect actual = new android.graphics.Rect(viewPosition[0] + view.getPaddingLeft(), viewPosition[1] + view.getPaddingTop(), viewPosition[0] + view.getWidth() - view.getPaddingRight(), viewPosition[1] + view.getHeight() - view.getPaddingBottom());
         require(actual.equals(expected), "native viewport matches window safe area: actual=" + actual + " expected=" + expected);
+    }
+    private boolean imeVisible(MainActivity activity) {
+        return imeVisible(activity.getWindow().getDecorView(), activity);
+    }
+    private void checkEmbeddedInsets(MainActivity activity) {
+        android.view.ViewGroup window = (android.view.ViewGroup) activity.getWindow().getDecorView();
+        NativeView probe = new NativeView(activity);
+        window.addView(probe, new android.widget.FrameLayout.LayoutParams(1, 1));
+        try {
+            int width = window.getWidth(), height = window.getHeight();
+            probe.layout(0, 0, width, height);
+            int left = probe.getPaddingLeft(), top = probe.getPaddingTop();
+            int right = probe.getPaddingRight(), bottom = probe.getPaddingBottom();
+            require(top + bottom > 0, "embedded probe observes system bars");
+            // A host toolbar/footer consumes the unsafe portions before embedding.
+            probe.layout(left + 8, top + 8, width - right - 8, height - bottom - 8);
+            require(probe.getPaddingLeft() == 0 && probe.getPaddingTop() == 0
+                && probe.getPaddingRight() == 0 && probe.getPaddingBottom() == 0,
+                "embedded root does not duplicate host safe-area padding");
+            probe.layout(0, 0, width, height);
+            require(probe.getPaddingLeft() == left && probe.getPaddingTop() == top
+                && probe.getPaddingRight() == right && probe.getPaddingBottom() == bottom,
+                "moving embedded root back restores overlapping system bars");
+            probe.layout(0, top / 2, width, height - bottom);
+            require(probe.getPaddingTop() == top - top / 2 && probe.getPaddingBottom() == 0,
+                "partially overlapping embedded root gets only remaining unsafe area");
+            probe.layout(left + 8, top + 8, width - right - 8, height - bottom - 8);
+            probe.setAdditionalSafeAreaInsets(3, 5, 7, 11);
+            require(probe.getPaddingLeft() == 3 && probe.getPaddingTop() == 5
+                && probe.getPaddingRight() == 7 && probe.getPaddingBottom() == 11,
+                "host overlay safe area applies to embedded roots");
+            probe.setAdditionalSafeAreaInsets(Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE, Integer.MAX_VALUE);
+            require(probe.getPaddingLeft() + probe.getPaddingRight() == probe.getWidth()
+                && probe.getPaddingTop() + probe.getPaddingBottom() == probe.getHeight(),
+                "oversized host safe area stays bounded without overflow");
+            probe.setAdditionalSafeAreaInsets(-1, -1, -1, -1);
+            require(probe.getPaddingLeft() + probe.getPaddingTop() + probe.getPaddingRight() + probe.getPaddingBottom() == 0,
+                "negative host safe area resets to zero");
+        } finally {
+            probe.close();
+            window.removeView(probe);
+        }
+    }
+    private boolean imeVisible(android.view.View decor, Activity activity) {
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            android.view.WindowInsets insets = decor.getRootWindowInsets();
+            return insets != null && insets.isVisible(android.view.WindowInsets.Type.ime());
+        }
+        android.graphics.Rect visibleFrame = new android.graphics.Rect();
+        decor.getWindowVisibleDisplayFrame(visibleFrame);
+        android.util.DisplayMetrics display = new android.util.DisplayMetrics();
+        activity.getWindowManager().getDefaultDisplay().getRealMetrics(display);
+        return display.heightPixels - visibleFrame.bottom > 40 * display.density;
+    }
+    private int visibleFrameBottom(android.view.View decor) {
+        android.graphics.Rect frame = new android.graphics.Rect();
+        decor.getWindowVisibleDisplayFrame(frame);
+        return frame.bottom;
+    }
+    private boolean mainImeVisible(MainActivity activity, int hiddenFrameBottom) {
+        if (android.os.Build.VERSION.SDK_INT >= 30) return imeVisible(activity);
+        android.util.DisplayMetrics display = new android.util.DisplayMetrics();
+        activity.getWindowManager().getDefaultDisplay().getRealMetrics(display);
+        return hiddenFrameBottom - visibleFrameBottom(activity.getWindow().getDecorView()) > 24 * display.density;
+    }
+    private MainActivity checkImeInsetsAfterRotation(MainActivity activity) throws Exception {
+        ui(() -> {
+            EditText input = findInput(activity.content, "Name / 中文");
+            input.setShowSoftInputOnFocus(false);
+            input.clearFocus();
+            activity.content.clearFocus();
+            ((android.view.inputmethod.InputMethodManager) activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE))
+                    .hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(), 0);
+        });
+        waitForIdleSync();
+        ActivityMonitor initialPortraitMonitor = addMonitor(MainActivity.class.getName(), null, false);
+        ui(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+        Activity initialPortraitActivity = initialPortraitMonitor.waitForActivityWithTimeout(10000);
+        removeMonitor(initialPortraitMonitor);
+        require(initialPortraitActivity instanceof MainActivity, "initial portrait Activity before IME rotation");
+        MainActivity initialPortrait = (MainActivity) initialPortraitActivity;
+        waitForIdleSync();
+        AtomicReference<EditText> initialInput = new AtomicReference<>();
+        ui(() -> {
+            EditText input = findInput(initialPortrait.content, "Name / 中文");
+            input.setShowSoftInputOnFocus(false);
+            input.clearFocus();
+            initialPortrait.content.clearFocus();
+            initialInput.set(input);
+            ((android.view.inputmethod.InputMethodManager) initialPortrait.getSystemService(android.content.Context.INPUT_METHOD_SERVICE))
+                    .hideSoftInputFromWindow(initialPortrait.getWindow().getDecorView().getWindowToken(), 0);
+        });
+        boolean initiallyHidden = false;
+        AtomicReference<Integer> baselineFrameBottom = new AtomicReference<>(Integer.MIN_VALUE);
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            for (int attempt = 0; attempt < 40 && !initiallyHidden; attempt++) {
+                android.os.SystemClock.sleep(100);
+                initiallyHidden = !imeVisible(initialPortrait);
+            }
+        } else {
+            int stable = 0;
+            int previousFrameBottom = Integer.MIN_VALUE;
+            int previousHeight = Integer.MIN_VALUE;
+            for (int attempt = 0; attempt < 40 && stable < 5; attempt++) {
+                android.os.SystemClock.sleep(100);
+                AtomicReference<int[]> sample = new AtomicReference<>();
+                ui(() -> sample.set(new int[] {visibleFrameBottom(initialPortrait.getWindow().getDecorView()), initialPortrait.content.getHeight()}));
+                int[] current = sample.get();
+                stable = current[0] == previousFrameBottom && current[1] == previousHeight ? stable + 1 : 0;
+                previousFrameBottom = current[0];
+                previousHeight = current[1];
+            }
+            initiallyHidden = stable >= 5;
+            if (initiallyHidden) baselineFrameBottom.set(previousFrameBottom);
+        }
+        require(initiallyHidden, "main window IME closes before portrait inset baseline");
+        AtomicReference<Integer> originalBottom = new AtomicReference<>();
+        AtomicReference<Integer> originalContentHeight = new AtomicReference<>();
+        ui(() -> {
+            originalBottom.set(initialPortrait.content.getPaddingBottom());
+            originalContentHeight.set(initialPortrait.content.getHeight());
+            if (android.os.Build.VERSION.SDK_INT >= 30) baselineFrameBottom.set(visibleFrameBottom(initialPortrait.getWindow().getDecorView()));
+            initialInput.get().setShowSoftInputOnFocus(true);
+        });
+        boolean visible = false;
+        for (int attempt = 0; attempt < 40 && !visible; attempt++) {
+            ui(() -> {
+                EditText input = initialInput.get();
+                input.requestFocus();
+                if (initialPortrait.getWindow().getDecorView().hasWindowFocus()) {
+                    ((android.view.inputmethod.InputMethodManager) initialPortrait.getSystemService(android.content.Context.INPUT_METHOD_SERVICE))
+                            .showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+                }
+            });
+            android.os.SystemClock.sleep(100);
+            visible = mainImeVisible(initialPortrait, baselineFrameBottom.get());
+        }
+        require(visible, "main window system IME becomes visible");
+
+        ActivityMonitor landscapeMonitor = addMonitor(MainActivity.class.getName(), null, false);
+        ui(() -> initialPortrait.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+        Activity landscapeActivity = landscapeMonitor.waitForActivityWithTimeout(10000);
+        removeMonitor(landscapeMonitor);
+        require(landscapeActivity instanceof MainActivity, "IME rotation creates landscape Activity");
+        MainActivity landscape = (MainActivity) landscapeActivity;
+        waitForIdleSync();
+
+        ActivityMonitor portraitMonitor = addMonitor(MainActivity.class.getName(), null, false);
+        ui(() -> landscape.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+        Activity portraitActivity = portraitMonitor.waitForActivityWithTimeout(10000);
+        removeMonitor(portraitMonitor);
+        require(portraitActivity instanceof MainActivity, "return rotation creates portrait Activity");
+        MainActivity portrait = (MainActivity) portraitActivity;
+        waitForIdleSync();
+
+        AtomicReference<EditText> restoredInput = new AtomicReference<>();
+        ui(() -> {
+            EditText input = findInput(portrait.content, "Name / 中文");
+            input.requestFocus();
+            restoredInput.set(input);
+        });
+        visible = false;
+        for (int attempt = 0; attempt < 40 && !visible; attempt++) {
+            boolean imeWasVisible = mainImeVisible(portrait, baselineFrameBottom.get());
+            ui(() -> {
+                EditText input = restoredInput.get();
+                if (input != null && portrait.getWindow().getDecorView().hasWindowFocus() && !imeWasVisible) {
+                    ((android.view.inputmethod.InputMethodManager) portrait.getSystemService(android.content.Context.INPUT_METHOD_SERVICE))
+                            .showSoftInput(input, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+                }
+            });
+            android.os.SystemClock.sleep(100);
+            visible = mainImeVisible(portrait, baselineFrameBottom.get());
+        }
+        require(visible, "main window IME is visible after return rotation");
+        sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);
+        waitForIdleSync();
+        boolean hidden = false;
+        for (int attempt = 0; attempt < 40 && !hidden; attempt++) {
+            android.os.SystemClock.sleep(100);
+            hidden = !mainImeVisible(portrait, baselineFrameBottom.get());
+        }
+        require(hidden, "main window IME closes after return rotation");
+
+        int stable = 0;
+        int previousBottom = Integer.MIN_VALUE;
+        for (int attempt = 0; attempt < 40 && stable < 5; attempt++) {
+            android.os.SystemClock.sleep(100);
+            AtomicReference<Integer> currentBottom = new AtomicReference<>();
+            ui(() -> currentBottom.set(portrait.content.getPaddingBottom()));
+            stable = currentBottom.get() == previousBottom ? stable + 1 : 0;
+            previousBottom = currentBottom.get();
+        }
+        AtomicReference<Integer> restoredBottom = new AtomicReference<>();
+        ui(() -> {
+            restoredBottom.set(portrait.content.getPaddingBottom());
+            require(restoredInput.get() != null, "portrait input remains mounted");
+            requireSafeViewport(portrait);
+        });
+        require(stable >= 5, "hidden IME bottom inset settles after return rotation");
+        require(originalBottom.get().equals(restoredBottom.get()), "hidden IME restores portrait bottom inset: before=" + originalBottom.get() + " after=" + restoredBottom.get());
+        AtomicReference<Integer> restoredContentHeight = new AtomicReference<>();
+        ui(() -> restoredContentHeight.set(portrait.content.getHeight()));
+        require(originalContentHeight.get().equals(restoredContentHeight.get()), "hidden IME restores portrait content height: before=" + originalContentHeight.get() + " after=" + restoredContentHeight.get());
+        return portrait;
     }
     private JSONObject state(NativeView view) {
         try { return new JSONObject(view.state()); }
@@ -119,9 +331,8 @@ public final class NativeChecks extends Instrumentation {
             boolean visible = false;
             for (int attempt = 0; attempt < 40 && !visible; attempt++) {
                 android.os.SystemClock.sleep(100);
-                for (android.view.accessibility.AccessibilityWindowInfo window : automation.getWindows()) {
-                    if (window.getType() == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD) visible = true;
-                }
+                android.view.View decor = activity.content.activeDialog().getWindow().getDecorView();
+                visible = imeVisible(decor, activity);
             }
             require(visible, "legacy native IME window becomes visible");
             AtomicReference<String> geometry = new AtomicReference<>("");
@@ -133,7 +344,7 @@ public final class NativeChecks extends Instrumentation {
                     android.view.View decor = activity.content.activeDialog().getWindow().getDecorView();
                     android.graphics.Rect viewport = new android.graphics.Rect();
                     decor.getWindowVisibleDisplayFrame(viewport);
-                    Button close = findButton(decor, "Close");
+                    android.view.View close = findButton(decor, "Close");
                     int[] position = new int[2]; close.getLocationOnScreen(position);
                     geometry.set(viewport.toString() + ":" + position[1] + ":" + close.getHeight());
                 });
@@ -144,15 +355,22 @@ public final class NativeChecks extends Instrumentation {
             ui(() -> {
                 android.view.View decor = activity.content.activeDialog().getWindow().getDecorView();
                 android.graphics.Rect viewport = new android.graphics.Rect(); decor.getWindowVisibleDisplayFrame(viewport);
-                Button close = findButton(decor, "Close");
+                android.view.View close = findButton(decor, "Close");
                 int[] position = new int[2]; close.getLocationOnScreen(position);
                 require(close.isShown() && position[1] >= viewport.top && position[1] + close.getHeight() <= viewport.bottom, "legacy dialog close fully above IME: " + geometry.get());
                 require(findInput(decor, "Dialog name / 中文").hasFocus() && decor.hasWindowFocus(), "legacy dialog input owns focus");
             });
-            sendStringSync("k"); waitForIdleSync();
+            AtomicReference<String> dialogText = new AtomicReference<>("");
+            AtomicReference<String> dialogState = new AtomicReference<>("");
             ui(() -> {
                 EditText field = findInput(activity.content.activeDialog().getWindow().getDecorView(), "Dialog name / 中文");
-                require(field.getText().toString().endsWith("k") && state(activity.content).optString("value").endsWith("k"), "legacy system key reaches modal and Rust state");
+                require(field.onCreateInputConnection(new EditorInfo()).commitText("k", 1), "legacy native IME connection commits text");
+                dialogText.set(field.getText().toString());
+                dialogState.set(state(activity.content).optString("value"));
+            });
+            require(dialogText.get().endsWith("k") && dialogState.get().endsWith("k"), "legacy modal IME commit reaches native input and shared Rust state");
+            ui(() -> {
+                EditText field = findInput(activity.content.activeDialog().getWindow().getDecorView(), "Dialog name / 中文");
                 field.selectAll(); field.onCreateInputConnection(new EditorInfo()).commitText("旋转😀", 1);
             });
             android.graphics.Bitmap screen = automation.takeScreenshot();
@@ -240,8 +458,9 @@ public final class NativeChecks extends Instrumentation {
             ui(() -> {
                 NativeView view = activity.content;
                 require(view.getChildCount() == 1, "single mounted root");
-                require(countRows(view) == expectedRows, "all expected native row widgets mounted");
+                checkRows(view, expectedRows);
                 requireSafeViewport(activity);
+                checkEmbeddedInsets(activity);
                 try { checkTreeAccessibility(view); }
                 catch (Exception error) { throw new AssertionError(error); }
                 if (view.findKind("textarea") != null) {
@@ -280,8 +499,8 @@ public final class NativeChecks extends Instrumentation {
                     noteConnection.commitText("中", 1);
                     require(hasText(view, "第二行中"), "multiline composition commits");
                 }
-                Button button = (Button) view.findKind("button");
-                require(button != null, "real Android Button");
+                android.view.View button = view.findKind("button");
+                require(button != null, "native button control");
                 button = findButton(view, "Continue");
                 button.performClick(); button.performClick();
                 require(state(view).optInt("count") == 2, "Rust callback state");
@@ -315,6 +534,62 @@ public final class NativeChecks extends Instrumentation {
                 require(scroll.getChildCount() == 1, "native scroll content");
                 scroll.scrollTo(0, 300);
                 require(scroll.getScrollY() > 0, "native scroll offset");
+            });
+            AtomicReference<String> beforeOversizedEdit = new AtomicReference<>();
+            AtomicReference<String> nativeTextBeforeOversizedEdit = new AtomicReference<>();
+            ui(() -> {
+                require(activity.content.takeError() == null, "normal native events have no hidden errors");
+                beforeOversizedEdit.set(state(activity.content).optString("value"));
+                nativeTextBeforeOversizedEdit.set(findInput(activity.content, "Name / 中文").getText().toString());
+                android.view.autofill.AutofillManager autofillManager = (android.view.autofill.AutofillManager)
+                        activity.getSystemService("autofill");
+                require(autofillManager != null && autofillManager.isEnabled(), "Android Autofill service is enabled for Binder-size probe");
+                require(NativeView.isAutofillTransactionTooLarge(new android.os.TransactionTooLargeException()),
+                        "Android 8 Autofill transaction overflow is recognized");
+                require(NativeView.isAutofillTransactionTooLarge(new IllegalStateException(
+                        "wrapped", new android.os.TransactionTooLargeException())),
+                        "wrapped Android 8 Autofill transaction overflow is recognized");
+                require(!NativeView.isAutofillTransactionTooLarge(new IllegalStateException("unrelated")),
+                        "unrelated Autofill structure failures remain visible");
+                StringBuilder outgoing = new StringBuilder();
+                for (int index = 0; index < 256 * 1024; index++) outgoing.append('o');
+                EditText largeInput = findInput(activity.content, "Name / 中文");
+                largeInput.setText(outgoing);
+                largeInput.requestFocus();
+                OversizedAutofillProbe autofillProbe = new OversizedAutofillProbe(activity);
+                autofillProbe.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_YES);
+                activity.content.addView(autofillProbe, new android.widget.FrameLayout.LayoutParams(1, 1));
+                autofillManager.requestAutofill(largeInput);
+                report.putBoolean("autofill_transaction_probe", true);
+            });
+            waitForIdleSync();
+            ui(() -> {
+                android.view.autofill.AutofillManager autofillManager = (android.view.autofill.AutofillManager)
+                        activity.getSystemService("autofill");
+                autofillManager.cancel();
+                require(activity.content.takeError() != null, "wrapped Autofill transaction overflow is caught at the native root");
+                require(activity.content.getImportantForAutofill() == android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS,
+                        "failed Autofill structure is excluded to prevent repeated oversized transactions");
+                activity.content.removeViewAt(activity.content.getChildCount() - 1);
+                activity.content.setImportantForAutofill(android.view.View.IMPORTANT_FOR_AUTOFILL_AUTO);
+                findInput(activity.content, "Name / 中文").setText(nativeTextBeforeOversizedEdit.get());
+            });
+            waitForIdleSync();
+            ui(() -> {
+                StringBuilder rejected = new StringBuilder();
+                for (int index = 0; index < 1024 * 1024; index++) rejected.append('x');
+                findInput(activity.content, "Name / 中文").autofill(android.view.autofill.AutofillValue.forText(rejected));
+            });
+            waitForIdleSync();
+            ui(() -> {
+                require(activity.content.takeError() != null, "oversized Android Autofill value exposes a bounded native input error");
+                require(activity.content.takeError() == null, "native error is drained once");
+                require(findInput(activity.content, "Name / 中文").getImportantForAutofill() == android.view.View.IMPORTANT_FOR_AUTOFILL_NO,
+                        "rejected oversized Autofill input stays excluded to prevent repeated large transactions");
+                String currentValue = state(activity.content).optString("value");
+                CharSequence currentText = findInput(activity.content, "Name / 中文").getText();
+                require(beforeOversizedEdit.get().equals(currentValue), "oversized Autofill keeps business state: " + beforeOversizedEdit.get() + " -> " + currentValue);
+                require(nativeTextBeforeOversizedEdit.get().contentEquals(currentText), "oversized Autofill preserves native text: " + nativeTextBeforeOversizedEdit.get() + " -> " + currentText);
             });
             if (extended) {
                 ui(() -> findButton(activity.content, "Open editor").performClick());
@@ -464,27 +739,15 @@ public final class NativeChecks extends Instrumentation {
                     require(findInput(rotated.content, "Password / 密码").length() == 0, "ephemeral password is not restored from Activity state");
                 }
             });
+            MainActivity postImeRotation = checkImeInsetsAfterRotation(rotated);
             checkStateStore();
-            ui(() -> {
-                require(rotated.content.takeError() == null, "normal native events have no hidden errors");
-                StringBuilder rejected = new StringBuilder();
-                for (int index = 0; index < 1024 * 1024; index++) rejected.append('x');
-                findInput(rotated.content, "Name / 中文").setText(rejected.toString());
-            });
-            waitForIdleSync();
-            ui(() -> {
-                require(rotated.content.takeError() != null, "oversized edit exposes a bounded native callback error");
-                require(rotated.content.takeError() == null, "native error is drained once");
-                require("旋转😀".equals(state(rotated.content).optString("value")), "oversized edit keeps business state");
-                require("旋转😀".contentEquals(findInput(rotated.content, "Name / 中文").getText()), "oversized edit restores controlled native text");
-            });
             StringBuilder large = new StringBuilder();
             for (int index = 0; index < 80000; index++) large.append("保😀");
             String largeValue = large.toString();
             AtomicReference<String> savedId = new AtomicReference<>();
             AtomicReference<Integer> bundleBytes = new AtomicReference<>();
             ui(() -> {
-                EditText input = findInput(rotated.content, "Name / 中文");
+                EditText input = findInput(postImeRotation.content, "Name / 中文");
                 input.requestFocus();
                 InputConnection connection = input.onCreateInputConnection(new EditorInfo());
                 require(connection.setSelection(0, input.getText().length()), "select old value before large replacement");
@@ -492,20 +755,20 @@ public final class NativeChecks extends Instrumentation {
             });
             waitForIdleSync();
             ui(() -> {
-                EditText input = findInput(rotated.content, "Name / 中文");
-                require(largeValue.equals(state(rotated.content).optString("value")), "large input reaches Rust before save");
+                EditText input = findInput(postImeRotation.content, "Name / 中文");
+                require(largeValue.equals(state(postImeRotation.content).optString("value")), "large input reaches Rust before save");
                 Bundle saved = new Bundle();
-                rotated.onSaveInstanceState(saved);
+                postImeRotation.onSaveInstanceState(saved);
                 require(saved.containsKey("nativeStateId") && !saved.containsKey("nativeState") && !saved.containsKey("value"), "Bundle contains state identity instead of text");
                 android.os.Parcel parcel = android.os.Parcel.obtain();
                 try { parcel.writeBundle(saved); bundleBytes.set(parcel.dataSize()); }
                 finally { parcel.recycle(); }
                 require(bundleBytes.get() < 4096, "large form keeps lifecycle Bundle bounded");
                 savedId.set(saved.getString("nativeStateId"));
-                require(rotated.stateError == null, "large state writes successfully");
+                require(postImeRotation.stateError == null, "large state writes successfully");
             });
             ActivityMonitor largeMonitor = addMonitor(MainActivity.class.getName(), null, false);
-            ui(rotated::recreate);
+            ui(postImeRotation::recreate);
             MainActivity restored = (MainActivity) largeMonitor.waitForActivityWithTimeout(10000);
             removeMonitor(largeMonitor);
             require(restored != null, "large state Activity recreation");
@@ -534,7 +797,7 @@ public final class NativeChecks extends Instrumentation {
                 require(recovered.content.getChildCount() == 0, "idempotent native unmount");
                 recovered.finish();
             });
-            report.putString("stream", "JADIX_NATIVE_CHECKS_PASS: extensions=" + extended + "; dialog_ime_checked=" + report.getBoolean("dialog_ime_checked") + "; retained_editing_checked=" + report.getBoolean("retained_editing_checked") + "; retained_editors=" + (extended ? 3 : 1) + "; switch_checked=" + report.getBoolean("switch_checked") + "; controls, callbacks, Chinese composition, emoji, reset, scroll, Dialog/nested/IME/Back, recreation, landscape rotation, stale root, oversized edit rejection/recovery, large state/file/bundle/recovery, unmount; large_utf8_bytes=" + largeValue.getBytes(java.nio.charset.StandardCharsets.UTF_8).length + "; bundle_bytes=" + bundleBytes.get() + "\n");
+            report.putString("stream", "JADIX_NATIVE_CHECKS_PASS: extensions=" + extended + "; dialog_ime_checked=" + report.getBoolean("dialog_ime_checked") + "; autofill_transaction_probe=" + report.getBoolean("autofill_transaction_probe") + "; retained_editing_checked=" + report.getBoolean("retained_editing_checked") + "; retained_editors=" + (extended ? 3 : 1) + "; switch_checked=" + report.getBoolean("switch_checked") + "; controls, callbacks, Chinese composition, emoji, reset, scroll, Dialog/nested/IME/Back, recreation, landscape rotation, stale root, oversized edit rejection/recovery, large state/file/bundle/recovery, unmount; large_utf8_bytes=" + largeValue.getBytes(java.nio.charset.StandardCharsets.UTF_8).length + "; bundle_bytes=" + bundleBytes.get() + "\n");
             finish(Activity.RESULT_OK, report);
         } catch (Throwable error) {
             report.putString("stream", "JADIX_NATIVE_CHECKS_FAIL: " + android.util.Log.getStackTraceString(error));
@@ -570,7 +833,22 @@ public final class NativeChecks extends Instrumentation {
         } finally { first.delete(); second.delete(); }
         NativeStateChecks.run(getTargetContext());
     }
-    private int countRows(android.view.View view) {
+    static void checkRows(NativeView view, int expectedRows) {
+        try {
+            java.lang.reflect.Field field = NativeView.class.getDeclaredField("orderedNodes");
+            field.setAccessible(true);
+            org.json.JSONArray nodes = (org.json.JSONArray) field.get(view);
+            int rows = 0;
+            for (int index = 0; index < nodes.length(); index++) {
+                if (nodes.getJSONObject(index).optString("text").matches("Row [0-9]{3} .*")) rows++;
+            }
+            require(rows == expectedRows, "all logical rows retained");
+            require(countRows(view) < expectedRows, "offscreen native row widgets are culled");
+        } catch (ReflectiveOperationException | org.json.JSONException error) {
+            throw new AssertionError(error);
+        }
+    }
+    private static int countRows(android.view.View view) {
         int count = view instanceof android.widget.TextView && ((android.widget.TextView) view).getText().toString().matches("Row [0-9]{3} .*") ? 1 : 0;
         if (view instanceof android.view.ViewGroup) {
             android.view.ViewGroup group = (android.view.ViewGroup) view;
@@ -578,12 +856,13 @@ public final class NativeChecks extends Instrumentation {
         }
         return count;
     }
-    private Button findButton(android.view.View view, String caption) {
-        if (view instanceof Button && caption.equals(((Button) view).getText().toString())) return (Button) view;
+    private android.view.View findButton(android.view.View view, String caption) {
+        if (view instanceof Button && caption.equals(((Button) view).getText().toString())) return view;
+        if (view instanceof NativeContentButton && caption.contentEquals(view.getContentDescription())) return view;
         if (view instanceof android.view.ViewGroup) {
             android.view.ViewGroup parent = (android.view.ViewGroup) view;
             for (int index = 0; index < parent.getChildCount(); index++) {
-                Button found = findButton(parent.getChildAt(index), caption);
+                android.view.View found = findButton(parent.getChildAt(index), caption);
                 if (found != null) return found;
             }
         }

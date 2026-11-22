@@ -53,6 +53,22 @@ fn legacy_state(automation: &IUIAutomation, window: usize) -> u32 {
 }
 
 #[test]
+fn virtual_row_removal_does_not_publish_scroll_parent_focus_notifications() {
+    use jadix_core::tree::TreeCommand;
+    let tree = jadix_native_controls::tree::demo_tree().unwrap();
+    let host = WindowsHost::new("Jadix virtual tree focus lifecycle", [800, 600]).unwrap();
+    let mut app = TreeBrowser::new(host, [800.0, 600.0], tree).unwrap();
+    app.root.host().show();
+    for command in [TreeCommand::Last, TreeCommand::First, TreeCommand::Last, TreeCommand::First] {
+        app.navigate(command).unwrap();
+        app.root.host().pump();
+        app.poll_events().unwrap();
+        let node = app.row_node(*app.model().focused().unwrap()).unwrap();
+        assert_eq!(unsafe { GetFocus() } as usize, app.root.host().control_identity(node).unwrap());
+    }
+}
+
+#[test]
 fn real_native_arrow_keys_drive_tree_focus_expansion_selection_and_virtual_reveal() {
     let children = (1..10_000)
         .map(|key| TreeNode::leaf(key, format!("File {key}")))

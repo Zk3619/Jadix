@@ -30,6 +30,10 @@ fn setup(
                 accessible_role: None,
                 accessible_selected: None,
                 accessible_expanded: None,
+                interaction: Default::default(),
+                keyboard: Default::default(),
+                navigation_keys: Vec::new(),
+                accessibility: Default::default(),
                 accessibility_relations: Default::default(),
                 accessible_description: None,
                 accessible_name: None,
@@ -875,4 +879,18 @@ fn cancelling_stalled_headers_or_body_closes_the_request_and_unblocks_the_single
         loader.dispose();
         server.join().unwrap();
     }
+}
+
+#[test]
+fn encoded_cache_limits_allow_disabling_retention_but_reject_unbounded_values() {
+    let mut limits = ImageLimits::default();
+    assert!(limits.is_valid());
+    limits.cache_bytes = 0; limits.cache_entries = 0; limits.cache_age = Duration::ZERO;
+    assert!(limits.is_valid());
+    limits.cache_bytes = 32 * 1024 * 1024 + 1;
+    assert!(!limits.is_valid());
+    limits.cache_bytes = 0; limits.cache_entries = 129;
+    assert!(!limits.is_valid());
+    limits.cache_entries = 0; limits.cache_age = Duration::from_secs(86401);
+    assert!(!limits.is_valid());
 }

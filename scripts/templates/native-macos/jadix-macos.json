@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "name": "@NAME@",
+  "bundle_identifier": "@APPLICATION_ID@",
+  "crate": "@NAME@",
+  "repository": "@ROOT@",
+  "swift_entry": "App.swift",
+  "url_schemes": [],
+  "microphone_usage": "Recognize speech when you request it.",
+  "speech_usage": "Turn requested speech into text."
+}

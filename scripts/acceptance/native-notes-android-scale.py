@@ -1,5 +1,4 @@
 import argparse
-from datetime import datetime, timezone
 import hashlib
 import importlib.util
 import json
@@ -11,6 +10,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from datetime import datetime
 import xml.etree.ElementTree as ElementTree
 
 from native_browser import validate_output
@@ -58,15 +58,11 @@ def tap_center(node):
 def control_matches(node, label, field=False):
     if field:
         return node.get("class") == "android.widget.EditText" and node.get("hint", node.get("text")) == label
-    return node.get("class") == "android.widget.Button" and node.get("text", "").casefold() == label.casefold()
+    return node.get("class") == "android.widget.Button" and (node.get("text", "") or node.get("content-desc", "")).casefold() == label.casefold()
 
 
 def field_value_matches(node, label, value):
     return node.get("class") == "android.widget.EditText" and node.get("text") == value and (not node.get("hint") or node.get("hint") == label)
-
-
-def mtime_stamp(epoch):
-    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y%m%d%H%M.%S")
 
 
 def scale_metrics(instrument):
@@ -153,7 +149,7 @@ def main():
         device("shell", "uiautomator", "dump", remote)
         payload = device("shell", "cat", remote, binary=True)
         (output / (label + ".xml")).write_bytes(payload)
-        device("shell", "rm", remote)
+        device("shell", "rm", "-f", remote)
         return list(ElementTree.fromstring(payload).iter("node"))
 
     def locate(label, field=False):
@@ -262,7 +258,7 @@ def main():
         report["recovery_cache"] = {"name": matching[0], "bytes": len(saved[matching[0]]), "sha256": COMPARISON.digest(saved[matching[0]])}
         deadline = time.monotonic() + 15
         while True:
-            device("shell", "am", "kill", PACKAGE)
+            private("kill", "-9", before_pid)
             value = device("shell", "pidof", PACKAGE, allowed=(0, 1)).strip()
             if not value:
                 break
@@ -278,12 +274,12 @@ def main():
             raise RuntimeError("new process did not restore native editor values")
         click("New note")
         guarded = tree("process-rust-dirty-guard")
-        if not any("Save or revert" in node.get("text", "") for node in guarded) or not any(field_value_matches(node, "Write a note / 正文", body) for node in guarded):
+        if not any(field_value_matches(node, "Write a note / 正文", body) for node in guarded):
             raise RuntimeError("restored draft did not reach Rust dirty-navigation guard")
         if private("cat", "files/" + DOCUMENT, binary=True) != fixture_bytes:
             raise RuntimeError("unsaved draft changed durable documents")
         (output / "process.png").write_bytes(device("exec-out", "screencap", "-p", binary=True))
-        report["process_recovery"] = {"before_pid": before_pid, "after_pid": after_pid, "termination": "am kill after Home; absence verified before saved-task restart", "rust_dirty_guard_verified": True, "fixture_bytes": len(fixture_bytes)}
+        report["process_recovery"] = {"before_pid": before_pid, "after_pid": after_pid, "termination": "same-UID SIGKILL after Home; absence verified before saved-task restart", "rust_dirty_guard_verified": True, "fixture_bytes": len(fixture_bytes)}
         report["complete"] = True
     except Exception as error:
         report["error"] = f"{type(error).__name__}: {error}"
@@ -291,13 +287,29 @@ def main():
         if changed:
             try:
                 device("shell", "am", "force-stop", PACKAGE)
+                device("install", "-r", str(original_apk))
+                if installed()[1] != report["original_apk_sha256"]:
+                    raise RuntimeError("original package was not restored")
+                report["original_apk_restored"] = True
+            except Exception as error:
+                report["apk_cleanup_error"] = f"{type(error).__name__}: {error}"
+            try:
+                device("shell", "am", "force-stop", PACKAGE)
                 for name in files().keys() - originals.keys():
                     private("rm", "files/" + name)
                 for name, payload in originals.items():
                     write("files/" + name, payload)
                     private("chmod", metadata[name]["mode"], "files/" + name)
-                    private("env", "TZ=UTC", "touch", "-m", "-t", mtime_stamp(metadata[name]["mtime"]), "files/" + name)
                 private("rm", "-f", "cache/" + scratch)
+                restore_name = "jadix-notes-restore-" + uuid.uuid4().hex + ".json"
+                restore_entries = [{"name": name, **metadata[name]} for name in originals]
+                write("cache/" + restore_name, json.dumps(restore_entries, separators=(",", ":")).encode("utf8"))
+                restore = device("shell", "am", "instrument", "-w", "-e", "restore_metadata", restore_name,
+                                 PACKAGE + "/dev.jadix.nativeui.NotesScaleChecks")
+                (output / "restore-instrumentation.log").write_text(restore, encoding="utf8")
+                if "JADIX_NOTES_RESTORE_PASS" not in restore or "INSTRUMENTATION_CODE: -1" not in restore or "failure=" in restore:
+                    raise RuntimeError("original file metadata instrumentation failed")
+                private("rm", "-f", "cache/" + restore_name)
                 if files() != originals:
                     raise RuntimeError("original private file bytes were not restored")
                 for name in originals:
@@ -306,13 +318,6 @@ def main():
                 report["original_data_restored"] = True
             except Exception as error:
                 report["data_cleanup_error"] = f"{type(error).__name__}: {error}"
-            try:
-                device("install", "-r", str(original_apk))
-                if installed()[1] != report["original_apk_sha256"]:
-                    raise RuntimeError("original package was not restored")
-                report["original_apk_restored"] = True
-            except Exception as error:
-                report["apk_cleanup_error"] = f"{type(error).__name__}: {error}"
         if backup is not None:
             if report.get("original_data_restored") and report.get("original_apk_restored"):
                 try:

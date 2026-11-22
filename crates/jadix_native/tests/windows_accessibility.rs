@@ -1,14 +1,14 @@
 #![cfg(all(windows, feature = "windows"))]
 
 use jadix_native::{host::NativeRoot, presentation::*, windows::WindowsHost};
-use windows::core::Interface;
 use windows::Win32::{
     Foundation::HWND,
-    System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},
+    System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
     UI::Accessibility::*,
 };
+use windows::core::Interface;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GetWindowLongPtrW, GWL_STYLE, STATE_SYSTEM_COLLAPSED, STATE_SYSTEM_EXPANDED, WS_TABSTOP,
+    GWL_STYLE, GetWindowLongPtrW, STATE_SYSTEM_COLLAPSED, STATE_SYSTEM_EXPANDED, WS_TABSTOP,
 };
 
 fn node(root: RootId, content: NodeContent, name: &str) -> PresentationNode {
@@ -20,6 +20,10 @@ fn node(root: RootId, content: NodeContent, name: &str) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             accessible_description: None,
             accessible_name: Some(name.into()),
@@ -375,4 +379,53 @@ fn uia_maps_native_image_dialog_and_popover_roles_to_real_provider_control_types
     assert_eq!(root.host().diagnostics()["controls"], 0);
     assert!(unsafe { selection.Select() }.is_err());
     assert!(unsafe { expansion.Expand() }.is_err());
+}
+
+#[test]
+fn selected_semantics_preserve_live_native_focus_and_disabled_state() {
+    use windows::Win32::System::Variant::VARIANT;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        STATE_SYSTEM_FOCUSED, STATE_SYSTEM_SELECTED,
+    };
+    const STATE_SYSTEM_FOCUSABLE: u32 = 0x00100000;
+    const STATE_SYSTEM_UNAVAILABLE: u32 = 1;
+    let mut root = NativeRoot::new(WindowsHost::new("Jadix live MSAA states", [640, 480]).unwrap());
+    let mut item = node(
+        root.model().id(),
+        NodeContent::Button {
+            label: "Selected 中文 😀".into(),
+            enabled: true,
+        },
+        "Selected 中文 😀",
+    );
+    item.descriptor.accessible_selected = Some(true);
+    let mut roots = vec![item];
+    root.present(&mut roots, [640.0, 480.0], 0).unwrap();
+    root.host().show();
+    let hwnd = root.host().control_identity(roots[0].id).unwrap() as _;
+    let state = || {
+        let mut accessible: Option<IAccessible> = None;
+        unsafe {
+            AccessibleObjectFromWindow(
+                HWND(hwnd),
+                0xfffffffcu32,
+                &IAccessible::IID,
+                &mut accessible as *mut _ as *mut _,
+            )
+        }
+        .unwrap();
+        let value = unsafe { accessible.unwrap().get_accState(&VARIANT::from(0)) }.unwrap();
+        unsafe { value.Anonymous.Anonymous.Anonymous.lVal as u32 }
+    };
+    unsafe { SetFocus(hwnd) };
+    assert_ne!(state() & STATE_SYSTEM_SELECTED, 0);
+    assert_ne!(state() & STATE_SYSTEM_FOCUSABLE, 0);
+    assert_ne!(state() & STATE_SYSTEM_FOCUSED, 0);
+    if let NodeContent::Button { enabled, .. } = &mut roots[0].descriptor.content {
+        *enabled = false;
+    }
+    root.present(&mut roots, [640.0, 480.0], 1).unwrap();
+    assert_ne!(state() & STATE_SYSTEM_UNAVAILABLE, 0);
+    assert_eq!(state() & STATE_SYSTEM_FOCUSED, 0);
 }

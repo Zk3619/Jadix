@@ -37,7 +37,13 @@ public final class FieldActivity extends Activity {
         try { observed = read(); if (observed != null) content.restore(observed); }
         catch (Exception error) { blocked = true; nativeStorageResult(content.token(), "Stored request unavailable; original preserved"); }
         content.setStateListener(this::persist);
+        content.handleIntent(getIntent(), saved == null);
+        content.installBackHandler(this);
     }
+    @Override protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent); setIntent(intent); content.handleIntent(intent, false);
+    }
+
 
     private void persist(String state) {
         if (state.equals(observed)) return;
@@ -57,6 +63,7 @@ public final class FieldActivity extends Activity {
     }
 
     @Override protected void onSaveInstanceState(Bundle saved) { persist(content.state()); super.onSaveInstanceState(saved); }
+    @Override public void onBackPressed() { content.requestClose(this::finish); }
     @Override protected void onDestroy() {
         content.setStateListener(null); content.close(); super.onDestroy();
     }

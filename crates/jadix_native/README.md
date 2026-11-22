@@ -9,6 +9,358 @@ The miniprogram module adapts the shared NativeRoot, Taffy layout and revisioned
 
 This package adapts shared Jadix presentation contracts to system views. The primary UI entry is `jadix`; optional `jadix_shell` consumes this adapter for script applications. Shared contracts live in `jadix_core` / `jadix_layout`, without a GPU or VM dependency.
 
+On macOS 14+, feature `appkit` exposes `jadix_native::appkit::AppKitHost`.
+Integrate `platforms/macos/JadixNative.h` as the Swift bridging header and mount
+`JadixNativeView` inside the application's window. Compile
+`platforms/macos/JadixTextField.m` with Objective-C ARC and link it into the same
+host target. The adapter supplies system
+controls, in-window Dialog and Popover, and AppKit row and column accessibility
+elements for mounted grid cells. Popover uses the anchor's layout direction and
+chooses the side with more room when the preferred side is too small. AppKit
+honors `PopoverContent`'s `margin` in whole points around the window safe area
+and supports independent Escape and outside-click dismissal.
+Portable Rust builders and native RSX expose `on_open_change` / `onOpenChange`
+for trigger, outside-press, and Escape requests. Choose `controlled_open` /
+`controlledOpen` to apply requests explicitly in the callback, or
+`default_open` / `defaultOpen` to initialize local state. The existing
+`open` / `openSignal` signal updates automatically on those requests.
+Direct writes to the open signal do not emit a request. The
+adapter reveals focused views in nested scroll containers, reports native
+scroll offsets through the shared `EventPayload::Scroll` contract, and
+implements host `scroll_to` for mounted scroll views. Scroll notifications
+are coalesced on the AppKit main queue and ignore unchanged offsets. Shared
+`VirtualList` already mounts its visible rows plus overscan, and its optional
+`scroll_ahead(true)` predicts up to one viewport during continuous scrolling.
+Portable `Scroll` elements can hide both scrollers with `scrollbars(false)`
+and disable elasticity with `scroll_bounces(false)`. Shell uses
+`style.scrollbars` in horizontal and vertical order and `style.scroll_bounces`.
+AppKit uses the system elasticity default when `scroll_bounces` is omitted.
+AppKit applies each mounted-node snapshot and preserves `NSView` identity while
+the node remains mounted. A bounded pool also reuses up to 64 detached static
+text labels and a separate pool holds up to 64 plain Box containers. Controls,
+editors, image views and semantically marked containers are released when their
+nodes leave the snapshot. AppKit does not select a host-specific prefetch
+policy, so nsh's urgent-span prebinding remains open. The adapter
+also uses Core Text font cascades for labels and applies Unicode scalar
+limits to user edits in plain, secure, and multiline fields. Single-paragraph,
+single-line clipped labels preserve the right edge when the paragraph runs
+right to left. Use `.flex_row().items(AlignItems::Baseline)` in portable
+Rust or `style.align_items: 'baseline'` on a Shell row to align text labels.
+AppKit reports the first baseline of the measured label at its fitted size.
+AppKit decodes embedded PNGs, local and HTTPS images on a serial
+ImageIO queue at the view's backing pixel size. Pass `asset:/images/sample.jpg`
+as the image source for a file under the main app bundle's `Contents/Resources`,
+or pass a local `file:///` or remote `https://` URL. With an automatic axis, the first successful
+decode supplies the oriented intrinsic size for layout. Set both dimensions in
+the node style to reserve space while the image loads. AppKit uses the system
+Reduce Motion setting for fade-in and sequence playback. It shares decoded
+frames for bundle resources and embedded PNGs, and merges simultaneous HTTPS
+requests for the same URL. AppKit uses the shared `ImageFit` and `ImagePosition`
+styles for static images and animations. Images are contained and centered by
+default. Use `.object_fit(ImageFit::Cover)` with
+`.object_position(ImagePosition::new([1.0, 0.0], [-8.0, 0.0]))` to align the
+fitted image at the top right with an 8-point inset. Native RSX exposes
+`objectFit` and `objectPosition`. `ImagePosition::parse("right 8px top 0")`
+gives the same position. The shell SDK accepts the position string or the
+numeric object in `style.image_position`, alongside `style.image_fit`.
+AppKit shows `style.image_placeholder` while the main image loads and keeps it
+if the main image fails. The placeholder uses the same source formats and
+resource limits as the main image. `style.image_fade_ms` sets the fade duration
+for loaded images. A value of `0` disables the fade.
+AppKit also supports base64 data URLs for JPEG, GIF, WebP, BMP, TIFF, ICO and
+ICNS through the `inline_raster_sources` capability. Additional inline formats
+take their intrinsic size from ImageIO after decoding.
+The AppKit host also accepts static UTF-8 SVG from base64 data URLs, local
+files, bundle assets and HTTPS, for both the main image and the placeholder.
+The `inline_svg_sources` capability advertises data URL support. The host
+rasterizes at the backing pixel scale and uses the SVG viewport for intrinsic
+size. SVG is limited to 1 MiB and supports self-contained vector artwork and
+system fonts.
+Portable Rust exposes the main image lifecycle through `on_load_event` on
+`ImageBuilder` and `onLoadEvent` in native RSX. The shell SDK exposes
+`loadStart`, `progress`, `load`, `error` and `loadEnd` event handles. Remote
+progress reports cumulative bytes as `loaded` and the expected byte count as
+`total`, with zero for unknown totals. A successful load reports the oriented
+original dimensions in pixels. Changes to the backing scale or target size
+reuse the current source lifecycle.
+
+The macOS host can restrict HTTPS images by declaring `JadixRemoteImageHosts`
+as an array of strings in the main app's `Info.plist`. Each entry matches a
+complete hostname without regard to case. AppKit checks the main image,
+placeholder, and each HTTP redirect. An empty array blocks remote images.
+Omitting the key allows any HTTPS host. This application policy is the upper
+bound for every root. A host can narrow one root before mounting.
+
+```swift
+try nativeView.restrictRemoteImages(to: JadixRemoteImagePolicy(
+    hosts: ["cdn.example.com"],
+    pathPrefixes: ["cdn.example.com": ["/images"]]
+))
+try nativeView.mount()
+```
+
+Per-root transfer queues, redirect checks and memory-only HTTP caches use the
+policy for the lifetime of that mount. Closing the root invalidates its session.
+
+`JadixRemoteImagePathPrefixes` optionally maps hostnames to arrays of
+absolute path prefixes, for example `{"cdn.example.com": ["/images"]}`.
+Prefixes match complete path segments. A trailing slash is optional and `/`
+allows every valid path on that host. Rules ignore the query and match
+path bytes after one percent-decoding pass. Ambiguous path segments are
+rejected. A configured map permits only HTTPS port 443 and is intersected
+with `JadixRemoteImageHosts` when both keys are set. The same rules apply
+to the placeholder, redirects and the final response URL.
+
+The [native-controls example](../../examples/native-controls/README.md)
+includes a macOS host with independent roots in resizable windows, the system
+Edit menu and a local build command.
+The example honors the opt-in `AppKitWindowAttributes::dismiss_on_close`
+policy for secondary windows. User close, Escape, and blur can hide the
+window and preserve its root. A subsequent show by ID reuses the root.
+
+AppKit labels align clipped and ellipsized paragraphs to their writing start.
+Core Text wraps the leading lines to the label width. At the last line allowed
+by the height and line limit, `clip` uses glyph positions to keep the original
+paragraph's start edge visible. `ellipsis`, `ellipsis_start`, and
+`ellipsis_middle` place the ellipsis at the end, start, or middle of the
+remaining text. Measurement and drawing use the same line layout. The label
+keeps its inline styles and exposes the original text to accessibility.
+
+Use the portable builder's `window_drag(true)` or RSX `windowDrag = true`
+to make a view a window drag region. A child can set the property to false to
+exclude itself and its subtree. Native interactive controls retain their input
+handling, and double-click uses the system title bar preference.
+The title bar strip also serves as a drag region when the host hides its title
+and extends the content under a transparent title bar.
+
+Swift hosts can call `JadixNativeView.pickPaths` or `pickSavePath` on a mounted
+root. The panel opens as a sheet in that root's visible window or as a separate
+window if the owner is hidden, minimized, or off-screen. Selection supports
+files, folders, or both, type filters, and multiple URLs. The save panel accepts
+a suggested filename. Both accept a starting directory and a confirmation
+button label. Closing or moving the root cancels its panel.
+
+Rust applications can use `AppKitHost::request_file` with `AppKitFileRequest`
+to show those panels, open a path, reveal it in Finder, or move it to the Trash.
+Poll the result receiver with `try_recv` on the UI thread. Cancelling a panel
+returns an empty successful result. Disposing the root completes outstanding
+requests with an error.
+
+`AppKitHost::show_alert` presents an AppKit system alert as a sheet in the
+root's visible window. The Swift host can use `preferredSheetWindow` to choose
+the key, titled window in its window group for alerts and file panels. When no
+eligible window is available, standalone alerts are presented one at a time in
+request order. Both presentations use the owner's effective appearance or the
+root's appearance when no owner is available.
+`AppKitAlert` sets the title, message, severity, button labels, Return action,
+Escape action and optional text field. The field supports an initial value,
+placeholder and accessibility label. On initial focus, `select_text_on_focus`
+selects the initial value. Otherwise the caret starts at the end. A required
+empty field disables actions whose button does not handle Escape. The request
+returns an ID and a result receiver. The reply
+carries the pressed button's zero-based index and the text field value, if
+present. `close_alert` dismisses a visible or queued alert by request ID and
+yields a reply with no button. AppKit queues standard sheets and applies its
+native presentation rules for critical sheets. The root's disposal completes
+pending alert requests with an error.
+
+`AppKitHost::show_share` opens the AppKit share picker for text, an absolute
+non-file URL, or local files with absolute paths. `AppKitShare` also accepts a
+subject and an anchor node in the current root. If the anchor is unavailable,
+the picker opens at the center of the root in a visible window. AppKit presents
+the picker on a later run-loop turn and delivers the items to the user's chosen
+service. The receiver reports the service title on success. It also reports
+dismissal, replacement by a newer request, or an error. For services that
+omit completion callbacks, the host observes return to the originating window.
+Poll the receiver with `try_recv` on the UI thread.
+
+`AppKitHost::show_context_menu` accepts a mounted node, shared `MenuItem`
+values, and a locale. It presents an AppKit menu anchored to the visible node.
+The receiver yields the selected command ID after its callback runs, or
+`Ok(None)` when the menu is dismissed. Submenus, separators, disabled items,
+checked and radio selection states, localized role captions, and supported
+key equivalents use the shared menu model. This menu executes the supplied
+command callback.
+
+`AppKitHost::set_window_menu` installs a window's application menu from the
+same model and locale. The key window supplies the active menu, and
+`clear_window_menu` restores the embedding application's menu when that root
+owns the menu bar. The optional zero-based submenu index designates AppKit's
+Window menu. Standard roles use the AppKit responder chain. Custom commands
+resolve to Rust callbacks for the installed menu revision.
+Use `MenuItem::with_icon(MenuIcon { source, template })` on a command or
+submenu. AppKit uses the native image URI syntax and root HTTPS policy. It
+fits the first frame into a 16-point square and uses template tinting when
+requested. Menu image source strings have a combined 1 MiB UTF-8 limit.
+
+`NativeRoot::set_app_address` records the address for the current root and
+forwards changes to AppKit. Swift hosts can set or clear it with
+`JadixNativeView.setAppAddress`. Set `handoffEnabled` to opt in to Handoff.
+While the root's window is key, HTTP and HTTPS addresses become browsing
+activities. Other absolute addresses with a custom scheme use `<bundle id>.url`
+and the `url` user-info key. Relative and file addresses stay in the root.
+The root withdraws its activity on focus loss and invalidates it on replacement
+or disposal.
+
+The app's Info.plist declares `<bundle id>.url` in `NSUserActivityTypes` and
+its custom URL schemes in `CFBundleURLTypes`. Forward AppKit's activity
+continuation to `continueUserActivity` and ordinary URL delivery to `openURL`.
+Both paths call `onOpenURL` for a declared custom scheme. The callback reports
+whether the app handled the URL.
+
+`AppKitHost::request_window` submits an open, update, mode change, focus,
+visibility change, or close request by string ID.
+The Swift app installs `JadixNativeView.onWindowRequest` to choose the window and
+its Rust root. Open requests carry an initial title, content size and window
+kind and can set `initial_mode` and `initially_visible` for a new window.
+An initially hidden window mounts its root and applies any pending mode when it
+first shows. Open and update requests accept `AppKitWindowAttributes` for title,
+resizability, standard or transparent title bars, hidden titles, and content
+size, size limits, and screen position in points. Updates preserve omitted attributes. Swift hosts can
+apply the decoded attributes to their `NSWindow` with `Attributes.apply(to:)`.
+For an open window, retain an `AppKitWindowBinding` for its ID and pass the
+latest application-owned attributes to `sync_attributes` on the UI thread.
+Drive it again after AppKit processes requests while it reports `Ok(false)`.
+It sends only changed fields and records them when AppKit acknowledges them.
+`observed_state` reads the actual state from the matching window's root host.
+`bind_state` mirrors those observations to a Rust signal and clears the value
+when the root detaches or is disposed. Use `set_mode`, `set_visible`, and
+`restore` to submit requests from UI actions. The signal updates when AppKit
+reports the window state. When the root host is stored in a `RefCell`, wrap the
+borrow and the state update in a reactivity `batch` so effects run after release.
+Use `AppKitHost::window_declarations` to obtain a handle for Rust components.
+Call `mount` once per stable ID from the component's reactive owner. The options
+closure can read signals. Return `Some(options)` to declare the window and
+`None` to remove it. Owner cleanup also removes the declaration. AppKit replies
+drive the next update or close automatically. Read request failures with
+`try_recv` on the returned receiver. Kind, initial size, mode, visibility, and
+modality apply at creation. To reopen a child the user closed, remove and re-add
+its declaration.
+
+For callers managing their own lifecycle, `AppKitDeclaredWindow::sync` takes
+the latest options by reference. Call it again after AppKit replies while it
+returns `Ok(false)`.
+
+The window host chooses the child's content and reports actual destruction to
+the declaring root. The native-controls host closes declared children when
+their declaring window closes.
+The native-controls example mounts an independent Rust root for each new
+ID and raises an existing ID. It supports resizable normal windows, dialogs
+centered over a parent, floating panels, borderless popups across Spaces, and
+transparent overlays with pointer pass-through. Normal windows support
+restore, maximize, minimize and system full screen. The reply acknowledges
+the request. AppKit can finish a full-screen change on a later run loop turn.
+`SetVisibility` orders the existing window in or out while retaining its root.
+Dialogs and panels default to the requesting window as their parent. A visible
+dialog opened with `modal: Some(true)` blocks input and user-initiated closing
+in its parent window. Closing a parent closes its owned windows, including
+hidden windows.
+Dialogs and popups close on Escape when there is no marked text. Popups close
+on blur by default. The Swift view uses `jadix_native_create_with_services` in
+the Rust bridge. It passes file, window, alert and share request callbacks and
+uses the three-slot measurement ABI. The host delivers results through
+`jadix_native_file_result`, `jadix_native_window_result`,
+`jadix_native_alert_result` and `jadix_native_share_result`. The mounted
+view registers context menus through `jadix_native_enable_context_menus` and
+delivers selection through `jadix_native_context_menu_result`. Requests run
+on the main thread after the Rust call returns.
+The view delivers application menu commands through
+`jadix_native_menu_command`. Resolve the command with
+`AppKitHost::menu_command` and release the root borrow before invoking it.
+
+`AppKitHost::window_state` returns the latest observation of the window
+containing that root. `set_window_state_handler` subscribes to changes in frame,
+content size, backing scale, window mode, key focus, visibility and occlusion.
+The observation includes `normal_frame` once the host has seen a normal window
+frame. The standalone host captures that frame before the zoom animation.
+Embedded hosts can forward `windowShouldZoom(_:toFrame:)` to the view's
+`prepareForWindowZoom()` after allowing the zoom.
+An explicit `Focus` request to the standalone host activates the application
+when the target is a key-capable normal or dialog window.
+When AppKit reports a screen for the window, the state includes its display ID
+when available, full frame, and current work area. The window and display frames
+use AppKit screen coordinates in points. The Swift view combines
+pending AppKit notifications on the main queue and submits the current state to
+`jadix_native_window_state`. The Rust host skips duplicate observations and
+delivers `None` after detachment or disposal if it previously held a state.
+
+Swift hosts can observe Popover changes with `JadixNativeView.onPopoverEvent`.
+The callback gets the node ID and reports when the panel opens or closes,
+Escape or outside-press dismissal attempts, and changes to the resolved position.
+Positions use the flipped root coordinate system. An open Popover without a
+visible anchor has no position. Callbacks run on the main queue after the
+current native update returns.
+
+AppKit also sends dismissal attempts to the portable Rust builder
+(`on_cancel`), native RSX (`onCancel`) and Shell (`PopoverContent.events.cancel`).
+Escape and outside presses reach these callbacks even when the corresponding
+dismissal policy keeps the panel open. The versioned dismissal request follows
+only if the same panel is still open and dismissal is allowed.
+AppKit reports the resolved frame, placement and available size to
+`on_position_change`, `onPositionChange` and Shell's `positionChange` event.
+AppKit publishes the first open when a mounted panel has a visible anchor.
+Rust and Shell receive open and close while the panel node is mounted. The
+portable builder uses `on_open` and `on_close`, and native RSX uses
+`onOpen` and `onClose`. Swift also observes removal of a previously opened
+panel.
+A previously positioned panel with an anchor that leaves view reports empty
+geometry.
+
+AppKit Popovers support optional transition durations in milliseconds. Set
+`enterDuration` and `exitDuration` in native RSX, or call `popover_fade` on the
+portable panel. Use `popupStartingStyle` and `popupEndingStyle` in native RSX
+or `popover_appearance` on the portable panel to supply
+`jadix::presentation::style::PopoverAppearance`. Each endpoint supports
+opacity, uniform scale and translation in right/down points. The default
+endpoint is transparent with unit scale, zero translation and the panel's
+normal background. An endpoint may also set an RGBA `background` color and a
+`corner_radius` in logical points. AppKit animates both on the clipping layer.
+Durations
+default to zero. AppKit honors Reduce Motion and removes a closing panel
+from input and accessibility as the exit starts. A mounted panel reports
+close after the transition finishes. Reopening during the exit cancels
+that close.
+
+The host mounts on the main actor and calls `JadixNativeView.close()` when
+releasing its root. AppKitWindowRequest provides ID-based window operations.
+Rust can receive close presses, close causes and intercepted quit requests
+through `AppKitHost::set_window_event_handler`. Swift delegates forward these
+events with `JadixNativeView.reportWindowEvent(_:)` before disposing the root.
+`AppKitWindowState::title_bar_insets` supplies the top and side clearances for
+custom chrome with a hidden title bar. The values are zero with the standard
+or transparent title bar and in system full screen.
+The embedding Swift application owns its window registry and lifecycle. It can
+retain a `JadixExitConfirmation` and forward `applicationShouldTerminate`,
+`windowShouldClose` for its primary window, and `windowWillClose`. AppKit waits
+for the asynchronous decision before quitting. A quit request can join an
+already pending primary-window close, and approval from either source quits the
+application. Termination requests time out after 110 seconds. The presenter
+can supply its own UI or use `presentSystemAlert`. The AppKit example enables
+this behavior with `--confirm-exit`. Its application delegate collects shared
+`on_app_quit` futures through `AppKitQuitCleanup` and polls them on the main run
+loop for up to 200 ms before replying to AppKit. When the last window closes,
+the delegate collects its owner-scoped handlers before disposing the root.
+On system Quit, remaining Rust roots are disposed in `applicationWillTerminate`.
+An embedding application can provide a `prepareToTerminate` callback to defer
+the framework's reply until cleanup completes.
+
+Shared grid cells and column headers carry row or
+column spans. Grid validation rejects zero and out-of-range spans. It checks
+overlaps by scanning span boundaries, with storage proportional to mounted nodes.
+Windows UIA reports cell spans and resolves covered coordinates to the same
+cell. AppKit reports actual cell spans, maps covered coordinates to their
+mounted cells, and exposes every intersecting column header. Grid row and
+column counts come from the descriptor. AppKit creates accessibility column
+objects at mounted cell and header start indices and uses ranges for coverage
+queries. Independent layout metadata for empty rows and columns remains open.
+Popover transition classes and additional animatable style properties remain open.
+
+When an AppKit single-line field acquires the window's field editor, it restores
+the horizontal start of left, natural, and justified text if the selection's
+caret remains visible. AppKit keeps its native alignment for centered and
+right-aligned text. Enabled buttons, checkboxes, and switches apply authored
+title foreground colors and refresh them on appearance changes.
+
 Optional `code` exposes `syntax::SyntaxWorker`, reusing `jadix_document` immutable
 snapshots and its syntect parser. One worker owns one native Input/Textarea and
 keeps one running parse, one replaceable pending job and one replaceable result.
@@ -77,23 +429,28 @@ reuse text measurements. Basic native image, dialog and popover roles are
 checked against UIA; the legacy dialog-role bridge currently appears as Pane,
 and does not establish a complete modal WindowPattern provider.
 
-`AccessibleRole::Grid { rows, columns }` and `GridCell { row, column }` use
-zero-based logical coordinates on semantic Container nodes. Before publication,
-the shared model checks signed-32-bit dimensions, a nearest Grid ancestor,
-in-range coordinates and one mounted cell per coordinate in that Grid. Windows
-exposes Grid/GridItem UIA patterns for these containers, including cells nested
-under separate frozen panes. GetItem only locates mounted cells and returns
-unavailable for a valid logical coordinate without a mounted provider. Native
-EDIT children retain their system input providers. Count/coordinate/name changes
-raise property events; provider calls reject invalidated state. Actual UIA client
-scalar getters may return defaults after removal, so liveness must not be inferred
-from a scalar alone. GridColumnHeader identifies a unique, in-range column on a
-Text or Container node under the nearest Grid. Windows exposes Table/TableItem
-patterns linking mounted column headers to their current logical columns, with
-row-major orientation and empty row-header arrays. UIA clients may normalize a
-removed item's header lookup to an empty array; direct provider calls reject
-invalidated cells and owners. This does not implement row headers, virtual item
-realization, range selection, screen-reader acceptance or mobile/DOM Grid patterns.
+`AccessibleRole::Grid { rows, columns }`, `GridCell { row, column, row_span,
+column_span }` and `GridColumnHeader { column, column_span }` use zero-based
+logical coordinates on semantic Container nodes. Cell spans cover a rectangular
+area, and headers cover a range of columns. Before publication, the shared model
+checks signed-32-bit dimensions, a nearest Grid ancestor, nonzero in-range spans
+and one mounted cell or header per covered coordinate. Windows exposes Grid,
+GridItem, Table and TableItem UIA patterns, reports cell spans, resolves GetItem
+for every covered coordinate and associates column headers across overlapping
+spans, including cells nested under separate frozen panes. AppKit maps covered
+coordinates to their mounted cell, reports actual row and column ranges, and
+includes spanning cells in each covered column's accessibility projection.
+Each cell exposes the distinct column headers intersecting its range. Empty rows
+and columns still have no independent shared layout metadata. GetItem only locates mounted cells and
+returns unavailable for a valid logical coordinate without a mounted provider.
+Native EDIT children retain their system input providers. Count, coordinate,
+span and name changes raise UIA property events; provider calls reject
+invalidated state. Actual UIA client scalar getters may return defaults after
+removal, so liveness must not be inferred from a scalar alone. UIA clients may
+normalize a removed item's header lookup to an empty array; direct provider calls
+reject invalidated cells and owners. This does not implement row headers, virtual
+item realization, range selection, screen-reader acceptance or mobile/DOM Grid
+patterns.
 
 `NativeRoot::focus` sends one validated focus operation with an exact platform
 receipt. Opt-in `PlatformHost::bind_navigation` routes composite arrow/Home/End
@@ -318,7 +675,7 @@ selection. Controlled values, disabled controls/options, unique bounded options
 and string event revisions are validated before accepting changes. A rejected
 selection restores the published value. Android uses a retained native Spinner
 with disabled option states, theme typography and native popup selection. Its
-API 28 / 36 AVD scenarios exercise touch, injected keys, rollback, recreation and
+API 26 / 36 AVD scenarios exercise touch, injected keys, rollback, recreation and
 open-popup disposal. UIKit Select has a UIButton/UIMenu source mapping with controlled
 labels, disabled actions, retained menu identity and stale-menu generation checks;
 its separate probes and packaging await Apple compilation and runtime validation.
@@ -433,14 +790,14 @@ rather than changing rendering silently. Finite `NodeStyle` panel customization
 through `panel.base` remains available. Menus and other GPU overlays need their
 own platform contracts.
 
-| Portable component | Android API 28 / 36 AVD | Edge 156 / Firefox 157 / Playwright WebKit 27.2 DOM | UIKit |
+| Portable component | Android API 26 / 36 AVD | Edge 156 / Firefox 157 / Playwright WebKit 27.2 DOM | UIKit |
 | --- | --- | --- | --- |
 | Text, container, Button, Input, Scroll | Runtime scenarios | Runtime scenarios | Source; Apple validation pending |
 | Textarea, Checkbox, embedded PNG Image | Runtime scenarios | Runtime scenarios | Source; Apple validation pending |
-| Switch | API 28 / 36 AVD: native Switch, two retained row scales and process recovery | Native checkbox input with switch role; no custom switch-track styling | UISwitch source; Apple validation pending |
-| Select (options and basic compound API) | API 28 / 36 AVD: native Spinner/popup, injected touch/keys, rollback, recreation and disposal | Retained native select; controlled values, disabled options, keyboard, reset and disposal scenarios | UIButton/UIMenu source and programmatic probe entry; Apple compilation/runtime pending |
+| Switch | API 26 / 36 AVD: native Switch, two retained row scales and process recovery | Native checkbox input with switch role; no custom switch-track styling | UISwitch source; Apple validation pending |
+| Select (options and basic compound API) | API 26 / 36 AVD: native Spinner/popup, injected touch/keys, rollback, recreation and disposal | Retained native select; controlled values, disabled options, keyboard, reset and disposal scenarios | UIButton/UIMenu source and programmatic probe entry; Apple compilation/runtime pending |
 | Dialog and nested Dialog | Native windows, shared input, Back, IME avoidance, recreation | Native top layer, shared input, Tab, Escape, backdrop, disposal | UIWindow source; Apple validation pending |
-| Popover (Builder and compound RSX) | API 28 / 36 AVD: native PopupWindow, nested panels, InputConnection, scroll/flip, dismissal, recreation and disposal | Native manual HTML Popover, nested panels, controlled dismissal, scroll anchoring and retained input | Retained UIView overlay source and isolated programmatic probes; Apple compilation/runtime pending |
+| Popover (Builder and compound RSX) | API 26 / 36 AVD: native PopupWindow, nested panels, InputConnection, scroll/flip, dismissal, recreation and disposal | Native manual HTML Popover, nested panels, controlled dismissal, scroll anchoring and retained input | Retained UIView overlay source and isolated programmatic probes; Apple compilation/runtime pending |
 
 Only Chromium has CDP IME evidence; other engines use synthetic composition
 probes, not native IME. Playwright WebKit does not establish Safari validation.
@@ -448,8 +805,8 @@ The tested WebKit build caps single-line values at 524288 UTF-16 code units.
 Controlled input and textarea publication rejects a value if native readback
 differs, rather than silently accepting platform truncation.
 
-These observations do not establish other minimum-version coverage or screen-reader
-validation. iOS VoiceOver, Android TalkBack and browser assistive technology still
+The APK minimum is API 26; this acceptance run used an API 36 emulator and does not establish
+API 26 runtime or screen-reader validation. iOS VoiceOver, Android TalkBack and browser assistive technology still
 require target-specific verification.
 
 The Android input adapter removes the platform's implicit single-line character

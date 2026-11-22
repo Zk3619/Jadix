@@ -30,15 +30,19 @@ class AndroidBuildInputTests(unittest.TestCase):
             root = Path(temporary)
             for name in ["Cargo.toml", "Cargo.lock"]:
                 (root / name).write_text("initial", encoding="utf-8")
+            for name in ["scripts/native.py", "scripts/native_android.py", "examples/native-controls/build-android.py"]:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("initial", encoding="utf-8")
             for name in [
                 "crates/jadix_native", "crates/jadix", "crates/jadix_core",
                 "crates/jadix_components", "crates/jadix_macros", "crates/jadix_tasks",
                 "crates/jadix_layout", "crates/jadix_style_tokens", "crates/jadix_taffy",
                 "crates/jadix_theme", "crates/jadix_animation", "crates/jadix_hot_reload",
-                "crates/jadix_document", "crates/jadix_3d", "examples/native-controls",
+                "crates/jadix_document", "crates/jadix_3d", "crates/jadix_net", "crates/jadix_shell", "examples/native-controls",
             ]:
                 directory = root / name
-                directory.mkdir(parents=True)
+                directory.mkdir(parents=True, exist_ok=True)
                 (directory / "source.rs").write_text("initial", encoding="utf-8")
             native, identity = builder.build_inputs(root)
             builder.assert_build_inputs_unchanged(root, native, identity)
@@ -126,6 +130,20 @@ class NativeWorkflowTests(unittest.TestCase):
                 if path.is_file() and path.name != "Cargo.lock":
                     self.assertNotIn("@ROOT@", path.read_text(encoding="utf-8"))
             configuration = destination / "native-android.json"
+            import xml.etree.ElementTree as ET
+            source = destination / "android/AndroidManifest.xml"
+            original = source.read_bytes()
+            routed = {**config, "url_schemes": ["field-app", "field.auth"]}
+            configuration.write_text(json.dumps(routed), encoding="utf-8")
+            checked = builder.project_configuration(destination)
+            generated = builder.configured_manifest(source, directory / "routed.xml", checked)
+            android = "{http://schemas.android.com/apk/res/android}"
+            self.assertEqual([data.get(android + "scheme") for data in ET.parse(generated).findall("application/activity/intent-filter/data")], routed["url_schemes"])
+            self.assertEqual(source.read_bytes(), original)
+            for schemes in [["field", "field"], ["BadScheme"], ["field://callback"], "field", [None], ["a"] * 17]:
+                configuration.write_text(json.dumps({**config, "url_schemes": schemes}), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "URL schemes"):
+                    builder.project_configuration(destination)
             configuration.write_text(json.dumps({**config, "application_id": "dev.jadix.created.other"}), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "manifest package"):
                 builder.project_configuration(destination)
@@ -143,7 +161,7 @@ class NativeWorkflowTests(unittest.TestCase):
         identity = WORKFLOW.native.file_identity(apk)
         import hashlib
 
-        report = {"schema": 1, "target": "x86_64-linux-android", "abi": "x86_64",
+        report = {"schema": 1, "target": "x86_64-linux-android", "abi": "x86_64", "min_sdk": 26,
                   "source_unchanged": True, "signed": True, "debuggable": True,
                   "authenticity_verified": False, "runtime_acceptance": False,
                   "build_inputs": {"fixture": True}, "toolchain": {"fixture": True},
@@ -320,7 +338,7 @@ class NativeWorkflowTests(unittest.TestCase):
 
     def test_android_run_rejects_device_mismatch_before_installation(self):
         for changes in [{"get-state": "offline"}, {"get-serialno": "another-device"},
-                        {"ro.product.cpu.abilist": "arm64-v8a"}, {"ro.build.version.sdk": "27"}]:
+                        {"ro.product.cpu.abilist": "arm64-v8a"}, {"ro.build.version.sdk": "25"}]:
             with self.subTest(changes=changes), tempfile.TemporaryDirectory() as temporary:
                 directory = Path(temporary)
                 arguments, capture, commands = self.android_run_fixture(directory, device_changes=changes)

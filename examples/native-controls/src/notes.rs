@@ -199,10 +199,23 @@ fn confirmation(
 }
 
 impl<Host: PlatformHost> NotesApp<Host> {
+    #[cfg(target_os = "android")]
+    pub(crate) fn new_with_content(host: Host, viewport: [f32; 2], content: jadix_core::window::WindowContent) -> Result<Self, String> {
+        if content.factory != "notes" { return Err("unknown window content factory".into()); }
+        let mut app = Self::new(host, viewport, 0, String::new())?;
+        if let Some(state) = content.argument { app.restore(&state)?; }
+        Ok(app)
+    }
+
     pub fn new(host: Host, viewport: [f32; 2], _: usize, _: String) -> Result<Self, String> {
-        let root = NativeRoot::new(host);
+        let mut root = NativeRoot::new(host);
+        root.refresh_environment().map_err(|error| error.to_string())?;
         let projection = ElementProjection::with_lifetime(root.model().lifetime());
-        let (owner, (element, title, body, query, exchange, status, action)) = create_root(|| {
+        #[cfg(any(feature = "appkit", feature = "uikit", target_os = "android"))]
+        let projection = projection.with_locale_context(root.locale_context());
+        let declarations = root.host().window_declarations();
+        let build = || create_root(|| {
+            if let Some(declarations) = declarations { jadix_core::window::provide_window_declarations(declarations); }
             let title = create_signal(String::new());
             let body = create_signal(String::new());
             let query = create_signal(String::new());
@@ -276,6 +289,10 @@ impl<Host: PlatformHost> NotesApp<Host> {
             );
             (element, title, body, query, exchange, status, action)
         });
+        #[cfg(any(feature = "appkit", feature = "uikit", target_os = "android"))]
+        let (owner, (element, title, body, query, exchange, status, action)) = root.with_locale(build);
+        #[cfg(not(any(feature = "appkit", feature = "uikit", target_os = "android")))]
+        let (owner, (element, title, body, query, exchange, status, action)) = build();
         let mut app = Self {
             root,
             projection,
@@ -370,6 +387,7 @@ impl<Host: PlatformHost> NotesApp<Host> {
     }
 
     pub fn render(&mut self) -> Result<(), String> {
+        self.root.refresh_environment().map_err(|error| error.to_string())?;
         let list = self.element.children[0]
             .children
             .iter_mut()

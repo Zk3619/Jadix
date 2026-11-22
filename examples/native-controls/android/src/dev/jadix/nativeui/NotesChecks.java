@@ -27,6 +27,7 @@ public class NotesChecks extends Instrumentation {
     protected View find(View view, String label, boolean field) {
         if (field && view instanceof EditText && label.contentEquals(((EditText)view).getHint())) return view;
         if (!field && view instanceof Button && label.contentEquals(((Button)view).getText())) return view;
+        if (!field && view instanceof NativeContentButton && label.contentEquals(view.getContentDescription())) return view;
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup)view;
             for (int index = 0; index < group.getChildCount(); index++) { View result = find(group.getChildAt(index), label, field); if (result != null) return result; }
@@ -35,7 +36,28 @@ public class NotesChecks extends Instrumentation {
     }
     protected void click(NotesActivity activity, String label) {
         View root = activity.content.activeDialog() == null ? activity.content : activity.content.activeDialog().getWindow().getDecorView();
-        View button = find(root, label, false); require(button != null, "Missing button: " + label + " state=" + activity.content.state() + " callback=" + activity.content.takeError()); button.performClick();
+        View button = find(root, label, false);
+        if (button == null && root == activity.content) {
+            try {
+                java.lang.reflect.Field field = NativeView.class.getDeclaredField("orderedNodes"); field.setAccessible(true);
+                org.json.JSONArray nodes = (org.json.JSONArray) field.get(activity.content);
+                for (int index = 0; index < nodes.length(); index++) {
+                    JSONObject node = nodes.getJSONObject(index);
+                    if (!label.equals(node.optString("name"))) continue;
+                    org.json.JSONArray frame = node.getJSONArray("frame");
+                    for (JSONObject parent = node; !parent.isNull("parent");) {
+                        parent = activity.content.descriptor(parent.getString("parent"));
+                        View view = activity.content.nodeView(parent.getString("id"));
+                        if (view instanceof NativeScroll) {
+                            org.json.JSONArray origin = parent.getJSONArray("frame");
+                            ((NativeScroll) view).scroll(Math.max(0, frame.getDouble(0) - origin.getDouble(0)), Math.max(0, frame.getDouble(1) - origin.getDouble(1)), false);
+                        }
+                    }
+                    activity.content.materialize(); button = activity.content.nodeView(node.getString("id")); break;
+                }
+            } catch (Exception error) { throw new AssertionError(error); }
+        }
+        require(button != null, "Missing button: " + label + " state=" + activity.content.state() + " callback=" + activity.content.takeError()); button.performClick();
     }
     protected void edit(NotesActivity activity, String hint, String text) {
         EditText field = (EditText)find(activity.content, hint, true); require(field != null, "Missing input: " + hint);

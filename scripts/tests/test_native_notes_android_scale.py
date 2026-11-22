@@ -13,11 +13,6 @@ SPEC.loader.exec_module(SCALE)
 
 
 class NotesAndroidScaleTests(unittest.TestCase):
-    def test_restoration_timestamp_is_explicitly_utc_and_old_touch_compatible(self):
-        self.assertEqual(SCALE.mtime_stamp(0), "197001010000.00")
-        self.assertEqual(SCALE.mtime_stamp(86400), "197001020000.00")
-        self.assertEqual(SCALE.mtime_stamp(1793585077), "202611020204.37")
-
     def test_protected_names_are_exact_and_single_column(self):
         cache = "native-state-53c25b1d-0fca-4a09-aa56-06220a3ce484.json"
         self.assertEqual(SCALE.data_names("jadix-notes-v1.json\r\n" + cache + "\r\njadix-notes-v1.json.other\r\n"), ["jadix-notes-v1.json", cache])

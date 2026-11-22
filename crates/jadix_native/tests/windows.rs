@@ -2,6 +2,143 @@
 
 use jadix_native::{host::NativeRoot, presentation::*, windows::WindowsHost};
 
+#[cfg(windows)]
+mod visible_commit_probe {
+    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicUsize, Ordering};
+    use windows_sys::Win32::{
+        Foundation::{HWND, LPARAM},
+        UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK},
+        UI::WindowsAndMessaging::{
+            EnumChildWindows, GetAncestor, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
+            EVENT_OBJECT_SHOW, GA_ROOT, OBJID_WINDOW,
+        },
+    };
+
+    pub static ROOT: AtomicIsize = AtomicIsize::new(0);
+    pub static SHOWS: AtomicUsize = AtomicUsize::new(0);
+    pub static INCOMPLETE: AtomicBool = AtomicBool::new(false);
+
+    unsafe extern "system" fn find_expected_child(hwnd: HWND, state: LPARAM) -> i32 {
+        let found = unsafe { &mut *(state as *mut bool) };
+        let mut text = [0u16; 96];
+        let length = unsafe { GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32) };
+        if length > 0 && String::from_utf16_lossy(&text[..length as usize]) == "complete-child" {
+            let mut rect = std::mem::zeroed();
+            unsafe { GetWindowRect(hwnd, &mut rect) };
+            *found = rect.right - rect.left >= 80 && rect.bottom - rect.top >= 20;
+            return 0;
+        }
+        true.into()
+    }
+
+    unsafe extern "system" fn observe_show(
+        _hook: HWINEVENTHOOK,
+        event: u32,
+        hwnd: HWND,
+        object: i32,
+        child: i32,
+        _thread: u32,
+        _time: u32,
+    ) {
+        let root = ROOT.load(Ordering::Relaxed) as HWND;
+        if event != EVENT_OBJECT_SHOW
+            || object != OBJID_WINDOW
+            || child != 0
+            || root.is_null()
+            || unsafe { GetAncestor(hwnd, GA_ROOT) } != root
+        {
+            return;
+        }
+        SHOWS.fetch_add(1, Ordering::Relaxed);
+        let mut found = false;
+        unsafe { EnumChildWindows(root, Some(find_expected_child), &mut found as *mut _ as LPARAM) };
+        if !found {
+            INCOMPLETE.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub unsafe fn install(root: usize) -> isize {
+        ROOT.store(root as isize, Ordering::Relaxed);
+        SHOWS.store(0, Ordering::Relaxed);
+        INCOMPLETE.store(false, Ordering::Relaxed);
+        let mut process_id = 0;
+        let thread_id = unsafe { GetWindowThreadProcessId(root as HWND, &mut process_id) };
+        unsafe {
+            SetWinEventHook(
+                EVENT_OBJECT_SHOW,
+                EVENT_OBJECT_SHOW,
+                std::ptr::null_mut(),
+                Some(observe_show),
+                process_id,
+                thread_id,
+                0,
+            ) as isize
+        }
+    }
+
+    pub unsafe fn uninstall(hook: isize) {
+        unsafe { UnhookWinEvent(hook as HWINEVENTHOOK) };
+        ROOT.store(0, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn native_dynamic_subtree_first_show_follows_complete_batch_layout() {
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+
+    let mut root = NativeRoot::new(WindowsHost::new("Jadix visible batch", [420, 280]).unwrap());
+    let root_id = root.model().id();
+    let mut nodes = vec![node(
+        root_id,
+        NodeContent::Text("already visible".into()),
+    )];
+    present(&mut root, &mut nodes);
+    root.host().show();
+    root.host().pump();
+
+    let mut dialog = node(
+        root_id,
+        NodeContent::Dialog {
+            open: true,
+            close_on_overlay_click: true,
+            revision: 0,
+        },
+    );
+    dialog.descriptor.style.width = Some(240.0);
+    dialog.descriptor.style.height = Some(150.0);
+    let mut child = node(
+        root_id,
+        NodeContent::Button {
+            label: "complete-child".into(),
+            enabled: true,
+        },
+    );
+    child.descriptor.style.width = Some(120.0);
+    child.descriptor.style.height = Some(32.0);
+    let (dialog_id, child_id) = (dialog.id, child.id);
+    dialog.children.push(child);
+    nodes.push(dialog);
+
+    let hook = unsafe { visible_commit_probe::install(root.host().native_window()) };
+    assert_ne!(hook, 0, "WinEvent observer must attach for visible acceptance");
+    present(&mut root, &mut nodes);
+    root.host().pump();
+    unsafe { visible_commit_probe::uninstall(hook) };
+
+    assert!(visible_commit_probe::SHOWS.load(std::sync::atomic::Ordering::Relaxed) > 0);
+    assert!(
+        !visible_commit_probe::INCOMPLETE.load(std::sync::atomic::Ordering::Relaxed),
+        "a native show notification occurred before the child text and final geometry existed"
+    );
+    let dialog_hwnd = root.host().control_identity(dialog_id).unwrap() as HWND;
+    let child_hwnd = root.host().control_identity(child_id).unwrap() as HWND;
+    root.host().pump();
+    assert_ne!(unsafe { IsWindowVisible(dialog_hwnd) }, 0);
+    assert_ne!(unsafe { IsWindowVisible(child_hwnd) }, 0);
+    assert!(root.host().control_frame(child_id).unwrap().width >= 80.0);
+}
+
 fn node(root: RootId, content: NodeContent) -> PresentationNode {
     PresentationNode {
         id: NodeId::new(root),
@@ -12,6 +149,10 @@ fn node(root: RootId, content: NodeContent) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             accessible_description: None,
             accessible_name: None,
@@ -656,9 +797,16 @@ fn native_tab_traverses_nested_containers_and_reveals_the_focused_editor() {
     root.host().pump();
     assert_eq!(unsafe { GetFocus() }, last_window);
     let events = root.poll_events().unwrap();
-    assert!(events
-        .iter()
-        .any(|event| event.node == last && event.payload == EventPayload::Focus));
+    assert!(
+        events.iter().any(|event| {
+            event.node == last
+                && matches!(
+                    event.payload,
+                    EventPayload::Focus | EventPayload::FocusVisible
+                )
+        }),
+        "{events:?}"
+    );
     assert!(events
         .iter()
         .any(|event| event.node == first && event.payload == EventPayload::Blur));
@@ -740,10 +888,11 @@ fn native_images_decode_off_thread_recover_from_failure_and_discard_removed_resu
     let mut nodes = vec![image(valid), image(broken)];
     present(&mut root, &mut nodes);
     let identity = root.host().control_identity(nodes[1].id);
+    let mut image_events = Vec::new();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         root.host().pump();
-        root.poll_events().unwrap();
+        image_events.extend(root.poll_events().unwrap());
         let state = root.host().diagnostics();
         if state["images_ready"] == 1 && state["images_failed"] == 1 {
             break;
@@ -751,6 +900,10 @@ fn native_images_decode_off_thread_recover_from_failure_and_discard_removed_resu
         assert!(std::time::Instant::now() < deadline, "{state}");
         root.host().wait_for_events(50).unwrap();
     }
+    let loaded: Vec<_> = image_events.iter().filter(|event| event.node == nodes[0].id).map(|event| event.payload.clone()).collect();
+    assert_eq!(loaded, vec![EventPayload::ImageLoad(ImageLoadEvent::Started), EventPayload::ImageLoad(ImageLoadEvent::Loaded { width: 1, height: 1 }), EventPayload::ImageLoad(ImageLoadEvent::Ended)]);
+    let failed: Vec<_> = image_events.iter().filter(|event| event.node == nodes[1].id).map(|event| &event.payload).collect();
+    assert!(matches!(failed.as_slice(), [EventPayload::ImageLoad(ImageLoadEvent::Started), EventPayload::ImageLoad(ImageLoadEvent::Failed { .. }), EventPayload::ImageLoad(ImageLoadEvent::Ended)]));
     nodes[1].descriptor.content = NodeContent::Image {
         source: valid.trim().into(),
         alt: "Recovered".into(),

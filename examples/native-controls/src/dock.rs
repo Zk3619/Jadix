@@ -290,6 +290,10 @@ fn node(id: NodeId, content: NodeContent, size: [f32; 2]) -> PresentationNode {
             accessible_expanded: None,
             accessible_description: None,
             accessible_name: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             style: style::NodeStyle {
                 width: Some(size[0].max(0.0)),

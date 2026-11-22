@@ -15,12 +15,14 @@ import native
 
 
 def register(subcommands):
-    create = subcommands.add_parser("create", help="Create an independent Windows, Android or OHOS native Rust application")
+    import native_updater
+    native_updater.register(subcommands)
+    create = subcommands.add_parser("create", help="Create an independent Windows, Linux, macOS, Android or OHOS native Rust application")
     create.add_argument("destination", type=Path)
     create.add_argument("--name", default="native-app")
-    create.add_argument("--platform", choices=["windows", "android", "ohos"], default="windows")
+    create.add_argument("--platform", choices=["windows", "android", "ohos", "macos", "linux"], default="windows")
     build = subcommands.add_parser("build", help="Build and retain an identified native artifact")
-    build.add_argument("--platform", choices=["windows", "android", "ohos"], default="windows")
+    build.add_argument("--platform", choices=["windows", "android", "ohos", "macos", "linux"], default="windows")
     build.add_argument("--project", type=Path)
     build.add_argument("--bin", default="native-windows")
     build.add_argument("--workbench", action="store_true")
@@ -31,17 +33,34 @@ def register(subcommands):
     build.add_argument("--android-sdk", type=Path, help="Explicit Android SDK directory")
     build.add_argument("--ndk", type=Path, help="Explicit Android NDK directory")
     build.add_argument("--java-home", type=Path, help="Explicit JDK directory")
+    build.add_argument("--production", action="store_true", help="Build Android with an existing publisher signature and debuggable=false")
+    build.add_argument("--keystore", type=Path)
+    build.add_argument("--key-alias")
+    build.add_argument("--ks-pass-env")
+    build.add_argument("--key-pass-env")
+    build.add_argument("--compile-sdk", type=int)
+    build.add_argument("--build-tools")
     build.add_argument("--android-target", choices=["aarch64-linux-android", "x86_64-linux-android"], default="aarch64-linux-android")
     build.add_argument("--extended", action="store_true", help="Include Android Controls dialogs, switches and editor probes")
     build.add_argument("--large-list", action="store_true", help="Build Android Controls with 1000 retained rows")
     build.add_argument("--architecture", choices=["x86_64", "arm64"], default="x86_64")
     build.add_argument("--native-only", action="store_true", help="Build the OHOS native library without a HAP")
     run = subcommands.add_parser("run", help="Run a retained Windows or Android artifact with fresh probe evidence")
-    run.add_argument("--artifact", type=Path, required=True)
+    run_source = run.add_mutually_exclusive_group(required=True)
+    run_source.add_argument("--artifact", type=Path)
+    run_source.add_argument("--runtime", help="Install and run a version-matched runtime component for a source project")
+    run.add_argument("--project", type=Path)
+    run.add_argument("--release", action="store_true")
+    run.add_argument("--offline", action="store_true")
+    run.add_argument("--home", type=Path, default=Path(os.environ.get("JADIX_DISTRIBUTION_HOME", Path.home() / ".jadix/distribution")))
+    run.add_argument("--manifest", default=os.environ.get("JADIX_DISTRIBUTION_MANIFEST"))
+    run.add_argument("--manifest-sha256", default=os.environ.get("JADIX_DISTRIBUTION_MANIFEST_SHA256"))
+    run.add_argument("--channel", choices=("stable", "nightly"), default=os.environ.get("JADIX_DISTRIBUTION_CHANNEL", "stable"))
+    run.add_argument("--runtime-argument", action="append", default=[], help="Additional runtime argument; use = for leading dashes")
     run.add_argument("--adb", type=Path, help="Explicit Android adb executable")
     run.add_argument("--serial", help="Exact Android device serial; no default device selection")
     run.add_argument("--process-recovery", action="store_true", help="Also probe Android background-process recovery")
-    package = subcommands.add_parser("package", help="Package a verified Windows, Android or OHOS build as an unsigned local ZIP")
+    package = subcommands.add_parser("package", help="Package a verified Windows, macOS, Linux, Android or OHOS build as an unsigned local ZIP")
     package.add_argument("--artifact", type=Path, required=True)
     inspect = subcommands.add_parser("inspect", help="Check retained artifact identities without execution")
     inspect.add_argument("--artifact", type=Path, required=True)
@@ -155,11 +174,17 @@ def android_artifact(destination):
     targets = {"aarch64-linux-android": "arm64-v8a", "x86_64-linux-android": "x86_64"}
     target = report.get("target")
     if (report.get("schema") != 1 or target not in targets or report.get("abi") != targets[target]
+            or report.get("min_sdk") != 26
             or report.get("source_unchanged") is not True or report.get("signed") is not True
             or report.get("authenticity_verified") is not False or report.get("runtime_acceptance") is not False
-            or report.get("debuggable") is not True or not report.get("build_inputs")
+            or type(report.get("debuggable")) is not bool or not report.get("build_inputs")
             or not report.get("toolchain")):
         raise ValueError("Android build report is incomplete or inconsistent")
+    production = report.get("production", False)
+    if (type(production) is not bool or report["debuggable"] != (not production)
+            or (production and (report.get("rust_profile") != "release"
+                                or not report.get("key_alias") or not report.get("signing_key_identity")))):
+        raise ValueError("Android production signing report is inconsistent")
     apk = destination / "native-controls.apk"
     apk_identity = native.file_identity(apk)
     if (apk_identity != report.get("apk_identity") or apk_identity["bytes"] != report.get("apk_bytes")
@@ -180,20 +205,20 @@ def android_artifact(destination):
                 or int.from_bytes(header[16:18], "little") != 3
                 or int.from_bytes(header[18:20], "little") != (62 if targets[target] == "x86_64" else 183)):
             raise ValueError("Android native library ELF ABI mismatch")
-    return {"kind": "android-native-build", "target": target, "abi": targets[target],
+    return {"kind": "android-native-build", "target": target, "abi": targets[target], "min_sdk": 26,
             "build_directory": str(destination), "build_report": str(build_report),
             "build_report_identity": native.file_identity(build_report), "apk": str(apk),
             "apk_identity": apk_identity, "signed": True, "authenticity_verified": False,
-            "runtime_acceptance": False,
-            "limits": ["Development APK signature and archive hashes do not establish publisher authenticity, device runtime or accessibility acceptance."]}
+            "runtime_acceptance": False, "production": production, "debuggable": report["debuggable"],
+            "limits": ["APK signature and archive hashes do not establish publisher authenticity, device runtime or accessibility acceptance."]}
 
 
 def create(arguments, output):
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", arguments.name):
         raise ValueError("application name must be a lowercase Cargo package name")
     platform = getattr(arguments, "platform", "windows")
-    if platform not in ("windows", "android", "ohos"):
-        raise ValueError("native create supports Windows, Android and OHOS templates")
+    if platform not in ("windows", "android", "ohos", "macos", "linux"):
+        raise ValueError("native create supports Windows, macOS, Android and OHOS templates")
     destination = new_directory(arguments.destination)
     sources = native.ROOT / f"scripts/templates/native-{platform}"
     application_id = "dev.jadix.created." + arguments.name.replace("-", "_")
@@ -215,10 +240,16 @@ def create(arguments, output):
 
 
 def build(arguments, output):
-    if os.name != "nt":
-        raise ValueError("this native build command currently requires a Windows host")
+    if getattr(arguments, "platform", "windows") == "linux":
+        import native_linux
+        return native_linux.build(arguments, output, capture)
+    if getattr(arguments, "platform", "windows") == "macos":
+        import native_macos
+        return native_macos.build(arguments, output, capture)
     selected_platform = getattr(arguments, "platform", "windows")
-    if selected_platform != "android" and (any(getattr(arguments, name, None) for name in ["android_sdk", "ndk", "java_home", "extended", "large_list"])
+    if selected_platform == "windows" and os.name != "nt":
+        raise ValueError("Windows native builds require a Windows host")
+    if selected_platform != "android" and (any(getattr(arguments, name, None) for name in ["android_sdk", "ndk", "java_home", "extended", "large_list", "production", "keystore", "key_alias", "ks_pass_env", "key_pass_env", "compile_sdk", "build_tools"])
                                           or getattr(arguments, "android_target", "aarch64-linux-android") != "aarch64-linux-android"):
         raise ValueError("Android SDK, NDK, JDK and target options apply only to --platform android")
     if selected_platform == "android":
@@ -246,6 +277,12 @@ def build(arguments, output):
             command.append("--offline")
         if getattr(arguments, "release", False):
             command.append("--release")
+        if getattr(arguments, "production", False):
+            command.append("--production")
+        for option in ["keystore", "key_alias", "ks_pass_env", "key_pass_env", "compile_sdk", "build_tools"]:
+            value = getattr(arguments, option, None)
+            if value is not None:
+                command += ["--" + option.replace("_", "-"), str(value.resolve() if isinstance(value, Path) else value)]
         if field:
             command.append("--field")
         if getattr(arguments, "extended", False):
@@ -356,6 +393,9 @@ def artifact(path):
     if report.get("schema") != 1 or report.get("operation") != "build":
         raise ValueError("expected a native build report")
     result = report["observations"]
+    if result.get("kind") == "linux-native-build":
+        import native_linux
+        return native_linux.validate_artifact(result), report
     if result.get("kind") == "android-native-build":
         directory = Path(result["build_directory"]).resolve()
         build_report = Path(result["build_report"]).resolve()
@@ -376,6 +416,15 @@ def artifact(path):
         if result != ohos_artifact(directory, result["architecture"], result["native_only"]):
             raise ValueError("retained OHOS artifact identity mismatch")
         return library, report
+    if result.get("kind") == "macos-native-build":
+        import native_macos
+        bundle = Path(result["bundle"]).resolve()
+        if native_macos.bundle_files(bundle) != native_macos.package_files(result):
+            raise ValueError("retained macOS bundle identity mismatch")
+        executable = Path(result["executable"]).resolve()
+        if executable.parent != bundle / "Contents/MacOS" or native.file_identity(executable) != result["identity"]:
+            raise ValueError("retained macOS executable path or identity mismatch")
+        return executable, report
     executable = Path(result["executable"]).resolve()
     if result.get("kind") != "windows-native-build" or executable.suffix.lower() != ".exe":
         raise ValueError("unsupported retained artifact kind")
@@ -425,7 +474,7 @@ def run_android(arguments, output, apk, report):
               "kind": "reported-emulator" if emulator == "1" else "unconfirmed",
               "adb": str(adb), "adb_identity": adb_identity}
     (directory / "device.json").write_text(json.dumps(device, indent=2) + "\n", encoding="utf-8")
-    if build["abi"] not in abis or not sdk.isdecimal() or int(sdk) < 28:
+    if build["abi"] not in abis or not sdk.isdecimal() or int(sdk) < 26:
         raise ValueError("selected Android device ABI or SDK does not support the retained APK")
     if native.file_identity(adb) != adb_identity:
         raise ValueError("adb changed during device discovery")
@@ -485,9 +534,43 @@ def run_android(arguments, output, apk, report):
 
 
 def run(arguments, output):
+    if getattr(arguments, "runtime", None):
+        import native_distribution
+        name = native_distribution.identifier(arguments.runtime)
+        project = arguments.project.resolve() if arguments.project else None
+        if project is not None and project.is_file():
+            project = project.parent
+        if project is None or not any((candidate / "Cargo.toml").is_file() for candidate in (project, *project.parents)):
+            raise ValueError("source runtime runs require --project with a Cargo.toml")
+        if getattr(arguments, "process_recovery", False):
+            raise ValueError("process recovery requires a retained Android artifact")
+        home = arguments.home.resolve()
+        native_distribution.ensure(home, name, arguments.manifest, arguments.channel,
+                                   arguments.manifest_sha256, arguments.offline)
+        command = ["--project", str(arguments.project.resolve())]
+        if arguments.release:
+            command.append("--release")
+        if arguments.offline:
+            command.append("--offline")
+        for option in ("adb", "serial"):
+            if getattr(arguments, option, None):
+                command += ["--" + option, str(getattr(arguments, option))]
+        command += arguments.runtime_argument
+        return native_distribution.launch(home, name, command)
+    if any(getattr(arguments, option, None) for option in ("project", "release", "runtime_argument")):
+        raise ValueError("project, release and runtime arguments require --runtime")
     executable, report = artifact(arguments.artifact)
+    if report["observations"].get("kind") == "linux-native-build":
+        import native_linux
+        return native_linux.run(executable, report)
     if report["observations"].get("kind") == "android-native-build":
         return run_android(arguments, output, executable, report)
+    if report["observations"].get("kind") == "macos-native-build":
+        if sys.platform != "darwin":
+            raise ValueError("macOS applications require a macOS host")
+        process = subprocess.Popen([str(executable)], cwd=executable.parent)
+        return {"executable": str(executable), "pid": process.pid, "launched": True,
+                "runtime_acceptance": False, "limits": ["Application launched; interactive acceptance was not requested."]}
     if report["observations"].get("kind") != "windows-native-build":
         raise ValueError("native runtime probe is currently implemented only for Windows builds")
     if any(getattr(arguments, name, None) for name in ["adb", "serial", "process_recovery"]):
@@ -517,6 +600,16 @@ def package(arguments, output):
         if platform == "ohos" and not observation["native_only"]:
             name = f"jadix-native-controls-{observation['architecture']}-unsigned.hap"
             files[name] = Path(observation["build_directory"]) / name
+    if platform == "macos":
+        import native_macos
+        identities = native_macos.package_files(observation)
+        parent = Path(observation["bundle"]).parent
+        files = {name: parent / name for name in identities}
+    if platform == "linux":
+        import native_linux
+        identities = native_linux.package_files(observation)
+        parent = Path(observation["bundle"])
+        files = {name: parent / name for name in identities}
     directory = new_directory(output.parent / f"{output.stem}-files")
     package_path = directory / f"native-{platform}.zip"
     manifest = {"schema": 1, "kind": f"{platform}-native-package", "signed": False,
@@ -530,6 +623,16 @@ def package(arguments, output):
         archive.write(arguments.artifact, "build.json")
     verified = verify_package(package_path)
     return {"package": str(package_path), "identity": native.file_identity(package_path), **verified}
+
+
+def retained_package_files(observation):
+    if observation.get("kind") == "linux-native-build":
+        import native_linux
+        return native_linux.package_files(observation)
+    if observation.get("kind") == "macos-native-build":
+        import native_macos
+        return native_macos.package_files(observation)
+    return mobile_package_files(observation)
 
 
 def mobile_package_files(observation):
@@ -565,7 +668,7 @@ def verify_package(path):
     with zipfile.ZipFile(path) as archive:
         infos = archive.infolist()
         names = [info.filename for info in infos]
-        if len(names) != len(set(names)) or len(names) > 64:
+        if len(names) != len(set(names)) or len(names) > 514:
             raise ValueError("duplicate or excessive package members")
         for name in names:
             parts = PurePosixPath(name).parts
@@ -574,7 +677,7 @@ def verify_package(path):
         if "manifest.json" not in names or archive.getinfo("manifest.json").file_size > 1024 * 1024:
             raise ValueError("missing or excessive package manifest")
         manifest = json.loads(archive.read("manifest.json"))
-        kinds = [f"{platform}-native-package" for platform in ["windows", "android", "ohos"]]
+        kinds = [f"{platform}-native-package" for platform in ["windows", "android", "ohos", "macos", "linux"]]
         if manifest.get("schema") != 1 or manifest.get("kind") not in kinds or manifest.get("signed") is not False:
             raise ValueError("unsupported package manifest")
         files = manifest.get("files", {})
@@ -593,8 +696,21 @@ def verify_package(path):
             observation = build.get("observations", {})
             if (build.get("schema") != 1 or build.get("operation") != "build"
                     or observation.get("kind") != manifest["kind"].replace("-package", "-build")
-                    or mobile_package_files(observation) != files):
+                    or retained_package_files(observation) != files):
                 raise ValueError("mobile package files disagree with retained build identity")
+            if manifest["kind"] == "linux-native-package":
+                for name in files:
+                    mode = archive.getinfo(name).external_attr >> 16
+                    if mode & 0o170000 != 0o100000:
+                        raise ValueError("packaged Linux files must have regular file modes")
+                for name in files:
+                    mode = archive.getinfo(name).external_attr >> 16
+                    if mode & 0o170000 != 0o100000:
+                        raise ValueError("packaged Linux files must have regular file modes")
+                executable = observation["application"]["executable"]
+                mode = archive.getinfo(executable).external_attr >> 16
+                if not mode & 0o100 or mode & 0o170000 != 0o100000:
+                    raise ValueError("packaged Linux executable lacks regular executable mode")
     return {"integrity_verified": True, "signed": manifest.get("signed") is True,
             "authenticity_verified": False, "kind": manifest["kind"], "files": files,
             "limits": ["Hashes check package consistency; they do not authenticate its publisher or accept its platform behavior."]}
@@ -602,6 +718,9 @@ def verify_package(path):
 
 def execute(arguments, output):
     operation = arguments.operation
+    if operation in ("update-keygen", "update-release"):
+        import native_updater
+        return (native_updater.keygen if operation == "update-keygen" else native_updater.release)(arguments, output)
     if operation == "inspect":
         retained, report = artifact(arguments.artifact)
         result = {"integrity_verified": True, "artifact": str(retained), "build": report["observations"]}

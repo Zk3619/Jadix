@@ -71,6 +71,10 @@ fn node(identifier: NodeId, content: NodeContent, width: f64, height: f64) -> Pr
             accessible_expanded: None,
             accessible_description: None,
             accessible_name: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             style: style::NodeStyle {
                 width: Some(width as f32),
@@ -571,6 +575,8 @@ impl<Host: PlatformHost> DataTable<Host> {
                     row: u32::try_from(index).map_err(|_| "table row exceeds semantic range")?,
                     column: u32::try_from(*column_index)
                         .map_err(|_| "table column exceeds semantic range")?,
+                    row_span: 1,
+                    column_span: 1,
                 });
                 semantic.children.push(input);
                 containers[side].children.push(semantic);

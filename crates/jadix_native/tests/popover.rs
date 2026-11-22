@@ -14,6 +14,10 @@ fn node(root: RootId, content: NodeContent, width: f32, height: f32) -> Presenta
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             accessible_description: None,
             accessible_name: None,
@@ -29,6 +33,128 @@ fn presentation_style(width: f32, height: f32) -> style::NodeStyle {
         height: Some(height),
         shrink: 0.0,
         ..Default::default()
+    }
+}
+
+#[test]
+fn complete_visual_endpoints_reach_the_native_wire_and_reject_invalid_updates_atomically() {
+    use style::*;
+    let mut root = HeadlessRoot::new();
+    let mut item = node(root.id(), NodeContent::Container, 120.0, 80.0);
+    let visual = ViewAppearance {
+        opacity: 0.75,
+        corners: [2., 4., 6., 8.],
+        continuous_corners: true,
+        border_widths: [1., 2., 3., 4.],
+        border_colors: [[255, 0, 0, 255]; 4],
+        border_style: StrokeStyle::Dashed,
+        outline_width: 2.,
+        outline_offset: -1.,
+        origin: TransformOrigin {
+            fraction: [0., 1.],
+            offset: [2., -3.],
+            z: 1.,
+        },
+        backface_hidden: true,
+        cursor: ViewCursor::Pointer,
+        backgrounds: vec![ViewGradient {
+            geometry: GradientKind::Radial {
+                circle: false,
+                size: GradientSize::ClosestSide,
+                center: [0.25, 0.75],
+            },
+            stops: vec![
+                GradientStop {
+                    color: [255, 255, 255, 255],
+                    position: Some(GradientPosition::Points(-4.)),
+                },
+                GradientStop {
+                    color: [0, 0, 255, 0],
+                    position: Some(GradientPosition::Fraction(1.)),
+                },
+            ],
+            repeating: true,
+        }],
+        filters: vec![
+            ViewFilter::HueRotate(-1.),
+            ViewFilter::DropShadow(ViewShadow {
+                offset: [1., -2.],
+                blur: 3.,
+                color: [0, 0, 0, 128],
+                ..Default::default()
+            }),
+        ],
+        backdrop_filters: vec![ViewFilter::Blur(4.)],
+        backdrop: Some(MacBackdrop::default()),
+        glass: GlassEffect::Regular,
+        control: ControlAppearance::Consistent,
+        transition: Some(ViewTransition {
+            duration: 250.,
+            ..Default::default()
+        }),
+        animation: Some(ViewAnimation {
+            keyframes: ViewKeyframes::Pulse,
+            iterations: Some(3),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    item.descriptor.style.view = Some(visual.clone());
+    item.descriptor.style.popover_starting = Some(PopoverAppearance {
+        view: Some(visual.clone()),
+        ..Default::default()
+    });
+    root.reconcile(std::slice::from_ref(&item)).unwrap();
+    let wire = wire::descriptor(&item.descriptor);
+    assert_eq!(
+        wire["style"]["view"]["backgrounds"][0]["geometry"]["kind"],
+        "radial"
+    );
+    assert_eq!(
+        wire["style"]["view"]["backgrounds"][0]["stops"][0]["position"]["points"],
+        -4.
+    );
+    assert_eq!(wire["style"]["view"]["filters"][1]["kind"], "drop_shadow");
+    assert_eq!(
+        wire["style"]["popover_starting"]["view"],
+        wire["style"]["view"]
+    );
+    let decoded: NodeStyle = serde_json::from_value(wire["style"].clone()).unwrap();
+    assert_eq!(decoded, item.descriptor.style);
+    let mut invalid = Vec::new();
+    let mut v = visual.clone();
+    v.transform[12] = f32::NAN;
+    invalid.push(v);
+    let mut v = visual.clone();
+    v.transition.as_mut().unwrap().easing[0] = 2.;
+    invalid.push(v);
+    let mut v = visual.clone();
+    v.animation.as_mut().unwrap().frame_rate = Some(0.);
+    invalid.push(v);
+    let mut v = visual.clone();
+    v.corners[0] = -1.;
+    invalid.push(v);
+    let mut v = visual.clone();
+    v.backgrounds[0].stops.clear();
+    invalid.push(v);
+    let mut v = visual.clone();
+    v.filters = vec![ViewFilter::Opacity(2.)];
+    invalid.push(v);
+    let mut v = visual.clone();
+    v.shadows = vec![ViewShadow::default(); 33];
+    invalid.push(v);
+    for visual in invalid {
+        for endpoint in [false, true] {
+            let mut bad = item.clone();
+            if endpoint {
+                bad.descriptor.style.popover_starting.as_mut().unwrap().view = Some(visual.clone());
+            } else {
+                bad.descriptor.style.view = Some(visual.clone());
+            }
+            assert_eq!(root.reconcile(&[bad]), Err(BackendError::InvalidStyle));
+            assert_eq!(root.revision(), 1);
+            assert_eq!(root.node(item.id).unwrap().descriptor, item.descriptor);
+        }
     }
 }
 

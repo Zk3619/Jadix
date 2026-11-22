@@ -3,6 +3,9 @@ use rwh_06::{RawDisplayHandle, RawWindowHandle, Win32WindowHandle, WindowsDispla
 use std::num::NonZeroIsize;
 use std::sync::{Arc, Mutex};
 use wgpu::util::DeviceExt;
+mod shader;
+mod capture;
+pub(super) use shader::Shader;
 
 const SHADER: &str = r#"
 @vertex fn vertex(@location(0) point: vec2<f32>) -> @builtin(position) vec4<f32> {
@@ -27,6 +30,7 @@ pub(super) struct Plot {
     lost: Arc<Mutex<Option<String>>>,
     frames: u64,
     recreations: u64,
+    program: Option<shader::Program>,
 }
 
 fn target(window: HWND) -> Result<wgpu::SurfaceTargetUnsafe, String> {
@@ -161,6 +165,7 @@ impl Plot {
             lost,
             frames: 0,
             recreations: 0,
+            program: None,
         })
     }
 
@@ -269,7 +274,7 @@ impl Plot {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Jadix native chart frame"),
             });
-        self.encode(&mut encoder, &view);
+        self.encode(&mut encoder, &view, [width, height])?;
         self.queue.submit([encoder.finish()]);
         self.queue.present(texture);
         if suboptimal {
@@ -280,7 +285,8 @@ impl Plot {
         Ok(())
     }
 
-    fn encode(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView) {
+    fn encode(&self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, size: [u32; 2]) -> Result<(), String> {
+        if let Some(program) = &self.program { program.prepare(&self.queue, size)?; }
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Jadix native chart frame"),
@@ -303,13 +309,24 @@ impl Plot {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+            if let Some(program) = &self.program { program.backdrop(&mut pass); }
             pass.set_pipeline(&self.pipeline);
-            pass.set_vertex_buffer(0, self.vertices.slice(..));
+            if let Some(program) = &self.program { program.bind(&mut pass); }
+            else { pass.set_vertex_buffer(0, self.vertices.slice(..)); }
             pass.draw(0..self.count, 0..1);
         }
+        Ok(())
     }
 
     pub(super) fn readback(&self) -> Result<([u32; 2], Vec<u8>), String> {
+        self.readback_size([256, 128])
+    }
+
+    fn readback_size(&self, dimensions: [u32; 2]) -> Result<([u32; 2], Vec<u8>), String> {
+        if dimensions.contains(&0) || dimensions.iter().any(|v| *v > 4096)
+            || u64::from(dimensions[0]) * u64::from(dimensions[1]) > 4_194_304 {
+            return Err("GPU readback exceeds the 4096-pixel / 4-megapixel budget".into());
+        }
         if !matches!(
             self.configuration.format,
             wgpu::TextureFormat::Bgra8Unorm
@@ -322,8 +339,8 @@ impl Plot {
             ));
         }
         let size = wgpu::Extent3d {
-            width: 256,
-            height: 128,
+            width: dimensions[0],
+            height: dimensions[1],
             depth_or_array_layers: 1,
         };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -336,22 +353,23 @@ impl Plot {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
+        let row_bytes = (size.width * 4).div_ceil(256) * 256;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Jadix chart diagnostic pixels"),
-            size: 256 * 128 * 4,
+            size: u64::from(row_bytes) * u64::from(size.height),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        self.encode(&mut encoder, &texture.create_view(&Default::default()));
+        self.encode(&mut encoder, &texture.create_view(&Default::default()), [size.width, size.height])?;
         encoder.copy_texture_to_buffer(
             texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(256 * 4),
-                    rows_per_image: Some(128),
+                    bytes_per_row: Some(row_bytes),
+                    rows_per_image: Some(size.height),
                 },
             },
             size,
@@ -377,7 +395,8 @@ impl Plot {
             .slice(..)
             .get_mapped_range()
             .map_err(|error| error.to_string())?
-            .to_vec();
+            .chunks_exact(row_bytes as usize)
+            .flat_map(|row| row[..size.width as usize * 4].iter().copied()).collect::<Vec<_>>();
         buffer.unmap();
         if matches!(
             self.configuration.format,
@@ -387,7 +406,7 @@ impl Plot {
                 pixel.swap(0, 2);
             }
         }
-        Ok(([256, 128], pixels))
+        Ok((dimensions, pixels))
     }
 
     pub(super) fn diagnostics(&self) -> serde_json::Value {

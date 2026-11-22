@@ -59,14 +59,6 @@ public final class NativeEditingChecks extends Instrumentation {
         return null;
     }
 
-    private int rows(View view) {
-        int count = view instanceof android.widget.TextView && ((android.widget.TextView) view).getText().toString().startsWith("Row ") ? 1 : 0;
-        if (view instanceof ViewGroup) {
-            ViewGroup group = (ViewGroup) view;
-            for (int index = 0; index < group.getChildCount(); index++) count += rows(group.getChildAt(index));
-        }
-        return count;
-    }
 
     private boolean sameClip(ClipData left, ClipData right) {
         if (left == null || right == null) return left == right;
@@ -81,6 +73,19 @@ public final class NativeEditingChecks extends Instrumentation {
             if (!java.util.Objects.equals(originalIntent, restoredIntent)) return false;
         }
         return true;
+    }
+
+    private void restoreClipboard() {
+        if (originalClip != null) clipboard.setPrimaryClip(originalClip);
+        else if (android.os.Build.VERSION.SDK_INT >= 28) clipboard.clearPrimaryClip();
+        else clipboard.setPrimaryClip(ClipData.newPlainText("", ""));
+    }
+
+    private boolean clipboardRestored() {
+        if (originalClip != null) return sameClip(originalClip, clipboard.getPrimaryClip());
+        if (android.os.Build.VERSION.SDK_INT >= 28) return clipboard.getPrimaryClip() == null;
+        ClipData current = clipboard.getPrimaryClip();
+        return current != null && current.getItemCount() == 1 && "".contentEquals(current.getItemAt(0).getText());
     }
 
     private void shortcut(int key, boolean shift) {
@@ -219,7 +224,7 @@ public final class NativeEditingChecks extends Instrumentation {
             }
             require(ready[0], "Window not ready");
             ui(() -> {
-                require(rows(current.content) == expectedRows, "Retained native row count mismatch");
+                NativeChecks.checkRows(current.content, expectedRows);
                 current.getWindow().addFlags(WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
                 clipboard = (ClipboardManager) current.getSystemService(Context.CLIPBOARD_SERVICE);
                 originalClip = clipboard.getPrimaryClip();
@@ -229,9 +234,8 @@ public final class NativeEditingChecks extends Instrumentation {
             editor(current, "Multiline / 多行", "首行😀 العربية\n第二行中文");
             password(current);
             ui(() -> {
-                if (originalClip == null) clipboard.clearPrimaryClip(); else clipboard.setPrimaryClip(originalClip);
-                ClipData restored = clipboard.getPrimaryClip();
-                require(sameClip(originalClip, restored), "Clipboard content restore failed");
+                restoreClipboard();
+                require(clipboardRestored(), "Clipboard content restore failed");
                 clipboardCaptured = false;
             });
             android.graphics.Bitmap screenshot = getUiAutomation().takeScreenshot();
@@ -242,7 +246,9 @@ public final class NativeEditingChecks extends Instrumentation {
             result.putString("jadix_editing", new JSONObject().put("schema", 1).put("token", token).put("passed", true)
                 .put("retained_rows", expectedRows).put("key_events", keyEvents).put("editors", editors)
                 .put("password_checks", new JSONArray(new String[] {"unicode-paste", "copy-blocked", "cut-blocked", "public-state-isolation"}))
-                .put("clipboard_restored", true).put("event_authority", "Instrumentation-injected clipboard/undo shortcuts; programmatic InputConnection seed, selection, controlled reset and sibling perturbation; soft keyboard suppressed").toString());
+                .put("clipboard_restored", true)
+                .put("clipboard_restore", originalClip != null || android.os.Build.VERSION.SDK_INT >= 28 ? "exact" : "empty-fallback-api26")
+                .put("event_authority", "Instrumentation-injected clipboard/undo shortcuts; programmatic InputConnection seed, selection, controlled reset and sibling perturbation; soft keyboard suppressed").toString());
             result.putString("stream", "JADIX_NATIVE_EDITING_PASS");
             finish(Activity.RESULT_OK, result);
         } catch (Throwable error) {
@@ -252,7 +258,7 @@ public final class NativeEditingChecks extends Instrumentation {
             MainActivity current = activity;
             if (clipboardCaptured || current != null) {
                 runOnMainSync(() -> {
-                    if (clipboardCaptured) { if (originalClip == null) clipboard.clearPrimaryClip(); else clipboard.setPrimaryClip(originalClip); }
+                    if (clipboardCaptured) restoreClipboard();
                     if (current != null) current.finish();
                 });
             }

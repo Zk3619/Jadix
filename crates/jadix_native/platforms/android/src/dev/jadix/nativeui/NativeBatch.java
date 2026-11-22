@@ -23,6 +23,7 @@ final class NativeBatch {
         JSONArray order;
         JSONArray updates;
         boolean topology;
+        boolean labelsOnly;
         boolean focusChanged;
         String focus;
 
@@ -59,12 +60,14 @@ final class NativeBatch {
         result.revision = decimal(batch, "revision");
         if ((root != null && !root.equals(result.root)) || !revision.equals(result.previous)
                 || !revision.add(BigInteger.ONE).equals(result.revision)) throw new IllegalArgumentException("stale or foreign native batch");
+        JSONArray operations = batch.getJSONArray("operations");
+        if (operations.length() > 65536) throw new IllegalArgumentException("native batch operation budget exceeded");
+        if (prepareLabels(result, operations)) return result;
+        result.focusChanged = false; result.focus = null;
         result.nodes = new HashMap<>(nodes);
         result.children = new HashMap<>();
         for (String identifier : children.keySet()) result.children.put(identifier, new ArrayList<>(children.get(identifier)));
         HashSet<String> changed = new HashSet<>();
-        JSONArray operations = batch.getJSONArray("operations");
-        if (operations.length() > 65536) throw new IllegalArgumentException("native batch operation budget exceeded");
         for (int index = 0; index < operations.length(); index++) {
             JSONObject operation = operations.getJSONObject(index);
             String action = operation.getString("op");
@@ -143,9 +146,44 @@ final class NativeBatch {
         return result;
     }
 
+    private boolean prepareLabels(Prepared result, JSONArray operations) throws JSONException {
+        HashMap<String, JSONObject> updates = new HashMap<>();
+        for (int index = 0; index < operations.length(); index++) {
+            JSONObject operation = operations.getJSONObject(index);
+            String action = operation.getString("op");
+            String id = operation.isNull("id") ? null : operation.getString("id");
+            if ("focus".equals(action)) {
+                if (id != null && !nodes.containsKey(id)) throw new IllegalArgumentException("unknown native focus target");
+                result.focusChanged = true; result.focus = id; continue;
+            }
+            if (!"update".equals(action)) return false;
+            JSONObject previous = nodes.get(id);
+            JSONObject descriptor = operation.getJSONObject("descriptor");
+            if (previous == null || !("text".equals(previous.optString("kind")) || "button".equals(previous.optString("kind")))
+                    || !children.get(id).isEmpty()) return false;
+            // Only the label may differ. Layout, accessibility, styles and control
+            // state still use the full publication path when they change.
+            if (descriptor.length() != previous.length() - 2) return false;
+            java.util.Iterator<String> keys = descriptor.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                if ("id".equals(key) || "parent".equals(key) || !previous.has(key)) return false;
+                if (!"text".equals(key) && !previous.get(key).toString().equals(descriptor.get(key).toString())) return false;
+            }
+            descriptor.getString("text");
+            updates.put(id, new JSONObject(descriptor.toString()).put("id", id).put("parent", previous.get("parent")));
+        }
+        result.nodes = updates; result.children = children; result.updates = new JSONArray();
+        for (JSONObject node : updates.values()) result.updates.put(node);
+        result.labelsOnly = true;
+        return true;
+    }
+
     void commit(Prepared prepared) {
         if (!revision.equals(prepared.previous)) throw new IllegalStateException("native batch acknowledgement changed");
-        root = prepared.root; revision = prepared.revision; nodes = prepared.nodes; children = prepared.children;
+        root = prepared.root; revision = prepared.revision;
+        if (prepared.labelsOnly) nodes.putAll(prepared.nodes);
+        else { nodes = prepared.nodes; children = prepared.children; }
     }
 
     void clear() {

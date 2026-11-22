@@ -5,6 +5,8 @@ import { createHash, createPrivateKey, createPublicKey, sign } from 'node:crypto
 const sdk = new URL('../../../crates/jadix_shell/sdk/', import.meta.url);
 const require = createRequire(new URL('package.json', sdk));
 const esbuild = require('esbuild');
+const mobile = process.argv.includes('--mobile');
+const entry = mobile ? 'mobile' : 'panel';
 async function artifact(name, bytes) {
   const path = new URL(name, import.meta.url);
   if (process.argv.includes('--check')) {
@@ -13,7 +15,7 @@ async function artifact(name, bytes) {
 }
 const result = await esbuild.build({
   absWorkingDir: fileURLToPath(new URL('.', import.meta.url)),
-  entryPoints: ['panel.tsx'], bundle: true, write: false,
+  entryPoints: [`${entry}.tsx`], bundle: true, write: false,
   format: 'iife', globalName: 'NativePanel', platform: 'neutral', target: 'es2020',
   jsx: 'automatic', jsxImportSource: '@jadix/shell',
   plugins: [{ name: 'jadix-sdk', setup(build) {
@@ -23,14 +25,15 @@ const result = await esbuild.build({
   } }],
 });
 const source = result.outputFiles[0].contents;
-await artifact('panel.bundle.js', source);
+await artifact(`${entry}.bundle.js`, source);
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const report = { schema: 1, compiler: `esbuild@${esbuild.version}`, bundle_sha256: digest(source), sources: {} };
-for (const path of ['panel.tsx', '../../../crates/jadix_shell/sdk/src/index.mjs', '../../../crates/jadix_shell/sdk/src/jsx-runtime.mjs', '../../../crates/jadix_shell/sdk/src/generated.mjs']) {
+for (const path of [`${entry}.tsx`, '../../../crates/jadix_shell/sdk/src/index.mjs', '../../../crates/jadix_shell/sdk/src/jsx-runtime.mjs', '../../../crates/jadix_shell/sdk/src/generated.mjs']) {
   report.sources[path] = digest(await readFile(new URL(path, import.meta.url)));
 }
-await artifact('panel.bundle.json', JSON.stringify(report, null, 2) + '\n');
+await artifact(`${entry}.bundle.json`, JSON.stringify(report, null, 2) + '\n');
 console.log(JSON.stringify(report));
+if (mobile) process.exit(0);
 const privateKey = createPrivateKey({ key: Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), Buffer.alloc(32, 7)]), format: 'der', type: 'pkcs8' });
 const publicKey = createPublicKey(privateKey).export({ format: 'der', type: 'spki' }).subarray(-32).toString('hex');
 const brokenSource = "throw new Error('rejected development update');";

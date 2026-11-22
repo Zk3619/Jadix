@@ -1,6 +1,6 @@
 use jadix_components::{authoring::native::ElementProjection, prelude::*};
 use jadix_native::{
-    presentation::*, wire, BackendError, HeadlessRoot, ResourceKind, ResourceLimits,
+    BackendError, HeadlessRoot, ResourceKind, ResourceLimits, presentation::*, wire,
 };
 
 #[test]
@@ -100,18 +100,20 @@ fn disabled_switch_rejects_toggle_and_focus() {
         };
         assert_eq!(root.accept_event(&event), Err(BackendError::InvalidEvent));
     }
-    assert!(projection
-        .dispatch(
-            &mut element,
-            &PlatformEvent {
-                node: node.id,
-                payload: EventPayload::Toggle {
-                    checked: true,
-                    revision: 1
+    assert!(
+        projection
+            .dispatch(
+                &mut element,
+                &PlatformEvent {
+                    node: node.id,
+                    payload: EventPayload::Toggle {
+                        checked: true,
+                        revision: 1
+                    }
                 }
-            }
-        )
-        .is_err());
+            )
+            .is_err()
+    );
 }
 
 #[test]
@@ -146,6 +148,11 @@ fn switch_capability_and_label_budget_are_explicit() {
         accessible_expanded: None,
         accessible_description: None,
         accessible_name: None,
+        interaction: Default::default(),
+        keyboard: Default::default(),
+        navigation_keys: Vec::new(),
+        accessibility: Default::default(),
+        accessibility_relations: Default::default(),
         style: Default::default(),
     };
     let node = PresentationNode {
@@ -160,9 +167,11 @@ fn switch_capability_and_label_budget_are_explicit() {
     if let NodeContent::Switch { label, .. } = &mut descriptor.content {
         *label = "On".into();
     }
-    assert!(limited
-        .reconcile(&[PresentationNode { descriptor, ..node }])
-        .unwrap());
+    assert!(
+        limited
+            .reconcile(&[PresentationNode { descriptor, ..node }])
+            .unwrap()
+    );
 }
 
 #[test]
@@ -212,8 +221,10 @@ fn switch_schema_validates_controlled_values_and_versioned_toggles() {
         );
         assert!(!schema.events["toggle"].accepts(&event));
     }
-    assert!(!jadix_components::schema::portable_components()
-        .unwrap()
-        .iter()
-        .any(|schema| schema.name == "Switch"));
+    assert!(
+        !jadix_components::schema::portable_components()
+            .unwrap()
+            .iter()
+            .any(|schema| schema.name == "Switch")
+    );
 }

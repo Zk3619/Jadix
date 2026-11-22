@@ -18,6 +18,43 @@ def name_editor(node, value=None):
     return node.get("hint", node.get("text")) == "Name / 中文"
 
 
+def resumed_elsewhere(activities, package):
+    resumed = re.findall(r"^\s*(?:mResumedActivity:|topResumedActivity=|ResumedActivity:)\s*ActivityRecord\{[^\r\n]*?\bu\d+\s+([A-Za-z0-9_.]+)/", activities, re.MULTILINE)
+    return bool(resumed) and all(owner != package for owner in resumed)
+
+
+def saved_background_activity(activities, package):
+    if not resumed_elsewhere(activities, package):
+        return False
+    records = re.split(r"(?m)^\s*\* Hist\s+#\d+:\s*", activities)[1:]
+    targets = [record for record in records
+               if re.search(r"\bpackageName=" + re.escape(package) + r"\s", record)]
+    return bool(targets) and all(
+        re.search(r"\bstate=STOPPED\b", record)
+        and re.search(r"\b(?:mHaveState|haveState)=true\b", record)
+        and re.search(r"\b(?:mIcicle|icicle)=Bundle", record)
+        for record in targets)
+
+
+def wait_for_saved_background(run, adb, package, output):
+    deadline = time.monotonic() + 20
+    while True:
+        activities = run(adb + ["shell", "dumpsys", "activity", "activities"]).stdout
+        (output / "process-background-activities.txt").write_text(activities, encoding="utf8")
+        if saved_background_activity(activities, package):
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError("OS did not acknowledge a stopped activity with saved state before process termination")
+        time.sleep(0.25)
+
+
+def ime_visible(state):
+    shown = re.findall(r"\bmInputShown=(true|false)\b", state)
+    if shown:
+        return any(value == "true" for value in shown)
+    return re.search(r"\b(?:mIsInputViewShown|isInputViewShown)=true\b", state) is not None
+
+
 def instrumentation_passed(log, extended):
     receipts = re.findall(r"JADIX_NATIVE_CHECKS_PASS: ([^\r\n]*)", log)
     if len(receipts) != 1 or "JADIX_NATIVE_CHECKS_FAIL" in log:
@@ -30,7 +67,7 @@ def instrumentation_passed(log, extended):
         if name in fields:
             return False
         fields[name] = value
-    required = {"extensions": str(extended).lower(), "retained_editing_checked": "true",
+    required = {"extensions": str(extended).lower(), "autofill_transaction_probe": "true", "retained_editing_checked": "true",
                 "retained_editors": str(3 if extended else 1)}
     if extended:
         required.update(dialog_ime_checked="true", switch_checked="true")
@@ -82,7 +119,10 @@ def editing_receipt(log, token, rows):
         if type(value.get(name)) is not int or value[name] != expected:
             raise ValueError("editing schema or counts mismatch")
     authority = "Instrumentation-injected clipboard/undo shortcuts; programmatic InputConnection seed, selection, controlled reset and sibling perturbation; soft keyboard suppressed"
-    if value.get("passed") is not True or value.get("token") != token or value.get("clipboard_restored") is not True or value.get("event_authority") != authority:
+    if (value.get("passed") is not True or value.get("token") != token
+            or value.get("clipboard_restored") is not True
+            or value.get("clipboard_restore") not in {"exact", "empty-fallback-api26"}
+            or value.get("event_authority") != authority):
         raise ValueError("editing token, authority or clipboard restoration mismatch")
     editors = value.get("editors")
     checks = ["unicode-commit", "copy", "cut", "paste", "undo", "redo", "history-after-republish-reorder", "controlled-reset-clears-history"]
@@ -99,11 +139,33 @@ def editing_receipt(log, token, rows):
 PACKAGE = "dev.jadix.nativeui"
 
 
+def capability_receipt(log, token, api):
+    prefix = "INSTRUMENTATION_RESULT: jadix_capabilities="
+    lines = log.splitlines()
+    receipts = [line[len(prefix):] for line in lines if line.startswith(prefix)]
+    if (len(receipts) != 1 or lines.count("INSTRUMENTATION_RESULT: stream=JADIX_NATIVE_CAPABILITIES_PASS") != 1
+            or "JADIX_NATIVE_CAPABILITIES_FAIL" in log or lines.count("INSTRUMENTATION_CODE: -1") != 1):
+        raise ValueError("missing, repeated or failed capability receipt")
+    value = json.loads(receipts[0])
+    expected = ["shared-html/native-round-trip", "native-rich-edit/pasted-style", "selection/os-long-press-handle-copy-ancestor-handoff", "web/async-promise",
+                "web/rejection-navigation-disposal", "media/decode-ended-seek-rate-loop-pause-dispose",
+                "sound/bytes-decode-overlap-32-voices-stop-unload", "audio/preload-paused-rate-seek-loop-os-focus-dispose",
+                "touch/synthetic-motion-event-tilt", "notification/request-error-preserves-os-authorization", "environment/os-locale-contrast",
+                "auth/custom-tab-ephemeral-callback-lifecycle"]
+    authority = "Android instrumentation, shared Rust HTML policy, OS HTML importer, WebView JavaScript, MediaPlayer/PCM decoding and OS audio focus; programmatic actions, injected selection touch, OS Copy and internal readback"
+    if (not isinstance(value, dict) or type(value.get("schema")) is not int or value["schema"] != 1
+            or type(value.get("api")) is not int or value["api"] != api or value.get("passed") is not True
+            or value.get("token") != token or value.get("checks") != expected or value.get("authority") != authority):
+        raise ValueError("capability identity, authority or checks mismatch")
+    return value
+
+
 def artifact(apk, extended, rows):
     source = (apk.parent / "build.json").read_bytes()
     build = json.loads(source)
     data = apk.read_bytes()
     if (build.get("package_name") != PACKAGE or build.get("application") != "controls"
+            or build.get("min_sdk") != 26
             or build.get("extended") is not extended or type(build.get("retained_rows")) is not int
             or build["retained_rows"] != rows or build.get("apk_bytes") != len(data)
             or build.get("apk_sha256") != hashlib.sha256(data).hexdigest()):
@@ -191,7 +253,8 @@ def main():
     commands = []
 
     def run(command):
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf8", errors="replace", timeout=120)
+        timeout = 300 if "instrument" in command else 120
+        result = subprocess.run(command, capture_output=True, text=True, encoding="utf8", errors="replace", timeout=timeout)
         commands.append({"command": command, "exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
         (arguments.output / "commands.json").write_text(json.dumps(commands, indent=2) + "\n", encoding="utf8")
         result.check_returncode()
@@ -233,12 +296,27 @@ def main():
                     raise ValueError("editing screenshot is not PNG")
                 (arguments.output / "editing.png").write_bytes(editing_image)
             sdk = int(run(adb + ["shell", "getprop", "ro.build.version.sdk"]).stdout.strip())
+            capabilities = None
+            if arguments.extended:
+                capability_token = str(uuid.uuid4())
+                capability_run = run(adb + ["shell", "am", "instrument", "-r", "-w", "-e", "jadix.token", capability_token, "dev.jadix.nativeui/.NativeCapabilityChecks"])
+                capability_log = capability_run.stdout + capability_run.stderr
+                (arguments.output / "capability-instrumentation.log").write_text(capability_log, encoding="utf8")
+                capabilities = capability_receipt(capability_log, capability_token, sdk)
+                (arguments.output / "capabilities.json").write_text(json.dumps(capabilities, ensure_ascii=False, indent=2) + "\n", encoding="utf8")
             if arguments.extended:
                 screenshot = subprocess.run(adb + ["exec-out", "run-as", "dev.jadix.nativeui", "cat", "files/dialog-ime.png"], capture_output=True, check=True).stdout
                 (arguments.output / "native-android-dialog-ime.png").write_bytes(screenshot)
             identity = run(adb + ["shell", "getprop"]).stdout
             (arguments.output / "system-properties.log").write_text(identity, encoding="utf8")
             run(adb + ["shell", "am", "start", "-W", "-n", "dev.jadix.nativeui/.MainActivity"])
+            if ime_visible(run(adb + ["shell", "dumpsys", "input_method"]).stdout):
+                run(adb + ["shell", "input", "keyevent", "KEYCODE_BACK"])
+                deadline = time.monotonic() + 5
+                while ime_visible(run(adb + ["shell", "dumpsys", "input_method"]).stdout):
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("soft keyboard remained visible before the modal scenario")
+                    time.sleep(0.1)
             memory = run(adb + ["shell", "dumpsys", "meminfo", "dev.jadix.nativeui"]).stdout
             (arguments.output / "memory.log").write_text(memory, encoding="utf8")
             dump_tree(run, adb, arguments.output / "accessibility.xml")
@@ -246,7 +324,18 @@ def main():
             (arguments.output / "native-android.png").write_bytes(screenshot)
             if arguments.extended:
                 tree = ElementTree.parse(arguments.output / "accessibility.xml")
-                trigger = next(node for node in tree.iter("node") if node.get("text", "").lower() == "open editor")
+                nodes = list(tree.iter("node"))
+                if not any((node.get("text", "") or node.get("content-desc", "")).lower() == "open editor" for node in nodes):
+                    close_app = next((node for node in nodes if node.get("text") == "Close app"), None)
+                    system_error = any("has stopped" in node.get("text", "").lower() for node in nodes)
+                    if close_app is not None and system_error:
+                        left, top, right, bottom = map(int, re.findall(r"\d+", close_app.attrib["bounds"]))
+                        run(adb + ["shell", "input", "tap", str((left + right) // 2), str((top + bottom) // 2)])
+                        time.sleep(0.5)
+                        run(adb + ["shell", "am", "start", "-W", "-n", "dev.jadix.nativeui/.MainActivity"])
+                        dump_tree(run, adb, arguments.output / "accessibility.xml")
+                        tree = ElementTree.parse(arguments.output / "accessibility.xml")
+                trigger = next(node for node in tree.iter("node") if (node.get("text", "") or node.get("content-desc", "")).lower() == "open editor")
                 left, top, right, bottom = map(int, re.findall(r"\d+", trigger.attrib["bounds"]))
                 run(adb + ["shell", "input", "tap", str((left+right)//2), str((top+bottom)//2)])
                 dump_tree(run, adb, arguments.output / "dialog-accessibility.xml")
@@ -276,42 +365,78 @@ def main():
 
                 package = "dev.jadix.nativeui"
                 nodes = tree("process-initial.xml")
-                counter = next(node for node in nodes if node.get("text", "").startswith("Count: "))
-                expected_count = int(re.match(r"Count: (\d+) /", counter.attrib["text"]).group(1)) + 1
-                tap(next(node for node in nodes if node.get("class") == "android.widget.Button" and node.get("text", "").lower() == "continue"))
-                tap(next(node for node in nodes if name_editor(node)))
                 value = f"process_recovery_{int(time.time())}"
+                if arguments.extended:
+                    checkbox = next(node for node in nodes if node.get("class") == "android.widget.CheckBox")
+                    if checkbox.get("checked") != "true":
+                        tap(checkbox)
+                    editor = next(node for node in nodes if node.get("class") == "android.widget.EditText" and node.get("password") != "true")
+                    tap(editor)
+                    expected_count = None
+                    expected_summary = f"Checked: true / Note: {value}"
+                else:
+                    counter = next(node for node in nodes if node.get("text", "").startswith("Count: "))
+                    expected_count = int(re.match(r"Count: (\d+) /", counter.attrib["text"]).group(1)) + 1
+                    tap(next(node for node in nodes if node.get("class") == "android.widget.Button" and node.get("text", "").lower() == "continue"))
+                    tap(next(node for node in nodes if name_editor(node)))
+                    expected_summary = f"Count: {expected_count} / Name: {value}"
                 observe("shell", "input", "text", value)
                 nodes = tree("process-before.xml")
-                expected_summary = f"Count: {expected_count} / Name: {value}"
                 assert any(node.get("text") == expected_summary for node in nodes), "system input did not reach Rust business summary"
                 before_pid = observe("shell", "pidof", package).strip()
                 assert before_pid.isdigit(), before_pid
                 observe("shell", "input", "keyevent", "KEYCODE_HOME")
+                save_deadline = time.monotonic() + 10
+                saved_state = None
+                while time.monotonic() < save_deadline:
+                    names = observe("shell", "run-as", package, "ls", "files").splitlines()
+                    state_files = [name for name in names if name.startswith("native-state-") and name.endswith(".json")]
+                    for name in state_files:
+                        contents = observe("exec-out", "run-as", package, "cat", "files/" + name)
+                        if value in contents:
+                            saved_state = name
+                            break
+                    if saved_state is not None:
+                        break
+                    time.sleep(0.25)
+                assert saved_state is not None, "background transition did not persist the latest business state"
+                wait_for_saved_background(run, adb, package, arguments.output)
+                observe("shell", "am", "kill", package)
+                result = subprocess.run(adb + ["shell", "pidof", package], capture_output=True, text=True, encoding="utf8", check=False)
+                observations.append({"command": ["shell", "pidof", package], "exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
+                if result.stdout.strip():
+                    activities = observe("shell", "dumpsys", "activity", "activities")
+                    if not resumed_elsewhere(activities, package):
+                        raise RuntimeError("Home did not move the test activity to the background")
+                    observe("shell", "run-as", package, "kill", "-9", before_pid)
                 deadline = time.monotonic() + 10
                 while True:
-                    observe("shell", "am", "kill", package)
                     result = subprocess.run(adb + ["shell", "pidof", package], capture_output=True, text=True, encoding="utf8", check=False)
                     observations.append({"command": ["shell", "pidof", package], "exit_code": result.returncode, "stdout": result.stdout, "stderr": result.stderr})
                     if result.returncode == 1 and not result.stdout.strip():
                         break
                     if time.monotonic() >= deadline:
-                        raise RuntimeError("background process was not killed; refusing to substitute force-stop or relaunch a live process")
+                        raise RuntimeError("background process survived the verified termination request")
                     time.sleep(0.1)
                 observe("shell", "am", "start", "-W", "-n", package + "/.MainActivity")
                 after_pid = observe("shell", "pidof", package).strip()
                 assert after_pid.isdigit() and after_pid != before_pid, (before_pid, after_pid)
                 nodes = tree("process-after.xml")
                 assert any(node.get("text") == expected_summary for node in nodes), "new process did not restore Rust business state"
-                assert any(name_editor(node, value) for node in nodes), "new process did not restore native editor value"
+                if arguments.extended:
+                    assert any(node.get("class") == "android.widget.CheckBox" and node.get("checked") == "true" for node in nodes), "new process did not restore native checkbox state"
+                    assert any(node.get("class") == "android.widget.EditText" and node.get("text") == value for node in nodes), "new process did not restore native editor value"
+                else:
+                    assert any(name_editor(node, value) for node in nodes), "new process did not restore native editor value"
                 recovery = {"passed": True, "before_pid": before_pid, "after_pid": after_pid, "counter": expected_count,
-                            "value": value, "termination": "am kill after Home; old process absence verified before restart",
+                            "value": value, "termination": "am kill after Home, then run-as SIGKILL if the OS retained the background process; absence verified before restart",
                             "limits": ["One owned AVD and bounded form state; this is not power-loss, force-stop, physical-device or long-term document persistence coverage."]}
                 (arguments.output / "process-recovery.json").write_text(json.dumps(recovery, indent=2) + "\n", encoding="utf8")
             report.update({"passed": True, "serial": arguments.serial, "extended": arguments.extended, "sdk": sdk, "dialog_ime_checked": arguments.extended,
                       "switch_checked": arguments.extended,
                       "keyboard_navigation": keyboard,
                       "native_editing": editing,
+                      "capabilities": capabilities,
                       "retained_editing_checked": True, "retained_editors": 3 if arguments.extended else 1,
                       "process_recovery": recovery,
                       "retained_rows": rows,

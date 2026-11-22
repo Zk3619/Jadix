@@ -198,7 +198,7 @@ fn rgba(color: [u8; 4]) -> String {
     )
 }
 
-fn style(element: &HtmlElement, descriptor: &NodeDescriptor) -> Result<(), String> {
+fn style(element: &HtmlElement, descriptor: &NodeDescriptor, has_children: bool) -> Result<(), String> {
     let style = element.style();
     let node = &descriptor.style;
     for (name, value) in [
@@ -241,6 +241,9 @@ fn style(element: &HtmlElement, descriptor: &NodeDescriptor) -> Result<(), Strin
         Some(AccessibleRole::TabPanel) => Some("tabpanel"),
         Some(AccessibleRole::Tree) => Some("tree"),
         Some(AccessibleRole::TreeItem) => Some("treeitem"),
+        Some(AccessibleRole::ListBox) => Some("listbox"),
+        Some(AccessibleRole::ListBoxOption { .. }) => Some("option"),
+        Some(AccessibleRole::Heading) => Some("heading"),
         Some(
             AccessibleRole::Grid { .. }
             | AccessibleRole::GridCell { .. }
@@ -289,13 +292,15 @@ fn style(element: &HtmlElement, descriptor: &NodeDescriptor) -> Result<(), Strin
             }
         }
         NodeContent::Button { label, enabled } => {
-            if element.text_content().as_deref() != Some(label) {
+            // Keep authored content attached when an unchanged button is republished.
+            if (!has_children || element.child_element_count() == 0)
+                && element.text_content().as_deref() != Some(label) {
                 element.set_text_content(Some(label));
             }
             let button = element.unchecked_ref::<web_sys::HtmlButtonElement>();
             button.set_disabled(!enabled);
             button.set_type("button");
-            if let Some(AccessibleRole::RadioItem { tab_stop }) = descriptor.accessible_role {
+            if let Some(AccessibleRole::RadioItem { tab_stop } | AccessibleRole::ListBoxOption { tab_stop }) = descriptor.accessible_role {
                 element.set_tab_index(if tab_stop { 0 } else { -1 });
             } else {
                 element.set_tab_index(0);
@@ -1035,7 +1040,7 @@ impl DomHost {
             {
                 view.revision.set(view.revision.get().max(revision));
             }
-            style(&view.element, &node.descriptor)?;
+            style(&view.element, &node.descriptor, !node.children.is_empty())?;
             let frame = node.descriptor.frame;
             let is_portal = matches!(
                 node.descriptor.content,
@@ -1141,7 +1146,7 @@ impl PlatformHost for DomHost {
     ) -> Result<MeasureResult, LayoutError> {
         let result = (|| -> Result<[f64; 2], String> {
             let element = create(&self.document, &descriptor.content)?;
-            style(&element, descriptor)?;
+            style(&element, descriptor, false)?;
             let style = element.style();
             style.set_property("position", "fixed").map_err(error)?;
             style.set_property("visibility", "hidden").map_err(error)?;

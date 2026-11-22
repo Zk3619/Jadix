@@ -1,8 +1,92 @@
 use super::*;
 
+#[cfg(test)]
+#[test]
+fn controlled_popover_can_decline_escape_and_accept_the_next_request() {
+    use jadix_core::presentation::{NodeContent, PlatformEvent, RootId};
+    use std::{cell::RefCell, rc::Rc};
+
+    let requests = Rc::new(RefCell::new(Vec::new()));
+    let captured = Rc::clone(&requests);
+    let (_owner, (mut element, open)) = create_root(|| {
+        let open = create_signal(false);
+        let element = ui! {
+            <Popover id="controlled" controlledOpen={open}
+                onOpenChange={move |next, reason| {
+                    captured.borrow_mut().push((next, reason));
+                    if reason != PopoverOpenChangeReason::Cancel {
+                        open.set(next);
+                    }
+                }}>
+                <PopoverTrigger><Button>"Open"</Button></PopoverTrigger>
+                <PopoverContent><PopoverTitle>"Content"</PopoverTitle></PopoverContent>
+            </Popover>
+        };
+        (element, open)
+    });
+
+    let projection = ElementProjection::new(RootId::new());
+    let snapshot = projection.snapshot(&mut element).unwrap();
+    projection
+        .dispatch(
+            &mut element,
+            &PlatformEvent {
+                node: snapshot.children[0].id,
+                payload: EventPayload::Activate,
+            },
+        )
+        .unwrap();
+    assert!(open.peek());
+
+    let popover = &projection.snapshot(&mut element).unwrap().children[1];
+    let NodeContent::Popover { revision, .. } = popover.descriptor.content else {
+        panic!("expected projected Popover");
+    };
+    let cancel = PlatformEvent {
+        node: popover.id,
+        payload: EventPayload::Dismiss {
+            backdrop: false,
+            revision: revision + 1,
+        },
+    };
+    projection.dispatch(&mut element, &cancel).unwrap();
+    assert!(open.peek());
+    assert!(projection.dispatch(&mut element, &cancel).is_err());
+    projection
+        .dispatch(
+            &mut element,
+            &PlatformEvent {
+                node: popover.id,
+                payload: EventPayload::Dismiss {
+                    backdrop: true,
+                    revision: revision + 2,
+                },
+            },
+        )
+        .unwrap();
+    assert!(!open.peek());
+    open.set(true);
+    assert!(matches!(
+        projection.snapshot(&mut element).unwrap().children[1]
+            .descriptor
+            .content,
+        NodeContent::Popover { open: true, .. }
+    ));
+    assert_eq!(
+        *requests.borrow(),
+        [
+            (true, PopoverOpenChangeReason::TriggerPress),
+            (false, PopoverOpenChangeReason::Cancel),
+            (false, PopoverOpenChangeReason::PressOutside),
+        ]
+    );
+}
+
 pub fn page(count: Signal<usize>, value: Signal<String>) -> Element {
+    let profile_open = jadix_core::reactivity::create_signal(false);
     let main = ui! {
-        <Popover id="Profile">
+        <Popover id="Profile" controlledOpen={profile_open}
+            onOpenChange={move |next, _reason| profile_open.set(next)}>
             <PopoverTrigger id="profile-trigger"><Button id="profile-button" h={44.0}>"Edit profile"</Button></PopoverTrigger>
             <PopoverContent side="bottom" align="start" width={280.0}>
                 <PopoverHeader><PopoverTitle>"Profile details"</PopoverTitle><PopoverDescription>"Native 中文 😀"</PopoverDescription></PopoverHeader>

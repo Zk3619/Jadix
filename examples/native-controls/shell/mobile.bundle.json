@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "compiler": "esbuild@0.28.2",
+  "bundle_sha256": "87900be3bdc37f937e827c2163d88ea3cee72effbbe66c57ff823f0a26bbdf10",
+  "sources": {
+    "mobile.tsx": "0ebd711c06419c2ade0f6775c21967dc231220b7f3e329acaffb618137c2bddd",
+    "../../../crates/jadix_shell/sdk/src/index.mjs": "986c746416c07f6c4b0396a54a8175f701c454b7ff59b83315c1e06511e3c7ae",
+    "../../../crates/jadix_shell/sdk/src/jsx-runtime.mjs": "da3d416ee2f416e2e7ef9a0804de9378f422caf365072e4830db4a41ebd1435d",
+    "../../../crates/jadix_shell/sdk/src/generated.mjs": "74e7ba389f6985a1731e0b0fd9e39e29ed221d90b397506bb6eb6bc457f47bb1"
+  }
+}

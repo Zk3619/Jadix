@@ -66,6 +66,17 @@ public final class NativeBatchHarness {
         NativeBatch.Prepared replacement = target.prepare(batch("replacement", 0, create("replacement-node", null, 0, "box")));
         check(replacement.nodes.size() == 1, "clear retained old root nodes");
         target.commit(replacement);
+        target.clear();
+        JSONObject[] rows = new JSONObject[4096];
+        for (int index = 0; index < rows.length; index++) rows[index] = create("row" + index, null, index, "text");
+        target.commit(target.prepare(batch("large", 0, rows)));
+        NativeBatch.Prepared label = target.prepare(batch("large", 1, new JSONObject().put("op", "update").put("id", "row2048")
+            .put("descriptor", descriptor("text", "changed 😀", 0))));
+        check(label.labelsOnly && label.nodes.size() == 1 && label.order == null, "label transaction copied the full tree");
+        check(label.updates.length() == 1, "label transaction published unrelated rows");
+        target.commit(label);
+        NativeBatch.Prepared afterLabel = target.prepare(batch("large", 2, new JSONObject().put("op", "move").put("id", "row2048").put("parent", JSONObject.NULL).put("index", 0)));
+        check("changed 😀".equals(afterLabel.order.getJSONObject(0).getString("text")), "sparse label lost during topology change");
         System.out.println(new JSONObject().put("checks", checks).put("accepted", true).put("environment", "JVM with pinned JSON-java; Android runtime remains separate"));
     }
 }

@@ -43,6 +43,10 @@ fn node(id: NodeId, content: NodeContent, width: f32, height: f32) -> Presentati
             accessible_expanded: None,
             accessible_description: None,
             accessible_name: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             style: style::NodeStyle {
                 width: Some(width),

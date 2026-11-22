@@ -5,6 +5,7 @@ import io
 import json
 from pathlib import Path
 import plistlib
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,10 @@ root = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("native_ios_build", root / "examples/native-controls/build-ios.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
+sys.path.insert(0, str(root / "scripts/acceptance"))
+check_spec = importlib.util.spec_from_file_location("native_ios_check", root / "scripts/acceptance/native-ios-check.py")
+ios_check = importlib.util.module_from_spec(check_spec)
+check_spec.loader.exec_module(ios_check)
 
 
 class NativeIOSBuildTests(unittest.TestCase):
@@ -60,6 +65,51 @@ class NativeIOSBuildTests(unittest.TestCase):
                 self.assertEqual("JADIX_NOTES" in command, notes)
                 self.assertEqual(str(root / "examples/native-controls/ios/NativeNotes.swift") in command, notes)
                 self.assertIn("external-target/lib.a", [item.replace(chr(92), "/") for item in command])
+
+    def test_ios_targets_match_the_supported_deployment_baseline(self):
+        self.assertEqual(builder.TARGETS["aarch64-apple-ios-sim"][1], "arm64-apple-ios15.0-simulator")
+        self.assertEqual(builder.TARGETS["aarch64-apple-ios"][1], "arm64-apple-ios15.0")
+        with (root / "examples/native-controls/ios/Info.plist").open("rb") as stream:
+            self.assertEqual(plistlib.load(stream)["MinimumOSVersion"], "15.0")
+
+    def test_simulator_environment_forwards_only_declared_safe_variables(self):
+        forwarded = ios_check.simulator_child_environment(
+            ["APP_MODE", "APP_MODE", "HOME", "TMPDIR", "PATH", "CFFIXED_USER_HOME", "DYLD_INSERT_LIBRARIES", "SIMULATOR_DEVICE_NAME", "MISSING", "JADIX_NATIVE_CHECK_TOKEN"],
+            {"APP_MODE": "value with spaces=kept", "HOME": "/host", "DYLD_INSERT_LIBRARIES": "/host/inject", "SIMULATOR_DEVICE_NAME": "Host Simulator"},
+            "probe-token",
+        )
+        self.assertEqual(forwarded, {
+            "SIMCTL_CHILD_JADIX_NATIVE_CHECK_TOKEN": "probe-token",
+            "SIMCTL_CHILD_APP_MODE": "value with spaces=kept",
+        })
+        with self.assertRaisesRegex(ValueError, "invalid declared"):
+            ios_check.simulator_child_environment(["APP-MODE"], {"APP-MODE": "value"}, "probe-token")
+        command_environment = ios_check.simctl_environment(
+            ["APP_MODE"],
+            {"PATH": "host-path", "SIMCTL_CHILD_UNDECLARED": "inherited", "APP_MODE": "declared"},
+            "probe-token",
+        )
+        self.assertEqual(command_environment, {
+            "PATH": "host-path",
+            "APP_MODE": "declared",
+            "SIMCTL_CHILD_JADIX_NATIVE_CHECK_TOKEN": "probe-token",
+            "SIMCTL_CHILD_APP_MODE": "declared",
+        })
+
+    def test_simulator_selection_skips_ios_14_runtime(self):
+        inventory = {
+            "runtimes": [
+                {"identifier": "com.apple.CoreSimulator.SimRuntime.iOS-14-5", "version": "14.5", "isAvailable": True},
+                {"identifier": "com.apple.CoreSimulator.SimRuntime.iOS-15-0", "version": "15.0", "isAvailable": True},
+            ],
+            "devicetypes": [
+                {"identifier": "com.apple.CoreSimulator.SimDeviceType.iPhone-13", "minRuntimeVersionString": "15.0", "maxRuntimeVersionString": "99.0"},
+            ],
+        }
+        self.assertEqual(ios_check.simulator_pair(inventory), (
+            "com.apple.CoreSimulator.SimDeviceType.iPhone-13",
+            "com.apple.CoreSimulator.SimRuntime.iOS-15-0",
+        ))
 
     def test_checks_are_opt_in_and_device_checks_fail_before_commands(self):
         for enabled in [False, True]:

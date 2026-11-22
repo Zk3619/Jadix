@@ -4,13 +4,14 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::layout::{MeasureMode, MeasureRequest};
 use crate::presentation::{
-    AccessibleRole, CommitBatch, EventPayload, NodeContent, NodeDescriptor, NodeId, Operation,
-    PlatformEvent, PresentationNode, RootId,
+    AccessibleRole, CommitBatch, EventPayload, ImageLoadEvent, NodeContent, NodeDescriptor, NodeId,
+    Operation, PlatformEvent, PopoverPosition, PresentationNode, RootId,
 };
 use crate::{BackendError, HeadlessRoot};
 
 pub fn descriptor(descriptor: &NodeDescriptor) -> Value {
     let content = match &descriptor.content {
+        NodeContent::Hosted { specification } => json!({"kind":"hosted", "specification":serde_json::from_str::<Value>(specification).expect("validated hosted content")}),
         NodeContent::Select {
             options,
             value,
@@ -88,23 +89,17 @@ pub fn descriptor(descriptor: &NodeDescriptor) -> Value {
     result["frame"] = json!([frame.x, frame.y, frame.width, frame.height]);
     result["style"] = serde_json::to_value(&descriptor.style).expect("validated node style");
     result["name"] = json!(descriptor.accessible_name);
+    result["interaction"] = json!(descriptor.interaction);
+    result["keyboard"] = json!(descriptor.keyboard);
+    result["accessibility"] = json!(descriptor.accessibility);
+    result["navigationKeys"] = json!(descriptor.navigation_keys);
     result["description"] = json!(descriptor.accessible_description);
-    result["role"] = json!(match descriptor.accessible_role {
-        Some(AccessibleRole::RadioGroup) => Some("radiogroup"),
-        Some(AccessibleRole::RadioItem { .. }) => Some("radio"),
-        Some(AccessibleRole::TabList) => Some("tablist"),
-        Some(AccessibleRole::TabItem) => Some("tab"),
-        Some(AccessibleRole::TabPanel) => Some("tabpanel"),
-        Some(AccessibleRole::Tree) => Some("tree"),
-        Some(AccessibleRole::TreeItem) => Some("treeitem"),
-        Some(AccessibleRole::Grid { .. }) => Some("grid"),
-        Some(AccessibleRole::GridCell { .. }) => Some("gridcell"),
-        Some(AccessibleRole::GridColumnHeader { .. }) => Some("columnheader"),
-        None => None,
-    });
+    result["role"] = json!(descriptor.accessible_role.map(AccessibleRole::aria_role));
+    if descriptor.accessible_role.is_none() { result["role"] = json!(descriptor.accessibility.role); }
     result["selected"] = json!(descriptor.accessible_selected);
     result["tabStop"] = match descriptor.accessible_role {
-        Some(AccessibleRole::RadioItem { tab_stop }) => json!(tab_stop),
+        Some(AccessibleRole::RadioItem { tab_stop } | AccessibleRole::ListBoxOption { tab_stop }) => json!(tab_stop),
+        _ if descriptor.keyboard.focusable => json!(true),
         _ => serde_json::Value::Null,
     };
     result["grid"] = match descriptor.accessible_role {
@@ -112,11 +107,18 @@ pub fn descriptor(descriptor: &NodeDescriptor) -> Value {
         _ => serde_json::Value::Null,
     };
     result["cell"] = match descriptor.accessible_role {
-        Some(AccessibleRole::GridCell { row, column }) => json!({"row": row, "column": column}),
+        Some(AccessibleRole::GridCell {
+            row,
+            column,
+            row_span,
+            column_span,
+        }) => json!({"row": row, "column": column, "rowSpan": row_span, "columnSpan": column_span}),
         _ => serde_json::Value::Null,
     };
     result["columnHeader"] = match descriptor.accessible_role {
-        Some(AccessibleRole::GridColumnHeader { column }) => json!({"column": column}),
+        Some(AccessibleRole::GridColumnHeader { column, column_span }) => {
+            json!({"column": column, "columnSpan": column_span})
+        }
         _ => serde_json::Value::Null,
     };
     result["expanded"] = json!(descriptor.accessible_expanded);
@@ -137,7 +139,7 @@ pub fn measurement(request: MeasureRequest, node: &NodeDescriptor) -> String {
             MeasureMode::MaxContent => "max",
         }
     }
-    let mut result = json!({"node": descriptor(node), "maxWidth": request.key.max_width, "maxHeight": request.key.max_height,
+    let mut result = json!({"id": request.key.node.token(), "node": descriptor(node), "maxWidth": request.key.max_width, "maxHeight": request.key.max_height,
         "widthMode": mode(request.width_mode), "heightMode": mode(request.height_mode)});
     let wrapping_text = match &node.content {
         NodeContent::Text(text)
@@ -198,7 +200,28 @@ pub struct WireEvent {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum WirePayload {
+    Interaction { event: crate::presentation::interaction::InteractionEvent },
+    Key { event: crate::presentation::keyboard::KeyEvent },
+    Shortcut { id: String },
+    AccessibilityAction { id: String, value: Option<f64> },
+    Hosted { event: String, data: serde_json::Value },
+    Navigate { key: crate::presentation::NavigationKey, shift: bool, control: bool },
     Activate,
+    Hover { inside: bool },
+    PointerMove { x: f64, y: f64 },
+    ImageLoadStart,
+    ImageProgress {
+        loaded: u64,
+        total: u64,
+    },
+    ImageLoad {
+        width: u32,
+        height: u32,
+    },
+    ImageError {
+        message: String,
+    },
+    ImageLoadEnd,
     Submit {
         revision: String,
     },
@@ -209,6 +232,9 @@ pub enum WirePayload {
         backdrop: bool,
         revision: String,
     },
+    PopoverCancel { backdrop: bool },
+    PopoverLifecycle { open: bool },
+    PopoverPosition { position: Option<PopoverPosition> },
     Toggle {
         checked: bool,
         revision: String,
@@ -223,6 +249,8 @@ pub enum WirePayload {
     Scroll {
         x: f64,
         y: f64,
+        #[serde(default)]
+        viewport: Option<[f64; 2]>,
     },
     Wheel {
         #[serde(rename = "deltaX")]
@@ -230,6 +258,10 @@ pub enum WirePayload {
         #[serde(rename = "deltaY")]
         delta_y: f64,
     },
+    #[serde(rename = "scrollActivity")]
+    ScrollActivity { activity: crate::presentation::scroll::ScrollActivity },
+    #[serde(rename = "scrollZoom")]
+    ScrollZoom { scale: f64, x: f64, y: f64, width: f64, height: f64 },
     Edit {
         value: String,
         revision: String,
@@ -250,6 +282,25 @@ impl WireEvent {
             .filter(|node| model.node(*node).is_some())
             .ok_or(BackendError::InvalidEvent)?;
         let payload = match self.payload {
+            WirePayload::Interaction { event } => EventPayload::Interaction(event),
+            WirePayload::Key { event } => EventPayload::Key(event),
+            WirePayload::Shortcut { id } => EventPayload::Shortcut { id },
+            WirePayload::AccessibilityAction { id, value } => EventPayload::AccessibilityAction { id, value },
+            WirePayload::Hover { inside } => EventPayload::Hover { inside },
+            WirePayload::PointerMove { x, y } => EventPayload::PointerMove { x, y },
+            WirePayload::Navigate { key, shift, control } => EventPayload::Navigate { key, shift, control },
+            WirePayload::Hosted { event, data } => EventPayload::Hosted { event, data },
+            WirePayload::ImageLoadStart => EventPayload::ImageLoad(ImageLoadEvent::Started),
+            WirePayload::ImageProgress { loaded, total } => {
+                EventPayload::ImageLoad(ImageLoadEvent::Progress { loaded, total })
+            }
+            WirePayload::ImageLoad { width, height } => {
+                EventPayload::ImageLoad(ImageLoadEvent::Loaded { width, height })
+            }
+            WirePayload::ImageError { message } => {
+                EventPayload::ImageLoad(ImageLoadEvent::Failed { message })
+            }
+            WirePayload::ImageLoadEnd => EventPayload::ImageLoad(ImageLoadEvent::Ended),
             WirePayload::Submit { revision } => {
                 let parsed = revision
                     .parse::<u64>()
@@ -273,6 +324,9 @@ impl WireEvent {
             }
             WirePayload::Activate => EventPayload::Activate,
             WirePayload::Expansion { expanded } => EventPayload::Expansion { expanded },
+            WirePayload::PopoverCancel { backdrop } => EventPayload::PopoverCancel { backdrop },
+            WirePayload::PopoverLifecycle { open } => EventPayload::PopoverLifecycle { open },
+            WirePayload::PopoverPosition { position } => EventPayload::PopoverPosition { position },
             WirePayload::Dismiss { backdrop, revision } => {
                 let parsed = revision
                     .parse::<u64>()
@@ -300,8 +354,13 @@ impl WireEvent {
             WirePayload::Focus => EventPayload::Focus,
             WirePayload::FocusVisible => EventPayload::FocusVisible,
             WirePayload::Blur => EventPayload::Blur,
-            WirePayload::Scroll { x, y } => EventPayload::Scroll { x, y },
+            WirePayload::Scroll { x, y, viewport } => match viewport {
+                Some([width, height]) => EventPayload::ScrollViewport { x, y, width, height },
+                None => EventPayload::Scroll { x, y },
+            },
             WirePayload::Wheel { delta_x, delta_y } => EventPayload::Wheel { delta_x, delta_y },
+            WirePayload::ScrollActivity { activity } => EventPayload::ScrollActivity(activity),
+            WirePayload::ScrollZoom { scale, x, y, width, height } => EventPayload::ScrollZoom { scale, x, y, width, height },
             WirePayload::Edit {
                 value,
                 revision,

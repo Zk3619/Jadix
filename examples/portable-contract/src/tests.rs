@@ -332,17 +332,47 @@ fn extended_rsx_controls_preserve_drafts_and_controlled_state() {
 
 #[test]
 fn embedded_image_rsx_keeps_identity_and_alt_text() {
+    use jadix_components::presentation::ImageLoadEvent;
+
+    let position = ImagePosition::parse("right 8px top 25%").unwrap();
+    assert_eq!(position, ImagePosition::new([1.0, 0.25], [-8.0, 0.0]));
+    let events = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let received = events.clone();
     let (owner, mut element) = create_root(|| {
-        ui! { <Image id="pixel" src={include_str!("../../native-controls/assets/pixel.txt").trim().to_string()} alt="Native image" /> }
+        ui! {
+            <Image id="pixel"
+                src={include_str!("../../native-controls/assets/pixel.txt").trim().to_string()}
+                alt="Native image" objectFit={ImageFit::Cover} objectPosition={position}
+                placeholder="asset:/images/preview.png" fadeDuration={0}
+                onLoadEvent={move |event: &ImageLoadEvent| received.borrow_mut().push(event.clone())} />
+        }
     });
     let projection = ElementProjection::new(RootId::new());
     let first = projection.snapshot(&mut element).unwrap();
     assert_eq!(first.descriptor.content.image_dimensions(), Some([1, 1]));
+    assert_eq!(first.descriptor.style.image_fit, Some(ImageFit::Cover));
+    assert_eq!(first.descriptor.style.image_fade_ms, Some(0));
+    assert_eq!(
+        first.descriptor.style.image_placeholder.as_deref(),
+        Some("asset:/images/preview.png")
+    );
+    assert_eq!(first.descriptor.style.image_position, Some(position));
     assert!(
         matches!(first.descriptor.content, NodeContent::Image { ref alt, .. } if alt == "Native image")
     );
     let second = projection.snapshot(&mut element).unwrap();
     assert_eq!(first.id, second.id);
+    let result = ImageLoadEvent::Loaded { width: 1, height: 1 };
+    projection
+        .dispatch(
+            &mut element,
+            &PlatformEvent {
+                node: second.id,
+                payload: EventPayload::ImageLoad(result.clone()),
+            },
+        )
+        .unwrap();
+    assert_eq!(*events.borrow(), vec![result]);
     projection.dispose();
     drop(owner);
 }

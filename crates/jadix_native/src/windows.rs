@@ -20,10 +20,13 @@ use crate::host::{ApplyReceipt, PlatformHost};
 use crate::layout::{LayoutError, MeasureRequest};
 use crate::presentation::capabilities::{BackendCapabilities, NodeKind};
 use crate::presentation::*;
+use crate::presentation::style::{ImageFit, ImagePosition};
 
+const REACTIVE_TIMER: usize = 0x4a4458;
 const MAX_EVENTS: usize = 1024;
 const MAX_TEXT: usize = 1024 * 1024;
 const MAX_EVENT_BYTES: usize = 2 * 1024 * 1024;
+const INVALID_NATIVE_UTF16: &str = "native text contains invalid UTF-16";
 
 mod accessibility;
 mod drag;
@@ -32,6 +35,25 @@ pub use fonts::{FontId, FontRegistration};
 #[cfg(feature = "windows-gpu")]
 mod gpu;
 mod image;
+mod clipboard;
+mod files;
+mod keyboard;
+mod services;
+mod updater;
+pub use updater::run_update_helper;
+mod share;
+mod deep_links;
+mod activation;
+mod notifications;
+mod audio;
+mod speech;
+mod badge;
+mod tray;
+mod web;
+mod hosted;
+#[path = "windows/windows.rs"]
+mod window_manager;
+pub use window_manager::WindowApplication;
 mod overlay;
 mod paint;
 
@@ -41,6 +63,8 @@ struct NativeImage {
     bitmap: Option<image::Bitmap>,
     alt: String,
     failed: bool,
+    fit: ImageFit,
+    position: ImagePosition,
 }
 
 struct DpiScope(DPI_AWARENESS_CONTEXT);
@@ -63,6 +87,14 @@ impl Drop for DpiScope {
 
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
+}
+
+// Shell and WinRT media APIs consume ordinary DOS/UNC paths, including paths
+// returned by Rust's canonicalize with an extended-length prefix.
+fn media_path(path: &std::path::Path) -> Result<String, String> {
+    let path = path.to_str().ok_or("media path is not Unicode")?;
+    Ok(if let Some(rest) = path.strip_prefix(r"\\?\UNC\") { format!(r"\\{rest}") }
+        else { path.strip_prefix(r"\\?\").unwrap_or(path).to_owned() })
 }
 
 fn native_error(operation: &str) -> String {
@@ -111,6 +143,10 @@ impl Drop for Font {
 }
 
 enum RawEvent {
+    ImageLoad { control: NodeId, generation: u64, event: ImageLoadEvent },
+    Hosted { control: NodeId, event: String, data: serde_json::Value },
+    Key { control: NodeId, event: crate::presentation::keyboard::KeyEvent },
+    Shortcut { control: NodeId, id: String },
     Tree {
         control: NodeId,
         action: TreeAction,
@@ -192,6 +228,7 @@ struct ScrollState {
     offset: [i32; 2],
     maximum: [i32; 2],
     page: [i32; 2],
+    remainder: jadix_core::presentation::scroll::ScrollRemainder,
 }
 
 struct Composition {
@@ -217,13 +254,23 @@ impl Composition {
 }
 
 struct WindowContext {
+    window_policy: RefCell<window_manager::Policy>,
+    badge: badge::Badge,
+    tray: tray::StatusItem,
+    desktop: jadix_core::desktop_services::DesktopServices,
+    deep_links: RefCell<deep_links::Links>,
+    hotkeys: RefCell<BTreeMap<i32, u32>>,
+    wake_count: Cell<u64>,
     drag: drag::DragTracker,
     #[cfg(feature = "windows-gpu")]
     gpu_windows: RefCell<BTreeSet<usize>>,
     #[cfg(feature = "windows-gpu")]
     gpu_dirty: RefCell<BTreeSet<usize>>,
+    #[cfg(feature = "windows-gpu")]
+    shader_windows: RefCell<BTreeSet<usize>>,
     navigation: RefCell<BTreeSet<NodeId>>,
     grid_navigation: RefCell<BTreeSet<NodeId>>,
+    keyboard: RefCell<BTreeMap<NodeId, crate::presentation::keyboard::KeyboardPolicy>>,
     paints: RefCell<BTreeMap<usize, paint::Paint>>,
     palette_dirty: Cell<bool>,
     system_fonts_dirty: Cell<bool>,
@@ -259,8 +306,34 @@ unsafe fn edit_snapshot(context: &WindowContext, window: HWND) {
             selection: unsafe { selection(window) },
             composing: None,
         }),
+        // EDIT emits EN_CHANGE between the two WM_CHAR messages of a
+        // supplementary character. Publish only complete Unicode snapshots.
+        Err(error) if error == INVALID_NATIVE_UTF16 => {}
         Err(_) => context.failed.set(true),
     }
+}
+
+// Descendants provide button content; pointer input belongs to the control.
+unsafe extern "system" fn button_content_proc(
+    window: HWND, message: u32, parameter: WPARAM, data: LPARAM,
+    _identifier: usize, _reference: usize,
+) -> LRESULT {
+    if message == WM_NCHITTEST {
+        let mut parent = unsafe { GetParent(window) };
+        for _ in 0..256 {
+            if parent.is_null() { break; }
+            let mut class = [0u16; 16];
+            let length = unsafe { GetClassNameW(parent, class.as_mut_ptr(), class.len() as i32) };
+            if length == 6 && class[..6].iter().zip("button".encode_utf16())
+                .all(|(actual, expected)| *actual == expected || *actual == expected - 32) {
+                return HTTRANSPARENT as LRESULT;
+            }
+            parent = unsafe { GetParent(parent) };
+        }
+    } else if message == WM_NCDESTROY {
+        unsafe { RemoveWindowSubclass(window, Some(button_content_proc), 2); }
+    }
+    unsafe { DefSubclassProc(window, message, parameter, data) }
 }
 
 unsafe extern "system" fn edit_proc(
@@ -272,6 +345,15 @@ unsafe extern "system" fn edit_proc(
     reference: usize,
 ) -> LRESULT {
     let context = unsafe { &*(reference as *const WindowContext) };
+    // The classic EDIT control implements cut/copy/paste, but not Ctrl+A.
+    // WM_CHAR carries the translated control character for both input kinds.
+    if message == WM_CHAR && parameter == 1
+        && unsafe { IsWindowEnabled(window) } != 0
+        && !context.compositions.borrow().contains_key(&(window as usize))
+    {
+        unsafe { SendMessageW(window, EM_SETSEL, 0, -1); }
+        return 0;
+    }
     let single_line =
         unsafe { GetWindowLongPtrW(window, GWL_STYLE) } as u32 & ES_MULTILINE as u32 == 0;
     if single_line && parameter == 0x0d {
@@ -423,10 +505,17 @@ impl WindowContext {
         self.targets.borrow().get(&(window as usize)).copied()
     }
 
+    #[cfg(feature = "windows-gpu")]
+    fn invalidate_shaders(&self) {
+        for window in self.shader_windows.borrow().iter() {
+            unsafe { InvalidateRect(*window as HWND, null_mut(), 0); }
+        }
+    }
     fn push(&self, event: RawEvent) {
         if self.suppress.get()
             && !matches!(
                 &event,
+                RawEvent::ImageLoad { .. } |
                 RawEvent::Drag {
                     phase: DragPhase::Cancelled,
                     ..
@@ -436,9 +525,14 @@ impl WindowContext {
             return;
         }
         let bytes = match &event {
+            RawEvent::Hosted { event, data, .. } => event.len() + data.to_string().len() + 64,
             RawEvent::Edit { value, .. } => value.len() + 64,
+            RawEvent::Key { event, .. } => event.key.len() + 64,
+            RawEvent::Shortcut { id, .. } => id.len() + 64,
             _ => 64,
         };
+        #[cfg(feature = "windows-gpu")]
+        self.invalidate_shaders();
         let mut events = self.events.borrow_mut();
         if let RawEvent::Drag {
             control,
@@ -478,7 +572,7 @@ unsafe fn read_text(window: HWND) -> Result<String, String> {
     let mut buffer = vec![0u16; length + 1];
     let count = unsafe { GetWindowTextW(window, buffer.as_mut_ptr(), buffer.len() as i32) };
     String::from_utf16(&buffer[..count.max(0) as usize])
-        .map_err(|_| String::from("native text contains invalid UTF-16"))
+        .map_err(|_| String::from(INVALID_NATIVE_UTF16))
 }
 
 unsafe fn selection(window: HWND) -> [usize; 2] {
@@ -524,6 +618,20 @@ unsafe extern "system" fn window_proc(
     let pointer = unsafe { GetWindowLongPtrW(window, GWLP_USERDATA) } as *const WindowContext;
     if !pointer.is_null() {
         let context = unsafe { &*pointer };
+        if let Some(result) = window_manager::message(context, window, message, parameter, data) { return result; }
+        if window == context.root.get() {
+            if message == WM_COPYDATA { return unsafe { deep_links::receive(context, data) }; }
+            if message == tray::MESSAGE { context.tray.message(window, data); return 0; }
+            if message != 0 && message == tray::taskbar_created() {
+                if context.tray.restart(window).is_err() { context.failed.set(true); }
+                if context.badge.restore(window).is_err() { context.failed.set(true); }
+                return 0;
+            }
+            if message != 0 && message == badge::taskbar_button_created() {
+                if context.badge.restore(window).is_err() { context.failed.set(true); }
+                return 0;
+            }
+        }
         match message {
             #[cfg(feature = "windows-gpu")]
             WM_PAINT if context.gpu_windows.borrow().contains(&(window as usize)) => {
@@ -574,11 +682,11 @@ unsafe extern "system" fn window_proc(
                 }
                 return 0;
             }
-            WM_PAINT if context.images.borrow().contains_key(&(window as usize)) => {
+            WM_PAINT | WM_PRINTCLIENT if context.images.borrow().contains_key(&(window as usize)) => {
                 let images = context.images.borrow();
                 let image = &images[&(window as usize)];
                 let mut paint = PAINTSTRUCT::default();
-                let device = unsafe { BeginPaint(window, &mut paint) };
+                let device = if message == WM_PRINTCLIENT { parameter as HDC } else { unsafe { BeginPaint(window, &mut paint) } };
                 let mut frame = RECT::default();
                 unsafe {
                     GetClientRect(window, &mut frame);
@@ -597,7 +705,7 @@ unsafe extern "system" fn window_proc(
                         ),
                     );
                     if let Some(bitmap) = &image.bitmap {
-                        bitmap.paint(device, frame.right, frame.bottom);
+                        bitmap.paint(device, frame.right, frame.bottom, image.fit, image.position, context.scale.get());
                     } else {
                         let alt = wide(&image.alt);
                         SetBkMode(device, TRANSPARENT as i32);
@@ -609,7 +717,7 @@ unsafe extern "system" fn window_proc(
                             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
                         );
                     }
-                    EndPaint(window, &paint);
+                    if message == WM_PAINT { EndPaint(window, &paint); }
                 }
                 return 0;
             }
@@ -660,8 +768,13 @@ unsafe extern "system" fn window_proc(
                     let mut offset = state.offset;
                     if matches!(message, WM_MOUSEWHEEL | WM_MOUSEHWHEEL) {
                         let delta = (parameter >> 16) as u16 as i16 as i32;
-                        offset[axis] = offset[axis]
-                            .saturating_add(if axis == 1 { -delta } else { delta } / 120 * 48);
+                        let mut units = 3u32;
+                        unsafe { SystemParametersInfoW(if axis == 1 { SPI_GETWHEELSCROLLLINES } else { SPI_GETWHEELSCROLLCHARS }, 0, (&mut units as *mut u32).cast(), 0); }
+                        let distance = if units == u32::MAX { state.page[axis] as f64 }
+                            else { units as f64 * 16.0 * context.scale.get() };
+                        let delta = (if axis == 1 { -delta } else { delta }) as f64 / 120.0 * distance;
+                        let pixels = context.scrolls.borrow_mut().get_mut(&(window as usize)).unwrap().remainder.pixels(axis, delta);
+                        offset[axis] = offset[axis].saturating_add(pixels);
                     } else {
                         let mut info = SCROLLINFO {
                             cbSize: std::mem::size_of::<SCROLLINFO>() as u32,
@@ -724,6 +837,26 @@ unsafe extern "system" fn window_proc(
                 context
                     .environment
                     .set(context.environment.get().saturating_add(1));
+            }
+            WM_ACTIVATE if window == context.root.get() => {
+                context.environment.set(context.environment.get().saturating_add(1));
+            }
+            WM_HOTKEY if window == context.root.get() => {
+                services::hotkey(context, parameter as i32);
+                return 0;
+            }
+            WM_TIMER if window == context.root.get() && matches!(parameter, REACTIVE_TIMER | web::TIMER) => {
+                unsafe { KillTimer(window, parameter); }
+                return 0;
+            }
+            WM_POWERBROADCAST if window == context.root.get() && parameter == 0x12 => {
+                context.wake_count.set(context.wake_count.get().saturating_add(1));
+                context.environment.set(context.environment.get().saturating_add(1));
+            }
+            WM_SETFOCUS | WM_KILLFOCUS if window != context.root.get() => {
+                if let Some(control) = context.target(window) {
+                    context.push(if message == WM_SETFOCUS { RawEvent::FocusVisible { control } } else { RawEvent::Blur { control } });
+                }
             }
             WM_CLOSE if window == context.root.get() => {
                 if context.defer_close.get() {
@@ -788,6 +921,13 @@ struct Control {
 }
 
 pub struct WindowsHost {
+    windows: RefCell<window_manager::Windows>,
+    owns_updater: bool,
+    web: Option<std::rc::Rc<web::Runtime>>,
+    webviews: BTreeMap<NodeId, web::Leaf>,
+    hosted: BTreeMap<NodeId, Box<hosted::Leaf>>,
+    services: Option<services::Services>,
+    updater: Option<std::rc::Rc<updater::Runtime>>,
     #[cfg(feature = "windows-gpu")]
     plots: BTreeMap<NodeId, gpu::Plot>,
     popovers: BTreeMap<NodeId, HWND>,
@@ -818,7 +958,57 @@ pub struct WindowsStats {
 }
 
 impl WindowsHost {
+    /// Configure an installed application's activation before showing its root.
+    /// False means the launch was handed to the primary; dispose this hidden root
+    /// and return from the executable. Registration is explicit and per-user.
+    pub fn configure_activation(&mut self, config: jadix_core::deep_link::ApplicationActivation) -> Result<bool, String> {
+        if self.is_closed() { return Err("native window is closed".into()); }
+        config.validate().map_err(String::from)?;
+        {
+            let links = self.context.deep_links.borrow();
+            if let Some(existing) = &links.activation {
+                if existing.config == config { return Ok(true); }
+                return Err("application activation is already configured".into());
+            }
+        }
+        let Some(registration) = activation::Registration::start(self.window, config.clone())? else { return Ok(false); };
+        let launch = jadix_core::deep_link::ApplicationLaunch::current().map_err(String::from)?;
+        self.services.as_ref().ok_or("native services disposed")?.notifications.set_identity_arguments(Some(&config.identifier), &config.arguments)?;
+        registration.attach()?;
+        let mut links = self.context.deep_links.borrow_mut();
+        // Activation derives both protocol and file links from this same bounded
+        // launch, so configure must not independently replay process arguments.
+        links.configure_activation(&config, &launch, &self.context.desktop)?;
+        links.launches.push_back(launch);
+        links.activation = Some(registration);
+        Ok(true)
+    }
+    pub fn register_activation_protocols(config: &jadix_core::deep_link::ApplicationActivation) -> Result<(), String> { activation::protocols(config, true) }
+    pub fn unregister_activation_protocols(config: &jadix_core::deep_link::ApplicationActivation) -> Result<(), String> { activation::protocols(config, false) }
+    pub fn register_activation_files(config: &jadix_core::deep_link::ApplicationActivation) -> Result<(), String> { activation::files(config, true) }
+    pub fn unregister_activation_files(config: &jadix_core::deep_link::ApplicationActivation) -> Result<(), String> { activation::files(config, false) }
+    pub fn take_application_launches(&mut self) -> Vec<jadix_core::deep_link::ApplicationLaunch> { self.context.deep_links.borrow_mut().launches.drain(..).collect() }
+    pub fn register_window_factory(&mut self, name: impl Into<String>, factory: impl Fn(WindowsHost, Option<&str>) -> Result<Box<dyn WindowApplication>, String> + 'static) -> Result<(), String> {
+        self.windows.get_mut().register(name.into(), std::rc::Rc::new(factory))
+    }
+
+    pub fn window_state(&self, id: Option<String>) -> Result<jadix_core::window::WindowState, String> {
+        window_manager::state(self, id)
+    }
+
+    /// Forward a protocol launch to an existing window of this executable before
+    /// creating a new root. A false result means the caller should start normally.
+    pub fn forward_deep_link(config: &jadix_core::deep_link::DeepLinkConfig, url: &str) -> Result<bool, String> {
+        deep_links::forward(config, url, null_mut())
+    }
+    /// Deliver an OS activation supplied by an embedding application's event loop.
+    pub fn deliver_deep_link(&mut self, link: jadix_core::deep_link::DeepLink) -> Result<(), String> {
+        if self.is_closed() { return Err("native window is closed".into()); }
+        self.context.deep_links.borrow_mut().deliver(link, &self.context.desktop)?;
+        (self.waker())(); Ok(())
+    }
     pub fn new(title: &str, size: [u32; 2]) -> Result<Self, String> {
+        if run_update_helper()? { std::process::exit(0); }
         Self::create_window(title, size, null_mut())
     }
 
@@ -835,6 +1025,29 @@ impl WindowsHost {
             ));
         }
         Self::create_window("Jadix embedded native root", size, parent)
+    }
+
+    pub fn register_web_resources(&mut self, authority: &str, provider: impl Fn(jadix_core::web_resource::ResourceRequest, jadix_core::web_resource::ResourceReply) + Send + Sync + 'static) -> Result<(), &'static str> {
+        self.web.as_ref().ok_or("web host disposed")?.resources.borrow_mut().register(authority, provider)
+    }
+    pub fn set_asset_root(&mut self, path: impl AsRef<std::path::Path>) -> Result<(), String> {
+        let path = path.as_ref().canonicalize().map_err(|e| e.to_string())?;
+        if !path.is_dir() { return Err("asset root is not a directory".into()); }
+        self.web.as_ref().ok_or("web host disposed")?.set_asset_root(path.clone());
+        if let Some(services) = &self.services { services.audio.borrow_mut().set_root(path); }
+        Ok(())
+    }
+    /// Enable signed application updates for a directory installation. The
+    /// installation must name this running executable. Call before mounting the
+    /// native root so the script bridge receives the configured service.
+    pub fn configure_updater(&mut self, config: jadix_core::updater::Config, installation: jadix_core::updater::installation::Installation) -> Result<(), String> {
+        if self.is_closed() || self.updater.is_some() { return Err("updater host closed or already configured".into()); }
+        if installation.executable().canonicalize().map_err(|e| e.to_string())? != std::env::current_exe().and_then(|p| p.canonicalize()).map_err(|e| e.to_string())? {
+            return Err("update installation must contain the running executable".into());
+        }
+        let curl = services::system_curl()?.to_str().ok_or("system curl path is not Unicode")?.to_owned();
+        self.updater = Some(updater::Runtime::new(config, installation, self.native_window(), curl, self.waker())?);
+        Ok(())
     }
 
     pub fn native_window(&self) -> usize {
@@ -941,13 +1154,23 @@ impl WindowsHost {
             return Err(String::from("native window size is invalid"));
         }
         let mut context = Box::new(WindowContext {
+            window_policy: Default::default(),
+            badge: Default::default(),
+            tray: Default::default(),
+            desktop: Default::default(),
+            deep_links: Default::default(),
+            hotkeys: RefCell::new(BTreeMap::new()),
+            wake_count: Cell::new(0),
             drag: drag::DragTracker::default(),
             #[cfg(feature = "windows-gpu")]
             gpu_windows: RefCell::new(BTreeSet::new()),
             #[cfg(feature = "windows-gpu")]
             gpu_dirty: RefCell::new(BTreeSet::new()),
+            #[cfg(feature = "windows-gpu")]
+            shader_windows: RefCell::new(BTreeSet::new()),
             navigation: RefCell::new(BTreeSet::new()),
             grid_navigation: RefCell::new(BTreeSet::new()),
+            keyboard: RefCell::new(BTreeMap::new()),
             paints: RefCell::new(BTreeMap::new()),
             palette_dirty: Cell::new(true),
             system_fonts_dirty: Cell::new(false),
@@ -1007,7 +1230,14 @@ impl WindowsHost {
         context.root.set(window);
         let scale = unsafe { GetDpiForWindow(window) }.max(96) as f64 / 96.0;
         context.scale.set(scale);
-        Ok(Self {
+        let mut host = Self {
+            windows: RefCell::new(window_manager::Windows::new(window)),
+            owns_updater: true,
+            web: None,
+            webviews: BTreeMap::new(),
+            hosted: BTreeMap::new(),
+            services: None,
+            updater: None,
             #[cfg(feature = "windows-gpu")]
             plots: BTreeMap::new(),
             popovers: BTreeMap::new(),
@@ -1025,7 +1255,10 @@ impl WindowsHost {
             applied_scale: scale,
             fonts_dirty: false,
             stats: WindowsStats::default(),
-        })
+        };
+        host.services = Some(services::Services::new(&host)?);
+        host.web = Some(web::Runtime::new(&host)?);
+        Ok(host)
     }
 
     pub fn show(&self) {
@@ -1033,6 +1266,13 @@ impl WindowsHost {
         unsafe {
             ShowWindow(self.window, SW_SHOWNOACTIVATE);
         }
+    }
+
+    /// Register this application's AUMID and its COM notification activator.
+    /// None restores packaged/process identity lookup.
+    pub fn set_notification_identity(&mut self, identity: Option<&str>) -> Result<(), String> {
+        if self.is_closed() { return Err("native window is closed".into()); }
+        self.services.as_ref().ok_or("native services disposed")?.notifications.set_identity(identity)
     }
 
     pub fn viewport(&self) -> [f32; 2] {
@@ -1115,6 +1355,7 @@ impl WindowsHost {
     }
 
     pub fn pump(&self) {
+        if let Some(updater) = &self.updater { updater.pump(); }
         let _dpi = DpiScope::window(self.window);
         let mut message = MSG::default();
         while unsafe { PeekMessageW(&mut message, null_mut(), 0, 0, PM_REMOVE) } != 0 {
@@ -1123,6 +1364,7 @@ impl WindowsHost {
                 if !context.is_null() {
                     let context = &*context;
                     let popup = context.popovers.borrow().last().copied();
+                    if keyboard::dispatch(context, &message) { continue; }
                     if message.message == WM_KEYDOWN {
                         if let Some(control) = context
                             .target(message.hwnd)
@@ -1195,6 +1437,7 @@ impl WindowsHost {
                             continue;
                         }
                     }
+                    if message.message == WM_KEYDOWN && message.wParam == VK_ESCAPE as usize && window_manager::escape(context) { continue; }
                     if matches!(
                         message.message,
                         WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_NCLBUTTONDOWN
@@ -1232,9 +1475,14 @@ impl WindowsHost {
                 DispatchMessageW(&message);
             }
         }
+        if let Some(services) = &self.services { services.pump(&self.context); }
+        if let Ok(mut windows) = self.windows.try_borrow_mut() {
+            if self.is_closed() { windows.dispose(); } else { windows.pump(self); }
+        }
     }
 
     pub fn wait_for_events(&self, timeout_ms: u32) -> Result<(), String> {
+        let timeout_ms = if self.services.as_ref().is_some_and(|s| s.audio.borrow().active()) { timeout_ms.min(50) } else { timeout_ms };
         if unsafe {
             MsgWaitForMultipleObjectsEx(0, null_mut(), timeout_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
         } == WAIT_FAILED
@@ -1459,12 +1707,6 @@ impl WindowsHost {
     }
 
     fn sync_modals(&mut self, roots: &[PresentationNode]) -> Result<(), String> {
-        if self.backdrops.is_empty()
-            && self.popovers.is_empty()
-            && self.context.modal.get().is_none()
-        {
-            return Ok(());
-        }
         let mut ordered = Vec::new();
         let mut visible = BTreeMap::new();
         let mut modals = Vec::new();
@@ -1500,7 +1742,16 @@ impl WindowsHost {
                 }
             });
         }
+        // Hide parents before their children, then reveal children before their parents. This
+        // keeps a newly committed subtree hidden until its descendants are ready to paint.
         for identifier in &ordered {
+            let control = self.controls.get_mut(identifier).ok_or("unknown native modal target")?;
+            if control.shown && !visible[identifier] {
+                unsafe { ShowWindow(control.window, SW_HIDE) };
+                control.shown = false;
+            }
+        }
+        for identifier in ordered.iter().rev() {
             let control = &self.controls[identifier];
             let mut parent = Some(*identifier);
             let mut allowed = modal.is_none();
@@ -1521,7 +1772,7 @@ impl WindowsHost {
                 .controls
                 .get_mut(identifier)
                 .ok_or("unknown native modal target")?;
-            if control.shown != visible[identifier] {
+            if !control.shown && visible[identifier] {
                 unsafe {
                     ShowWindow(
                         control.window,
@@ -1600,6 +1851,8 @@ impl WindowsHost {
     }
 
     pub fn take_events(&mut self) -> Result<Vec<PlatformEvent>, String> {
+        if let Some(web) = &self.web { web.drain_events(&self.context); }
+        for leaf in self.hosted.values() { leaf.drain(); }
         let _dpi = DpiScope::window(self.window);
         self.sync_paints()?;
         if let Some(loader) = &mut self.images {
@@ -1617,14 +1870,19 @@ impl WindowsHost {
                 };
                 match completion.result {
                     Ok(pixels) => {
+                        let (width, height) = (pixels.width, pixels.height);
                         image.bitmap = Some(image::Bitmap::new(pixels)?);
                         image.failed = false;
+                        self.context.push(RawEvent::ImageLoad { control: completion.node, generation: completion.generation, event: ImageLoadEvent::Loaded { width, height } });
                     }
-                    Err(_) => {
+                    Err(message) => {
                         image.bitmap = None;
                         image.failed = true;
+                        self.context.push(RawEvent::ImageLoad { control: completion.node, generation: completion.generation, event: ImageLoadEvent::Failed { message } });
                     }
                 }
+                self.context.push(RawEvent::ImageLoad { control: completion.node, generation: completion.generation, event: ImageLoadEvent::Ended });
+                self.context.environment.set(self.context.environment.get().wrapping_add(1));
                 unsafe { InvalidateRect(control.window, null_mut(), 1) };
             }
         }
@@ -1675,7 +1933,11 @@ impl WindowsHost {
         self.redraw_plots()?;
         for event in pending {
             let identifier = match &event {
-                RawEvent::Tree { control, .. }
+                RawEvent::ImageLoad { control, .. }
+                | RawEvent::Hosted { control, .. }
+                | RawEvent::Key { control, .. }
+                | RawEvent::Shortcut { control, .. }
+                | RawEvent::Tree { control, .. }
                 | RawEvent::Drag { control, .. }
                 | RawEvent::Navigate { control, .. }
                 | RawEvent::Dismiss { control, .. }
@@ -1694,7 +1956,7 @@ impl WindowsHost {
             if (!control.effective_enabled || !control.shown)
                 && !matches!(
                     &event,
-                    RawEvent::Blur { .. }
+                    RawEvent::ImageLoad { .. } | RawEvent::Blur { .. }
                         | RawEvent::Drag {
                             phase: DragPhase::Cancelled,
                             ..
@@ -1704,6 +1966,17 @@ impl WindowsHost {
                 continue;
             }
             let payload = match event {
+                RawEvent::ImageLoad { generation, event, .. } => {
+                    if control.image_generation != generation { continue; }
+                    EventPayload::ImageLoad(event)
+                }
+                RawEvent::Hosted { event, data, .. } => {
+                    let NodeContent::Hosted { specification } = &control.descriptor.content else { continue; };
+                    if !jadix_core::hosted::HostedContent::from_json(specification).is_ok_and(|spec| spec.accepts_event(&event, &data)) { continue; }
+                    EventPayload::Hosted { event, data }
+                },
+                RawEvent::Key { event, .. } => EventPayload::Key(event),
+                RawEvent::Shortcut { id, .. } => EventPayload::Shortcut { id },
                 RawEvent::Tree { action, .. } => {
                     if control.descriptor.accessible_role.is_none()
                         && control.descriptor.accessible_expanded.is_some()
@@ -1821,9 +2094,23 @@ impl WindowsHost {
                         revision: control.revision,
                     }
                 }
+                RawEvent::Focus { .. } | RawEvent::FocusVisible { .. }
+                    if !control.descriptor.can_focus() => continue,
                 RawEvent::Focus { .. } => EventPayload::Focus,
                 RawEvent::FocusVisible { .. } => EventPayload::FocusVisible,
-                RawEvent::Blur { .. } => EventPayload::Blur,
+                RawEvent::Blur { .. } => {
+                    // Destroying a focused virtual row can make Win32 temporarily
+                    // focus its scroll parent. That HWND is not a portable focus target.
+                    if !control.descriptor.can_focus()
+                        && !matches!(control.descriptor.content,
+                            NodeContent::Button { .. } | NodeContent::Input { .. }
+                            | NodeContent::Textarea { .. } | NodeContent::Checkbox { .. }
+                            | NodeContent::Switch { .. } | NodeContent::Select { .. })
+                    {
+                        continue;
+                    }
+                    EventPayload::Blur
+                },
                 RawEvent::Submit { .. } => {
                     if !matches!(
                         control.descriptor.content,
@@ -1972,6 +2259,7 @@ impl WindowsHost {
             })
             .ok_or("native simultaneous control identity exhausted")?;
         let (class, style) = match descriptor.content {
+            NodeContent::Hosted { .. } => ("JadixNativeHost", WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_TABSTOP),
             NodeContent::Container | NodeContent::Dialog { .. } | NodeContent::Popover { .. } => {
                 ("JadixNativeHost", WS_CLIPCHILDREN | WS_CLIPSIBLINGS)
             }
@@ -2052,7 +2340,8 @@ impl WindowsHost {
             CreateWindowExW(
                 if matches!(
                     descriptor.content,
-                    NodeContent::Container
+                    NodeContent::Hosted { .. }
+                        | NodeContent::Container
                         | NodeContent::Scroll
                         | NodeContent::Dialog { .. }
                         | NodeContent::Popover { .. }
@@ -2063,7 +2352,7 @@ impl WindowsHost {
                 },
                 class.as_ptr(),
                 wide("").as_ptr(),
-                WS_CHILD | WS_VISIBLE | style,
+                WS_CHILD | style,
                 0,
                 0,
                 1,
@@ -2076,6 +2365,10 @@ impl WindowsHost {
         };
         if window.is_null() {
             return Err(native_error("create native control"));
+        }
+        if unsafe { SetWindowSubclass(window, Some(button_content_proc), 2, 0) } == 0 {
+            unsafe { DestroyWindow(window); }
+            return Err(native_error("subclass native control content"));
         }
         if matches!(descriptor.content, NodeContent::Popover { .. }) {
             self.popovers.insert(node, window);
@@ -2121,7 +2414,7 @@ impl WindowsHost {
                 initialized: false,
                 accessible_role: false,
                 image_generation: 0,
-                shown: true,
+                shown: false,
                 effective_enabled: true,
             },
         );
@@ -2170,6 +2463,26 @@ impl WindowsHost {
             None
         };
         let (text, enabled, revision) = match &descriptor.content {
+            NodeContent::Hosted { specification } => {
+                if !control.initialized || control.descriptor.content != descriptor.content {
+                    let spec = jadix_core::hosted::HostedContent::from_json(specification)?;
+                    if hosted::Leaf::supports(&spec) {
+                        self.webviews.remove(&node);
+                        if let Some(leaf) = self.hosted.get(&node) { leaf.update(spec)?; }
+                        else {
+                            let root = self.web.as_ref().ok_or("web host disposed")?.asset_root();
+                            self.hosted.insert(node, hosted::Leaf::new(node, control.window, spec, &self.context, root)?);
+                        }
+                    } else {
+                        self.hosted.remove(&node);
+                        self.webviews.remove(&node);
+                        let runtime = self.web.as_ref().ok_or("web host disposed")?.clone();
+                        let leaf = web::Leaf::new(node, control.window, spec, runtime)?;
+                        self.webviews.insert(node, leaf);
+                    }
+                }
+                ("", true, 0)
+            },
             NodeContent::Image { source, alt } => {
                 let changed = match &control.descriptor.content {
                     NodeContent::Image {
@@ -2182,15 +2495,18 @@ impl WindowsHost {
                         .images
                         .as_mut()
                         .ok_or("native image loader missing")?
-                        .request(node, source)?;
+                        .request(node, source, &self.web.as_ref().ok_or("web host disposed")?.asset_root().lock().unwrap())?;
                     self.context.images.borrow_mut().insert(
                         control.window as usize,
                         NativeImage {
                             bitmap: None,
                             alt: alt.clone(),
                             failed: false,
+                            fit: descriptor.style.image_fit.unwrap_or_default(),
+                            position: descriptor.style.image_position.unwrap_or_default(),
                         },
                     );
+                    self.context.push(RawEvent::ImageLoad { control: node, generation: control.image_generation, event: ImageLoadEvent::Started });
                 } else if let Some(image) = self
                     .context
                     .images
@@ -2198,6 +2514,8 @@ impl WindowsHost {
                     .get_mut(&(control.window as usize))
                 {
                     image.alt = alt.clone();
+                    image.fit = descriptor.style.image_fit.unwrap_or_default();
+                    image.position = descriptor.style.image_position.unwrap_or_default();
                 }
                 unsafe { InvalidateRect(control.window, null_mut(), 1) };
                 (alt.as_str(), true, 0)
@@ -2292,27 +2610,10 @@ impl WindowsHost {
             }
         }
         unsafe {
-            if descriptor.accessible_role == Some(AccessibleRole::TabItem)
-                || matches!(
-                    descriptor.accessible_role,
-                    Some(AccessibleRole::RadioItem { .. })
-                )
-                || matches!(
-                    control.descriptor.accessible_role,
-                    Some(AccessibleRole::RadioItem { .. })
-                )
-                || control.descriptor.accessible_role == Some(AccessibleRole::TabItem)
             {
-                let tab_stop = matches!(
-                    descriptor.content,
-                    NodeContent::Button { .. }
-                        | NodeContent::Checkbox { .. }
-                        | NodeContent::Switch { .. }
-                        | NodeContent::Input { .. }
-                        | NodeContent::Textarea { .. }
-                        | NodeContent::Select { .. }
-                ) && match descriptor.accessible_role {
+                let tab_stop = descriptor.can_focus() && match descriptor.accessible_role {
                     Some(AccessibleRole::TabItem) => descriptor.accessible_selected == Some(true),
+                    Some(AccessibleRole::ListBoxOption { tab_stop }) => tab_stop,
                     Some(AccessibleRole::RadioItem { tab_stop }) => tab_stop,
                     _ => true,
                 };
@@ -2441,6 +2742,9 @@ impl WindowsHost {
             Some(AccessibleRole::TabPanel) => {
                 Some(windows::Win32::UI::Accessibility::ROLE_SYSTEM_PROPERTYPAGE as i32)
             }
+            Some(AccessibleRole::ListBox) => Some(windows::Win32::UI::Accessibility::ROLE_SYSTEM_LIST as i32),
+            Some(AccessibleRole::ListBoxOption { .. }) => Some(windows::Win32::UI::Accessibility::ROLE_SYSTEM_LISTITEM as i32),
+            Some(AccessibleRole::Heading) => Some(windows::Win32::UI::Accessibility::ROLE_SYSTEM_STATICTEXT as i32),
             Some(AccessibleRole::Tree) => {
                 Some(windows::Win32::UI::Accessibility::ROLE_SYSTEM_OUTLINE as i32)
             }
@@ -2536,6 +2840,11 @@ impl WindowsHost {
             }
         } else {
             control.tree_accessibility = None;
+        }
+        if descriptor.accepts_keyboard() {
+            self.context.keyboard.borrow_mut().insert(node, descriptor.keyboard.clone());
+        } else {
+            self.context.keyboard.borrow_mut().remove(&node);
         }
         control.descriptor = descriptor.clone();
         control.initialized = true;
@@ -2654,6 +2963,11 @@ impl WindowsHost {
                 );
             }
             self.raise_overlays()?;
+            // Moving clipped parents and their children separately can copy stale
+            // client pixels. Repaint the final hierarchy after every scroll batch.
+            unsafe {
+                RedrawWindow(self.window, null_mut(), null_mut(), RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+            }
         }
         Ok(())
     }
@@ -2672,6 +2986,7 @@ impl WindowsHost {
             frame.y -= parent.y;
         }
         let scale = self.context.scale.get();
+
         frame.x *= scale;
         frame.y *= scale;
         frame.width *= scale;
@@ -2704,6 +3019,10 @@ impl WindowsHost {
         {
             return Err(native_error("SetWindowPos"));
         }
+        if let Some(web) = self.webviews.get(&node) {
+            web.resize(frame.width.round().max(0.0) as u32, frame.height.round().max(0.0) as u32)?;
+        }
+        if let Some(leaf) = self.hosted.get(&node) { leaf.resize(); }
         self.stats.positions += 1;
         Ok(())
     }
@@ -2724,6 +3043,7 @@ impl WindowsHost {
         {
             return Err(String::from("stale, foreign or closed native batch"));
         }
+        if let Some(web) = &self.web { web.evaluations.borrow_mut().sync(roots); }
         let focused = unsafe { GetFocus() };
         let focused_popover = self
             .context
@@ -2804,11 +3124,14 @@ impl WindowsHost {
                         offset += 1;
                     }
                     for node in removed.into_iter().rev() {
+                        self.webviews.remove(&node);
+                        self.hosted.remove(&node);
                         #[cfg(feature = "windows-gpu")]
                         self.remove_gpu_plot(node);
                         if let Some(control) = self.controls.remove(&node) {
                             self.context.navigation.borrow_mut().remove(&node);
                             self.context.grid_navigation.borrow_mut().remove(&node);
+                            self.context.keyboard.borrow_mut().remove(&node);
                             if control.accessible_role {
                                 self.accessibility.role(control.window, None)?;
                             }
@@ -2996,7 +3319,7 @@ impl WindowsHost {
         self.sync_modals(roots)?;
         self.sync_popovers(focused_popover)?;
         #[cfg(feature = "windows-gpu")]
-        self.redraw_plots()?;
+        { self.redraw_plots()?; self.context.invalidate_shaders(); }
         self.revision = batch.revision;
         self.stats.commits += 1;
         Ok(ApplyReceipt::for_batch(batch))
@@ -3004,6 +3327,107 @@ impl WindowsHost {
 }
 
 impl PlatformHost for WindowsHost {
+    fn configure_activation(&mut self, config: jadix_core::deep_link::ApplicationActivation) -> Result<bool, String> { WindowsHost::configure_activation(self, config) }
+    fn take_application_launches(&mut self) -> Vec<jadix_core::deep_link::ApplicationLaunch> { WindowsHost::take_application_launches(self) }
+    fn window_declarations(&self) -> Option<jadix_core::window::WindowDeclarations> { Some(self.windows.borrow().declarations()) }
+
+    fn request_window(&mut self, request: &jadix_core::window::WindowRequest) -> Result<std::sync::mpsc::Receiver<jadix_core::window::WindowResult>, String> { self.windows.get_mut().request(request) }
+
+    fn show_share(&mut self, share: &jadix_core::desktop::Share) -> Result<std::sync::mpsc::Receiver<jadix_core::desktop::ShareResult>, String> {
+        if self.is_closed() { return Err("native window is closed".into()); }
+        if share.anchor.is_some_and(|node| !self.controls.contains_key(&node)) { return Err("share anchor is not mounted in this window".into()); }
+        self.services.as_ref().ok_or("native sharing is disposed")?.sharing.borrow_mut().request(share)
+    }
+    fn configure_deep_links(&mut self, config: jadix_core::deep_link::DeepLinkConfig) -> Result<(), String> {
+        if self.is_closed() { return Err("native window is closed".into()); }
+        self.context.deep_links.borrow_mut().configure(config, &self.context.desktop)
+    }
+    fn take_deep_links(&mut self) -> Vec<jadix_core::deep_link::DeepLink> {
+        self.context.deep_links.borrow_mut().router.drain()
+    }
+    fn pump_web(&mut self) -> Vec<jadix_core::web_evaluation::EvaluationBatch> {
+        self.web.as_ref().map_or_else(Vec::new, |runtime| runtime.pump(&self.webviews))
+    }
+    fn take_resource_work(&mut self) -> Vec<jadix_core::web_resource::ResourceWork> {
+        self.web.as_ref().map_or_else(Vec::new, |runtime| runtime.resources.borrow_mut().take_work())
+    }
+    fn evaluate_web(&mut self, node: NodeId, script: &str) -> jadix_core::web_evaluation::WebEvaluation {
+        self.web.as_ref().map_or_else(|| jadix_core::web_evaluation::WebEvaluation::failed(jadix_core::web_evaluation::WebEvaluationError::Unavailable), |runtime| runtime.evaluations.borrow_mut().evaluate(node, script))
+    }
+    fn request_file(&mut self, request: &jadix_core::file_request::FileRequest) -> Result<std::sync::mpsc::Receiver<jadix_core::file_request::FileResult>, String> {
+        self.services.as_ref().ok_or("native file service is disposed")?.files.request(request)
+    }
+    fn open_url(&mut self, url: &str) -> Result<std::sync::mpsc::Receiver<jadix_core::desktop::OpenUrlResult>, String> {
+        jadix_core::desktop::check_open_url(url)?;
+        if self.is_closed() { return Err("native window is closed".into()); }
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let _ = send.send(files::open(self.native_window(), wide(url).as_ptr()).map(|()| true));
+        (self.waker())();
+        Ok(receive)
+    }
+
+    fn clipboard(&mut self, request: &jadix_core::clipboard::ClipboardRequest) -> Result<std::sync::mpsc::Receiver<jadix_core::clipboard::ClipboardResult>, String> {
+        if self.is_closed() { return Err("native window is closed".into()); }
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let _ = sender.send(clipboard::request(self.window, request));
+        (self.waker())();
+        Ok(receiver)
+    }
+
+    fn measurement_revision(&self) -> u64 { self.environment() }
+
+    fn register_font(&mut self, bytes: &[u8]) -> Result<Vec<String>, String> {
+        self.install_font(bytes).map(|registration| registration.families)
+    }
+
+    fn read_environment(&self) -> Result<Option<crate::environment::EnvironmentSnapshot>, String> {
+        self.services.as_ref().ok_or("native services disposed")?.snapshot(&self.context)
+    }
+
+    fn audio(&self) -> Option<jadix_core::audio::AudioService> {
+        self.services.as_ref().map(|s| s.audio.borrow().service.clone())
+    }
+
+    fn speech(&self) -> Option<jadix_core::speech::SpeechService> {
+        self.services.as_ref().map(|s| s.speech.borrow().service.clone())
+    }
+
+    fn pump_audio(&mut self, _: RootId) {
+        if let Some(services) = &self.services { services.audio.borrow_mut().pump(); services.speech.borrow_mut().pump(); }
+    }
+
+    fn fetch(&self) -> Option<jadix_net::service::FetchService> {
+        self.services.as_ref().map(|services| services.fetch.borrow().service())
+    }
+
+    fn websocket(&self) -> Option<jadix_net::websocket::SocketService> {
+        self.services.as_ref().map(|services| services.socket.service())
+    }
+
+    fn updater(&self) -> Option<jadix_core::updater::Updater> {
+        self.updater.as_ref().map(|runtime| runtime.service.clone())
+    }
+
+    fn desktop_services(&self) -> Option<jadix_core::desktop_services::DesktopServices> {
+        self.services.as_ref().map(|_| self.context.desktop.clone())
+    }
+
+    fn set_tray(&mut self, _: RootId, tray: Option<&jadix_core::tray::Tray>) -> Result<(), String> {
+        if self.is_closed() { return Err("native window is closed".into()); }
+        self.context.tray.set(self.window, tray)
+    }
+
+    fn take_tray_events(&mut self) -> Vec<String> { self.context.tray.take_events() }
+
+    fn schedule_reactive_wake(&mut self, delay: Option<std::time::Duration>) {
+        unsafe {
+            KillTimer(self.window, REACTIVE_TIMER);
+            if let Some(delay) = delay.filter(|_| !self.is_closed()) {
+                let ms = delay.as_millis().saturating_add(u128::from(delay.subsec_nanos() % 1_000_000 != 0)).clamp(1, u128::from(u32::MAX)) as u32;
+                if SetTimer(self.window, REACTIVE_TIMER, ms, None) == 0 { self.context.failed.set(true); }
+            }
+        }
+    }
     fn bind_grid_navigation(&mut self, nodes: &[NodeId]) -> Result<bool, String> {
         if nodes.len() > self.controls.len()
             || nodes.iter().any(|node| {
@@ -3074,10 +3498,15 @@ impl PlatformHost for WindowsHost {
                 NodeKind::Image,
                 NodeKind::Dialog,
                 NodeKind::Popover,
+                NodeKind::Hosted,
             ],
             text_editing: true,
             focus: true,
             scrolling: true,
+            inline_raster_sources: true,
+            inline_svg_sources: true,
+            local_image_sources: true,
+            remote_image_sources: true,
         }
     }
 
@@ -3088,6 +3517,12 @@ impl PlatformHost for WindowsHost {
     ) -> Result<MeasureResult, LayoutError> {
         let _dpi = DpiScope::window(self.window);
         let scale = self.context.scale.get();
+        if matches!(descriptor.content, NodeContent::Image { .. }) {
+            let dimensions = self.controls.get(&request.key.node)
+                .and_then(|control| self.context.images.borrow().get(&(control.window as usize)).and_then(|image| image.bitmap.as_ref().map(image::Bitmap::size)))
+                .or_else(|| descriptor.content.image_dimensions()).unwrap_or([0, 0]);
+            return Ok(MeasureResult { key: request.key, width: f64::from(dimensions[0]).min(request.key.max_width), height: f64::from(dimensions[1]).min(request.key.max_height), baseline: None });
+        }
         let font = Font::new(descriptor, scale)
             .map_err(|_| LayoutError::MeasurementUnavailable(request.key.node))?;
         let text = match &descriptor.content {
@@ -3209,6 +3644,17 @@ impl PlatformHost for WindowsHost {
     }
 
     fn dispose(&mut self) {
+        self.context.deep_links.borrow_mut().activation.take();
+        self.context.deep_links.borrow_mut().launches.clear();
+        self.windows.get_mut().dispose();
+        self.context.window_policy.get_mut().release_modal();
+        if let Some(updater) = self.updater.take() { if self.owns_updater { updater.dispose(); } }
+        self.context.tray.dispose();
+        self.webviews.clear();
+        self.hosted.clear();
+        if let Some(web) = self.web.take() { web.dispose(); }
+        unsafe { KillTimer(self.window, REACTIVE_TIMER); }
+        if let Some(mut services) = self.services.take() { services.dispose(&self.context); }
         self.context.drag.cancel(&self.context, true);
         self.context.drag.clear();
         #[cfg(feature = "windows-gpu")]
@@ -3250,6 +3696,7 @@ impl PlatformHost for WindowsHost {
         self.context.targets.borrow_mut().clear();
         self.context.navigation.borrow_mut().clear();
         self.context.grid_navigation.borrow_mut().clear();
+        self.context.keyboard.borrow_mut().clear();
         self.context.images.borrow_mut().clear();
         self.context.paints.borrow_mut().clear();
         self.context.popovers.borrow_mut().clear();
@@ -3296,6 +3743,10 @@ mod tests {
                 accessible_role: None,
                 accessible_selected: None,
                 accessible_expanded: None,
+                interaction: Default::default(),
+                keyboard: Default::default(),
+                navigation_keys: Vec::new(),
+                accessibility: Default::default(),
                 accessibility_relations: Default::default(),
                 accessible_description: None,
                 accessible_name: None,

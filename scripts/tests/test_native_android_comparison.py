@@ -26,8 +26,8 @@ class AndroidComparisonTests(unittest.TestCase):
 
     def test_old_and_new_aapt_minimum_sdk_fields(self):
         for field in ("sdkVersion", "minSdkVersion"):
-            text = "package: name='dev.jadix.nativeui' versionCode=''\r\nlaunchable-activity: name='dev.jadix.nativeui.MainActivity'\r\n" + field + ":'28'\r\ntargetSdkVersion:'35'\r\n"
-            self.assertEqual(COMPARISON.manifest_identity(text), ["dev.jadix.nativeui", "dev.jadix.nativeui.MainActivity", "28", "35"])
+            text = "package: name='dev.jadix.nativeui' versionCode=''\r\nlaunchable-activity: name='dev.jadix.nativeui.MainActivity'\r\n" + field + ":'26'\r\ntargetSdkVersion:'35'\r\n"
+            self.assertEqual(COMPARISON.manifest_identity(text), ["dev.jadix.nativeui", "dev.jadix.nativeui.MainActivity", "26", "35"])
         with self.assertRaises(ValueError):
             COMPARISON.manifest_identity("package: name='dev.jadix.nativeui'")
 

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
 pub use jadix_core::environment;
+pub use jadix_core::deep_link;
+pub use jadix_net::service as fetch;
 pub use jadix_core::presentation;
 use presentation::capabilities::{BackendCapabilities, NodeKind};
 use presentation::{
@@ -10,6 +12,12 @@ use presentation::{
 
 #[cfg(all(feature = "android", target_os = "android"))]
 pub mod android;
+#[cfg(feature = "appkit")]
+pub mod appkit;
+#[cfg(feature = "apple")]
+pub mod apple;
+#[cfg(any(feature = "apple", feature = "android", feature = "linux", feature = "windows"))]
+mod native_web;
 #[cfg(all(feature = "dom", target_arch = "wasm32"))]
 pub mod dom;
 mod grid;
@@ -19,7 +27,15 @@ pub use jadix_core::presentation::theme::ConsistentTheme;
 pub mod images;
 mod inspection;
 pub mod layout;
+#[cfg(all(feature = "linux", target_os = "linux", not(target_env = "ohos")))]
+pub mod linux;
 pub mod miniprogram;
+pub mod native_policy;
+mod native_services;
+#[cfg(any(all(feature = "linux", target_os = "linux", not(target_env = "ohos")), all(feature = "windows", windows)))]
+mod audio_source;
+#[cfg(any(all(feature = "linux", target_os = "linux", not(target_env = "ohos")), all(feature = "windows", windows)))]
+mod update_worker;
 #[cfg(feature = "motion")]
 pub mod motion;
 #[cfg(all(feature = "ohos", target_env = "ohos"))]
@@ -187,8 +203,11 @@ impl HeadlessRoot {
 
     pub fn commit(&mut self, batch: CommitBatch) -> Result<bool, BackendError> {
         self.validate_batch_revision(&batch)?;
-        if !batch.operations.is_empty() && self.commit_text_updates(&batch)? {
-            return Ok(true);
+        if !batch.operations.is_empty() {
+            if let Some((updates, text)) = self.prepare_text_updates(&batch)? {
+                self.apply_text_updates(updates, text, batch.revision);
+                return Ok(true);
+            }
         }
         if let Some(candidate) = self.prepare_commit(batch)? {
             *self = candidate;
@@ -216,14 +235,15 @@ impl HeadlessRoot {
     // Text/label replacements preserve topology, capability kind, focus eligibility,
     // popover anchors and grid metadata. Validate the complete batch and final text
     // budget before touching live nodes; all other operations use the full path.
-    fn commit_text_updates(&mut self, batch: &CommitBatch) -> Result<bool, BackendError> {
+    fn prepare_text_updates(&self, batch: &CommitBatch) -> Result<Option<(BTreeMap<NodeId, NodeDescriptor>, usize)>, BackendError> {
+        self.validate_batch_revision(batch)?;
         let mut updates = BTreeMap::new();
         for operation in &batch.operations {
             let Operation::Update { node, descriptor } = operation else {
-                return Ok(false);
+                return Ok(None);
             };
             let Some(current) = self.nodes.get(node) else {
-                return Ok(false);
+                return Ok(None);
             };
             let same_kind = match (&current.descriptor.content, &descriptor.content) {
                 (NodeContent::Text(_), NodeContent::Text(_)) => true,
@@ -235,6 +255,11 @@ impl HeadlessRoot {
             };
             if !same_kind
                 || !current.children.is_empty()
+                || current.descriptor.interaction != descriptor.interaction
+                || current.descriptor.accessibility != descriptor.accessibility
+                || current.descriptor.accessibility_relations != descriptor.accessibility_relations
+                || current.descriptor.keyboard != descriptor.keyboard
+                || current.descriptor.navigation_keys != descriptor.navigation_keys
                 || current.descriptor.frame != descriptor.frame
                 || current.descriptor.style != descriptor.style
                 || current.descriptor.accessible_name != descriptor.accessible_name
@@ -243,9 +268,9 @@ impl HeadlessRoot {
                 || current.descriptor.accessible_selected != descriptor.accessible_selected
                 || current.descriptor.accessible_expanded != descriptor.accessible_expanded
             {
-                return Ok(false);
+                return Ok(None);
             }
-            updates.insert(*node, descriptor);
+            updates.insert(*node, descriptor.clone());
         }
         fn text_bytes(descriptor: &NodeDescriptor) -> usize {
             match &descriptor.content {
@@ -264,15 +289,18 @@ impl HeadlessRoot {
                 .filter(|bytes| *bytes <= self.limits.text_bytes)
                 .ok_or(BackendError::ResourceLimit(ResourceKind::TextBytes))?;
         }
+        Ok(Some((updates, text)))
+    }
+
+    fn apply_text_updates(&mut self, updates: BTreeMap<NodeId, NodeDescriptor>, text: usize, revision: u64) {
         for (node, descriptor) in updates {
             self.nodes
                 .get_mut(&node)
                 .expect("validated node")
-                .descriptor = descriptor.clone();
+                .descriptor = descriptor;
         }
         self.usage.text_bytes = text;
-        self.revision = batch.revision;
-        Ok(true)
+        self.revision = revision;
     }
 
     pub(crate) fn prepare_commit(&self, batch: CommitBatch) -> Result<Option<Self>, BackendError> {
@@ -355,13 +383,13 @@ impl HeadlessRoot {
                 index,
                 descriptor,
             } => {
-                if !descriptor.content.is_valid() {
+                if !descriptor.accessibility.is_valid() || !descriptor.content.is_valid() || !descriptor.keyboard.is_valid() || !descriptor.interaction.is_valid() {
                     return Err(BackendError::InvalidContent);
                 }
                 if !descriptor.style.is_valid() {
                     return Err(BackendError::InvalidStyle);
                 }
-                if !self.capabilities.supports(&descriptor.content) {
+                if !self.capabilities.supports_descriptor(&descriptor) {
                     return Err(BackendError::Unsupported(descriptor.content.kind()));
                 }
                 if node.root != self.id() {
@@ -400,13 +428,13 @@ impl HeadlessRoot {
                 );
             }
             Operation::Update { node, descriptor } => {
-                if !descriptor.content.is_valid() {
+                if !descriptor.accessibility.is_valid() || !descriptor.content.is_valid() || !descriptor.keyboard.is_valid() || !descriptor.interaction.is_valid() {
                     return Err(BackendError::InvalidContent);
                 }
                 if !descriptor.style.is_valid() {
                     return Err(BackendError::InvalidStyle);
                 }
-                if !self.capabilities.supports(&descriptor.content) {
+                if !self.capabilities.supports_descriptor(&descriptor) {
                     return Err(BackendError::Unsupported(descriptor.content.kind()));
                 }
                 if !descriptor.frame.is_valid() {
@@ -509,15 +537,7 @@ impl HeadlessRoot {
     fn can_focus(&self, node: NodeId) -> bool {
         self.event_visible(node)
             && self.nodes.get(&node).is_some_and(|node| {
-                matches!(
-                    node.descriptor.content,
-                    NodeContent::Button { enabled: true, .. }
-                        | NodeContent::Input { enabled: true, .. }
-                        | NodeContent::Textarea { enabled: true, .. }
-                        | NodeContent::Checkbox { enabled: true, .. }
-                        | NodeContent::Switch { enabled: true, .. }
-                        | NodeContent::Select { enabled: true, .. }
-                )
+                node.descriptor.can_focus()
             })
     }
 
@@ -532,12 +552,17 @@ impl HeadlessRoot {
             return Err(BackendError::UnknownNode(event.node));
         }
         if !self.event_visible(event.node)
+            && !matches!(&event.payload, EventPayload::Interaction(value)
+                if value.phase == presentation::interaction::InteractionPhase::Cancelled)
             && !matches!(
                 &event.payload,
                 EventPayload::Drag {
                     phase: DragPhase::Cancelled,
                     ..
                 } | EventPayload::Blur
+                    | EventPayload::ImageLoad(_)
+                    | EventPayload::Hosted { .. }
+                    | EventPayload::PopoverLifecycle { .. }
             )
         {
             return Err(BackendError::InvalidEvent);
@@ -550,11 +575,79 @@ impl HeadlessRoot {
         {
             return Err(BackendError::UnsupportedFocus);
         }
+        if matches!(event.payload, EventPayload::AccessibilityAction { .. }) {
+            let mut ancestor = Some(event.node);
+            while let Some(id) = ancestor {
+                let current = self.nodes.get(&id).ok_or(BackendError::UnknownNode(id))?;
+                if current.descriptor.accessibility.hidden { return Err(BackendError::InvalidEvent); }
+                ancestor = current.parent;
+            }
+        }
+        if matches!(&event.payload, EventPayload::FileDrop(_)) || matches!(&event.payload, EventPayload::Interaction(value)
+            if value.phase != presentation::interaction::InteractionPhase::Cancelled) {
+            let mut ancestor = Some(event.node);
+            while let Some(id) = ancestor {
+                let current = self.nodes.get(&id).ok_or(BackendError::UnknownNode(id))?;
+                if current.descriptor.interaction.pointer_events == presentation::interaction::PointerEvents::None {
+                    return Err(BackendError::InvalidEvent);
+                }
+                ancestor = current.parent;
+            }
+        }
+        // Native hosts bubble keyboard events from the focused descendant. A sibling
+        // or unrelated scope must never receive those events.
+        let keyboard_target = if matches!(event.payload, EventPayload::Key(_) | EventPayload::Shortcut { .. }) {
+            let mut cursor = self.focus;
+            let mut found = false;
+            while let Some(id) = cursor {
+                if id == event.node { found = true; break; }
+                cursor = self.nodes.get(&id).and_then(|node| node.parent);
+            }
+            found
+        } else { false };
         let node = self
             .nodes
             .get_mut(&event.node)
             .ok_or(BackendError::UnknownNode(event.node))?;
         match (&node.descriptor.content, &event.payload) {
+            (_, EventPayload::AccessibilityAction { id, value })
+                if node.descriptor.accepts_accessibility_action(id, *value) => {},
+            (_, EventPayload::FileDrop(drop)) if node.descriptor.accepts_interaction()
+                && node.descriptor.interaction.file_drop
+                && node.descriptor.interaction.pointer_events == presentation::interaction::PointerEvents::Auto
+                && drop.is_valid() => {}
+            (_, EventPayload::Interaction(interaction)) if node.descriptor.accepts_interaction()
+                && node.descriptor.interaction.accepts(interaction) => {}
+            (_, EventPayload::Key(key)) if keyboard_target
+                && node.descriptor.accepts_keyboard() && node.descriptor.keyboard.accepts(key) => {}
+            (_, EventPayload::Shortcut { id }) if keyboard_target
+                && node.descriptor.accepts_keyboard()
+                && node.descriptor.keyboard.shortcuts.iter().any(|shortcut| shortcut.id == *id) => {}
+            (NodeContent::Container | NodeContent::Text { .. } | NodeContent::Image { .. }, EventPayload::Focus | EventPayload::FocusVisible)
+                if node.descriptor.can_focus() => {
+                self.focus = Some(event.node);
+                self.focus_visible = matches!(event.payload, EventPayload::FocusVisible).then_some(event.node);
+            }
+            (NodeContent::Container | NodeContent::Text { .. } | NodeContent::Image { .. }, EventPayload::Blur)
+                if node.descriptor.can_focus() => {
+                if self.focus == Some(event.node) { self.focus = None; self.focus_visible = None; }
+            }
+            (NodeContent::Hosted { specification }, EventPayload::Hosted { event, data })
+                if jadix_core::hosted::HostedContent::from_json(specification)
+                    .is_ok_and(|content| content.accepts_event(event, data)) => {}
+            (NodeContent::Image { .. }, EventPayload::ImageLoad(result))
+                if match result {
+                    presentation::ImageLoadEvent::Progress { loaded, total } => {
+                        *loaded > 0 && (*total == 0 || loaded <= total)
+                    }
+                    presentation::ImageLoadEvent::Loaded { width, height } => {
+                        *width > 0 && *height > 0
+                    }
+                    presentation::ImageLoadEvent::Failed { message } => {
+                        !message.is_empty() && message.len() <= 1024
+                    }
+                    _ => true,
+                } => {}
             (
                 NodeContent::Button { .. }
                 | NodeContent::Input { .. }
@@ -582,7 +675,9 @@ impl HeadlessRoot {
                         _ => node.descriptor.accessible_selected.is_some(),
                     } => {}
             (NodeContent::Button { enabled: true, .. }, EventPayload::Navigate { .. }) => {}
-            (NodeContent::Input { enabled: true, .. }, EventPayload::Navigate { .. }) => {}
+            (NodeContent::Input { enabled: true, .. }, EventPayload::Navigate { key, shift: false, control: false })
+                if node.descriptor.navigation_keys.contains(key)
+                    && !node.composing => {}
             (
                 NodeContent::Button { .. },
                 EventPayload::Drag {
@@ -600,13 +695,26 @@ impl HeadlessRoot {
             ) if screen_position
                 .iter()
                 .all(|value| value.is_finite() && value.abs() <= 1_000_000.0) => {}
+            (NodeContent::Popover { open: true, .. }, EventPayload::PopoverCancel { .. }) => {}
+            (NodeContent::Popover { open, .. }, EventPayload::PopoverLifecycle { open: observed })
+                if open == observed => {}
+            (NodeContent::Popover { open: true, .. }, EventPayload::PopoverPosition { position })
+                if position.is_none_or(|position| position.is_valid()) => {}
             (
                 NodeContent::Popover {
                     open: true,
-                    close_on_outside_click: close_on_overlay_click,
+                    close_on_outside_click,
                     ..
-                }
-                | NodeContent::Dialog {
+                },
+                EventPayload::Dismiss { backdrop, revision },
+            ) if *revision > node.edit_revision
+                && (!*backdrop || *close_on_outside_click)
+                && (*backdrop || node.descriptor.style.popover_close_on_escape != Some(false)) =>
+            {
+                node.edit_revision = *revision;
+            }
+            (
+                NodeContent::Dialog {
                     open: true,
                     close_on_overlay_click,
                     ..
@@ -616,6 +724,8 @@ impl HeadlessRoot {
                 node.edit_revision = *revision;
             }
             (NodeContent::Button { enabled: true, .. }, EventPayload::Activate) => {}
+            (_, EventPayload::Hover { .. }) if node.descriptor.accepts_interaction() => {}
+            (NodeContent::Button { enabled: true, .. }, EventPayload::PointerMove { x, y }) if x.is_finite() && y.is_finite() => {}
             (
                 NodeContent::Input { enabled: true, .. }
                 | NodeContent::Textarea { enabled: true, .. },
@@ -636,6 +746,15 @@ impl HeadlessRoot {
                 self.focus_visible =
                     matches!(event.payload, EventPayload::FocusVisible).then_some(event.node);
             }
+            (NodeContent::Scroll, EventPayload::ScrollActivity(activity))
+                if activity.is_valid(node.descriptor.style.scroll_refresh) => {}
+            (NodeContent::Scroll, EventPayload::ScrollViewport { x, y, width, height })
+                if [x, y, width, height].iter().all(|v| v.is_finite())
+                    && *width >= 0.0 && *height >= 0.0 => {}
+            (NodeContent::Scroll, EventPayload::ScrollZoom { scale, x, y, width, height })
+                if [scale, x, y, width, height].iter().all(|v| v.is_finite())
+                    && *width >= 0.0 && *height >= 0.0
+                    && node.descriptor.style.scroll_zoom.is_some_and(|policy| *scale >= policy.min && *scale <= policy.max) => {}
             (NodeContent::Scroll, EventPayload::Scroll { x, y })
                 if x.is_finite() && y.is_finite() => {}
             (NodeContent::Scroll, EventPayload::Wheel { delta_x, delta_y })
@@ -734,3 +853,9 @@ impl HeadlessRoot {
     }
 }
 pub mod checkpoint;
+
+#[cfg(feature = "apple")]
+mod apple_application;
+
+#[doc(hidden)]
+pub use log as __appkit_log;

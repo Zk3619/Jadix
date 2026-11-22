@@ -56,7 +56,7 @@ impl Provider {
         Ok(state)
     }
 
-    fn headers(&self, matching_column: Option<u32>) -> Result<*mut SAFEARRAY> {
+    fn headers(&self, matching_columns: Option<(u32, u32)>) -> Result<*mut SAFEARRAY> {
         let state = self.state()?;
         if !matches!(state.role, AccessibleRole::Grid { .. }) {
             return Err(unavailable());
@@ -64,13 +64,20 @@ impl Provider {
         let mut headers = Vec::new();
         for item in state.items.iter().filter_map(Weak::upgrade) {
             let child = item.lock().map_err(|_| unavailable())?;
-            if let AccessibleRole::GridColumnHeader { column } = child.role {
+            if let AccessibleRole::GridColumnHeader {
+                column,
+                column_span,
+            } = child.role
+            {
                 if child.live
                     && child
                         .parent
                         .as_ref()
                         .is_some_and(|parent| Arc::ptr_eq(parent, &self.state))
-                    && matching_column.is_none_or(|expected| column == expected)
+                    && matching_columns.is_none_or(|(first, span)| {
+                        column < first.saturating_add(span)
+                            && first < column.saturating_add(column_span)
+                    })
                 {
                     headers.push((column, item.clone()));
                 }
@@ -178,20 +185,27 @@ impl IGridProvider_Impl for Provider_Impl {
             return Err(Error::from_hresult(HRESULT(0x80070057u32 as i32)));
         }
         for item in state.items.iter().filter_map(Weak::upgrade) {
-            let matches = {
-                let child = item.lock().map_err(|_| unavailable())?;
-                child.live
-                    && child
-                        .parent
-                        .as_ref()
-                        .is_some_and(|parent| Arc::ptr_eq(parent, &self.state))
-                    && child.role
-                        == AccessibleRole::GridCell {
-                            row: row as u32,
-                            column: column as u32,
-                        }
+            let child = item.lock().map_err(|_| unavailable())?;
+            let AccessibleRole::GridCell {
+                row: first_row,
+                column: first_column,
+                row_span,
+                column_span,
+            } = child.role
+            else {
+                continue;
             };
+            let matches = child.live
+                && child
+                    .parent
+                    .as_ref()
+                    .is_some_and(|parent| Arc::ptr_eq(parent, &self.state))
+                && first_row <= row as u32
+                && (row as u32) < first_row.saturating_add(row_span)
+                && first_column <= column as u32
+                && (column as u32) < first_column.saturating_add(column_span);
             if matches {
+                drop(child);
                 return Ok(Provider { state: item }.into());
             }
         }
@@ -230,14 +244,14 @@ impl IGridItemProvider_Impl for Provider_Impl {
 
     fn RowSpan(&self) -> Result<i32> {
         match self.state()?.role {
-            AccessibleRole::GridCell { .. } => Ok(1),
+            AccessibleRole::GridCell { row_span, .. } => Ok(row_span as i32),
             _ => Err(unavailable()),
         }
     }
 
     fn ColumnSpan(&self) -> Result<i32> {
         match self.state()?.role {
-            AccessibleRole::GridCell { .. } => Ok(1),
+            AccessibleRole::GridCell { column_span, .. } => Ok(column_span as i32),
             _ => Err(unavailable()),
         }
     }
@@ -277,14 +291,18 @@ impl ITableItemProvider_Impl for Provider_Impl {
     }
 
     fn GetColumnHeaderItems(&self) -> Result<*mut SAFEARRAY> {
-        let column = match self.state()?.role {
-            AccessibleRole::GridCell { column, .. } => column,
+        let (column, column_span) = match self.state()?.role {
+            AccessibleRole::GridCell {
+                column,
+                column_span,
+                ..
+            } => (column, column_span),
             _ => return Err(unavailable()),
         };
         Provider {
             state: self.table_owner()?,
         }
-        .headers(Some(column))
+        .headers(Some((column, column_span)))
     }
 }
 
@@ -368,11 +386,20 @@ impl GridAccessibility {
                 AccessibleRole::GridCell {
                     row: old_row,
                     column: old_column,
+                    row_span: old_row_span,
+                    column_span: old_column_span,
                 },
-                AccessibleRole::GridCell { row, column },
+                AccessibleRole::GridCell {
+                    row,
+                    column,
+                    row_span,
+                    column_span,
+                },
             ) => vec![
                 (UIA_GridItemRowPropertyId, old_row, row),
                 (UIA_GridItemColumnPropertyId, old_column, column),
+                (UIA_GridItemRowSpanPropertyId, old_row_span, row_span),
+                (UIA_GridItemColumnSpanPropertyId, old_column_span, column_span),
             ],
             _ => Vec::new(),
         };
@@ -507,7 +534,12 @@ mod tests {
             rows: 3,
             columns: 4,
         });
-        let cell = state(AccessibleRole::GridCell { row: 1, column: 2 });
+        let cell = state(AccessibleRole::GridCell {
+            row: 1,
+            column: 2,
+            row_span: 2,
+            column_span: 2,
+        });
         cell.lock().unwrap().parent = Some(owner.clone());
         owner.lock().unwrap().items.push(Arc::downgrade(&cell));
         let raw: IRawElementProviderSimple = Provider {
@@ -516,16 +548,18 @@ mod tests {
         .into();
         let grid: IGridProvider = raw.cast().unwrap();
         let table: ITableProvider = raw.cast().unwrap();
-        let item: IGridItemProvider = unsafe { grid.GetItem(1, 2) }.unwrap().cast().unwrap();
+        let item: IGridItemProvider = unsafe { grid.GetItem(2, 3) }.unwrap().cast().unwrap();
         let table_item: ITableItemProvider = item.cast().unwrap();
         assert_eq!(unsafe { item.Row() }.unwrap(), 1);
         assert_eq!(unsafe { item.Column() }.unwrap(), 2);
+        assert_eq!(unsafe { item.RowSpan() }.unwrap(), 2);
+        assert_eq!(unsafe { item.ColumnSpan() }.unwrap(), 2);
         assert_eq!(
             unsafe { grid.GetItem(-1, 2) }.unwrap_err().code(),
             HRESULT(0x80070057u32 as i32)
         );
         assert_eq!(
-            unsafe { grid.GetItem(2, 3) }.unwrap_err().code(),
+            unsafe { grid.GetItem(0, 3) }.unwrap_err().code(),
             unavailable().code()
         );
         cell.lock().unwrap().live = false;

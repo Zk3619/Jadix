@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Intent;
 import android.os.Bundle;
-import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import org.json.JSONObject;
@@ -49,7 +48,7 @@ public final class NativeAppChecks extends Instrumentation {
                     NativeView view = selected.content;
                     String token = view.token();
                     EditText editor = originalEditor;
-                    ((Button) view.findKind("button")).performClick();
+                    require(view.findKind("button").performClick(), "native button activation handled");
                     ((CheckBox) view.findKind("checkbox")).performClick();
                     JSONObject state = new JSONObject(view.state());
                     require(state.getInt("count") == 1 && state.getString("value").equals("独立工程😀")

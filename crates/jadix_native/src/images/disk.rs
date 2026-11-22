@@ -23,7 +23,7 @@ pub struct ImageDiskCache {
 }
 
 impl ImageDiskCache {
-    pub(super) fn validate(&self) -> Result<(), ImageError> {
+    pub(crate) fn validate(&self) -> Result<(), ImageError> {
         if !self.directory.is_absolute() || self.directory.as_os_str().len() > 4096 {
             return Err(ImageError::Source);
         }
@@ -104,14 +104,24 @@ impl Cache {
         {
             return Err(ImageError::Source);
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700)).map_err(io)?;
+        }
         let lock_path = directory.join(".lock");
         if let Ok(metadata) = std::fs::symlink_metadata(&lock_path) {
             if !metadata.file_type().is_file() {
                 return Err(ImageError::Source);
             }
         }
-        let lock = OpenOptions::new()
-            .create(true)
+        let mut options = OpenOptions::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let lock = options.create(true)
             .read(true)
             .write(true)
             .truncate(false)
@@ -242,7 +252,13 @@ impl Cache {
         record.extend_from_slice(bytes);
         let pending = self.directory.join(".pending");
         let result = (|| {
-            let mut file = File::create_new(&pending).map_err(io)?;
+            let mut options = OpenOptions::new();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.write(true).create_new(true).open(&pending).map_err(io)?;
             file.write_all(&record).map_err(io)?;
             file.sync_data().map_err(io)?;
             drop(file);

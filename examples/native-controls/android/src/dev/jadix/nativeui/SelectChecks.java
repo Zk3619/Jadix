@@ -43,12 +43,13 @@ public final class SelectChecks extends Instrumentation {
         return null;
     }
     private Spinner choose() { return select(activity.content, "Choose fruit"); }
-    private Button button(View view, String label) {
+    private View button(View view, String label) {
         if (view instanceof Button && label.contentEquals(((Button) view).getText())) return (Button) view;
+        if (view instanceof NativeContentButton && label.contentEquals(view.getContentDescription())) return view;
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             for (int index = 0; index < group.getChildCount(); index++) {
-                Button found = button(group.getChildAt(index), label);
+                View found = button(group.getChildAt(index), label);
                 if (found != null) return found;
             }
         }

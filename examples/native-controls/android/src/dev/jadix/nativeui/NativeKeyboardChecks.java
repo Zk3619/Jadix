@@ -24,8 +24,10 @@ public final class NativeKeyboardChecks extends Instrumentation {
     private String token;
     private int expectedRows;
     private final JSONArray phases = new JSONArray();
+    private final java.util.HashMap<String,View> retainedEditors = new java.util.HashMap<>();
     private int keyEvents;
     private String phaseName;
+    private final ArrayList<String> focusTrace = new ArrayList<>();
 
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
@@ -50,6 +52,7 @@ public final class NativeKeyboardChecks extends Instrumentation {
     private View named(View view, String label) {
         if (view instanceof EditText && label.contentEquals(((EditText) view).getHint())) return view;
         if (view instanceof Button && label.contentEquals(((Button) view).getText())) return view;
+        if (view instanceof NativeContentButton && label.contentEquals(view.getContentDescription())) return view;
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             for (int index = 0; index < group.getChildCount(); index++) {
@@ -60,14 +63,6 @@ public final class NativeKeyboardChecks extends Instrumentation {
         return null;
     }
 
-    private int rows(View view) {
-        int count = view instanceof TextView && ((TextView) view).getText().toString().startsWith("Row ") ? 1 : 0;
-        if (view instanceof ViewGroup) {
-            ViewGroup group = (ViewGroup) view;
-            for (int index = 0; index < group.getChildCount(); index++) count += rows(group.getChildAt(index));
-        }
-        return count;
-    }
 
     private void tab(boolean reverse) {
         long now = SystemClock.uptimeMillis();
@@ -78,7 +73,7 @@ public final class NativeKeyboardChecks extends Instrumentation {
         waitForIdleSync();
     }
 
-    private JSONObject focused(MainActivity activity, View expected, String label) throws Exception {
+    private JSONObject focused(MainActivity activity, String id, String label) throws Exception {
         long deadline = SystemClock.uptimeMillis() + 5000;
         JSONObject[] result = new JSONObject[1];
         String[] diagnostic = new String[1];
@@ -87,22 +82,25 @@ public final class NativeKeyboardChecks extends Instrumentation {
             result[0] = null;
             ui(() -> {
                 View actual = activity.getWindow().getDecorView().findFocus();
+                View current = activity.content.nodeView(id);
+                if (current == null) { diagnostic[0] = "Logical focus target is not mounted: " + id; return; }
+                if (retainedEditors.containsKey(id)) require(current == retainedEditors.get(id), "Navigation replaced a retained editor");
                 Rect fullDiagnostic = new Rect(), visibleDiagnostic = new Rect();
-                expected.getGlobalVisibleRect(visibleDiagnostic);
+                current.getGlobalVisibleRect(visibleDiagnostic);
                 int[] diagnosticLocation = new int[2];
-                expected.getLocationOnScreen(diagnosticLocation);
-                fullDiagnostic.set(diagnosticLocation[0], diagnosticLocation[1], diagnosticLocation[0] + expected.getWidth(), diagnosticLocation[1] + expected.getHeight());
-                diagnostic[0] = "phase=" + phaseName + "; same=" + (actual == expected) + "; window=" + expected.hasWindowFocus() + "; attached=" + expected.isAttachedToWindow() + "; actual=" + (actual == null ? "null" : actual.getClass().getSimpleName() + ":" + (actual instanceof EditText ? ((EditText) actual).getHint() : actual instanceof Button ? ((Button) actual).getText() : actual.getTag())) + "; full=" + fullDiagnostic + "; visible=" + visibleDiagnostic;
-                if (activity.getWindow().getDecorView().findFocus() != expected || !expected.hasWindowFocus()) return;
+                current.getLocationOnScreen(diagnosticLocation);
+                fullDiagnostic.set(diagnosticLocation[0], diagnosticLocation[1], diagnosticLocation[0] + current.getWidth(), diagnosticLocation[1] + current.getHeight());
+                diagnostic[0] = "phase=" + phaseName + "; same=" + (actual == current) + "; window=" + current.hasWindowFocus() + "; attached=" + current.isAttachedToWindow() + "; actual=" + (actual == null ? "null" : actual.getClass().getSimpleName() + ":" + (actual instanceof EditText ? ((EditText) actual).getHint() : actual instanceof Button ? ((Button) actual).getText() : actual.getTag())) + "; full=" + fullDiagnostic + "; visible=" + visibleDiagnostic;
+                if (activity.getWindow().getDecorView().findFocus() != current || !current.hasWindowFocus()) return;
                 Rect full = new Rect(), visible = new Rect();
-                full.set(0, 0, expected.getWidth(), expected.getHeight());
+                full.set(0, 0, current.getWidth(), current.getHeight());
                 int[] location = new int[2];
-                expected.getLocationOnScreen(location);
+                current.getLocationOnScreen(location);
                 full.offset(location[0], location[1]);
-                if (!expected.getGlobalVisibleRect(visible) || !full.equals(visible)) return;
+                if (!current.getGlobalVisibleRect(visible) || !full.equals(visible)) return;
                 try {
                     result[0] = new JSONObject().put("control", label).put("fully_visible", true)
-                        .put("content_scroll", new JSONArray(new int[] {expected.getScrollX(), expected.getScrollY()}))
+                        .put("content_scroll", new JSONArray(new int[] {current.getScrollX(), current.getScrollY()}))
                         .put("bounds", new JSONArray(new int[] {full.left, full.top, full.right, full.bottom}));
                 } catch (Exception error) { throw new AssertionError(error); }
             });
@@ -113,29 +111,45 @@ public final class NativeKeyboardChecks extends Instrumentation {
             }
             SystemClock.sleep(25);
         }
-        throw new AssertionError("Keyboard focus/order or complete visibility failed at " + label + "; " + diagnostic[0]);
+        throw new AssertionError("Keyboard focus/order or complete visibility failed at " + label + "; " + diagnostic[0] + "; transitions=" + focusTrace);
     }
 
     private void phase(MainActivity activity, String name) throws Exception {
         phaseName = name;
         String[] labels = {"Accept", "Airplane mode", "Password / 密码", "Multiline / 多行", "Open editor", "Continue", "Name / 中文", "Reset"};
-        ArrayList<View> controls = new ArrayList<>();
+        ArrayList<String> controls = new ArrayList<>();
         String[] before = new String[1];
         ui(() -> {
-            require(rows(activity.content) == expectedRows, "Unexpected retained row count");
+            NativeChecks.checkRows(activity.content, expectedRows);
             before[0] = activity.content.state();
-            for (String label : labels) {
-                View control = named(activity.content, label);
-                require(control != null && control.isEnabled(), "Missing enabled native control: " + label);
-                if (control instanceof EditText) ((EditText) control).setShowSoftInputOnFocus(false);
-                controls.add(control);
-            }
+            try {
+                java.lang.reflect.Field nodesField = NativeView.class.getDeclaredField("orderedNodes");
+                nodesField.setAccessible(true);
+                JSONArray nodes = (JSONArray) nodesField.get(activity.content);
+                for (String label : labels) {
+                    JSONObject descriptor = null;
+                    for (int index = 0; index < nodes.length(); index++) {
+                        JSONObject node = nodes.getJSONObject(index);
+                        if (label.equals(node.optString("name")) || label.equals(node.optString("placeholder")) || label.equals(node.optString("text"))) {
+                            descriptor = node; break;
+                        }
+                    }
+                    require(descriptor != null && descriptor.optBoolean("enabled"), "Missing enabled logical control: " + label);
+                    String id = descriptor.getString("id");
+                    View control = activity.content.nodeView(id);
+                    if (control instanceof EditText) {
+                        ((EditText) control).setShowSoftInputOnFocus(false);
+                        retainedEditors.put(id, control);
+                    }
+                    controls.add(id);
+                }
+            } catch (Exception error) { throw new AssertionError(error); }
             ((android.view.inputmethod.InputMethodManager) activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.content.getWindowToken(), 0);
         });
         setInTouchMode(false);
         sendKeyDownUpSync(KeyEvent.KEYCODE_TAB);
         waitForIdleSync();
-        ui(() -> require(controls.get(0).requestFocus(), "Initial keyboard focus request failed; focusable=" + controls.get(0).isFocusable() + "; touch=" + controls.get(0).isInTouchMode() + "; visible=" + controls.get(0).isShown()));
+        ui(() -> require(activity.content.nodeView(controls.get(0)).requestFocus(), "Initial keyboard focus request failed; focusable=" + activity.content.nodeView(controls.get(0)).isFocusable() + "; touch=" + activity.content.nodeView(controls.get(0)).isInTouchMode() + "; visible=" + activity.content.nodeView(controls.get(0)).isShown()));
         JSONArray forward = new JSONArray(), backward = new JSONArray();
         forward.put(focused(activity, controls.get(0), labels[0]));
         for (int index = 1; index < controls.size(); index++) {
@@ -149,8 +163,12 @@ public final class NativeKeyboardChecks extends Instrumentation {
         }
         ui(() -> {
             require(before[0].equals(activity.content.state()), "Tab navigation changed Rust business state");
-            require(activity.content.takeError() == null, "Native navigation callback error");
-            for (int index = 0; index < labels.length; index++) require(named(activity.content, labels[index]) == controls.get(index), "Navigation replaced a native control");
+            String callbackError = activity.content.takeError();
+            require(callbackError == null, "Native navigation callback error: " + callbackError);
+            for (String id : controls) {
+                require(activity.content.descriptor(id) != null, "Navigation removed a logical control");
+                if (retainedEditors.containsKey(id)) require(activity.content.nodeView(id) == retainedEditors.get(id), "Navigation replaced a retained editor");
+            }
         });
         phases.put(new JSONObject().put("name", name).put("forward", forward).put("backward", backward));
     }
@@ -172,6 +190,12 @@ public final class NativeKeyboardChecks extends Instrumentation {
             }
             require(ready.get(), "Native window not ready");
             ui(() -> {
+                current.content.getViewTreeObserver().addOnGlobalFocusChangeListener((oldFocus, newFocus) -> {
+                    if (focusTrace.size() >= 16) focusTrace.remove(0);
+                    String transition = phaseName + ":" + (oldFocus == null ? null : oldFocus.getTag()) + " -> " + (newFocus == null ? null : newFocus.getTag());
+                    if (newFocus == null) transition += " " + android.util.Log.getStackTraceString(new Throwable("focus cleared"));
+                    focusTrace.add(transition);
+                });
                 current.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM);
                 current.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE | android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
                 try {

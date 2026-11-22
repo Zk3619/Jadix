@@ -1,5 +1,54 @@
 # Native controls
 
+On macOS 14+, install the host architecture's Rust target, the Xcode Command
+Line Tools, and Python 3. Build the AppKit example with
+`bash examples/native-controls/build-macos.sh`, then launch
+`target/native-controls-macos/JadixNativeControls`. Pass an output directory as
+the first script argument and optionally `extended`, `popover` or `selection`
+as the second. Choose File > New Window (⌘N) to mount another Rust root in a
+resizable AppKit window. Each window owns its root and closes it independently.
+Standard Edit commands target the active window through the responder chain.
+File > Show Context Menu opens a menu anchored to the active Rust root.
+Pass `--rust-menu` to install a Rust-defined application menu for each mounted
+window. This menu includes localized Quit and Edit commands, an Inspect
+command dispatched to Rust, and a Window menu managed by AppKit.
+In the declaring window, choose Actions > Toggle Declared Window to mount or
+dispose the Rust scope that owns its child window.
+Launch with `--confirm-exit` to show a native confirmation for Quit or a
+user-initiated close of the primary window. Approving either request closes
+all open windows and releases their Rust roots. Other windows can still close
+independently.
+The application delegate runs shared `on_app_quit` cleanup for up to 200 ms
+after exit is approved. Closing the last window captures its cleanup handlers
+before disposing its Rust root.
+The same window registry handles `AppKitHost::request_window` from Rust. Opening
+an existing ID raises it. A new ID mounts an independent copy of the example.
+Open requests support normal, dialog, panel, popup and overlay windows. Dialogs
+require an existing parent ID. Popups close on Escape or blur by default.
+Open and update requests can set title, resizability, title bar appearance,
+content size, and minimum and maximum content size in points.
+Use `close_on_press`, `close_on_escape` and `close_on_blur` on
+`AppKitWindowAttributes` to set close policies. Rust subscribers receive the
+user close request even when `close_on_press` keeps the window open. Losing
+focus to an owned window keeps its parent open.
+Set `dismiss_on_close` on a secondary window to keep its root mounted after a
+user close, Escape, or blur. Its owned windows also hide and receive a
+`ParentClose` cause. Showing the same ID restores the mounted window. An
+explicit `Close` request disposes the retained window.
+Mode requests for normal windows support restore, maximize, minimize, and
+system full screen. A request received during a full-screen transition is
+applied once the transition finishes, with the newest pending mode taking priority.
+
+An AppKit bundle can declare custom URL schemes under `CFBundleURLTypes`
+and Handoff activity types under `NSUserActivityTypes`. The example routes
+opened and restored custom URLs to the active Jadix window and saves its
+current address on that window's Rust root.
+
+The `popover` product's profile editor demonstrates native RSX
+`controlledOpen` and `onOpenChange`. Its callback applies open and close
+requests to the signal. The same callback receives a
+`PopoverOpenChangeReason` for a trigger press, outside press, or allowed Escape.
+
 `cargo run -p jadix_native_controls --features windows --bin native-radio` runs
 the portable compound RadioGroup product with real Windows radio buttons.
 Its `--probe NONCE NEW_REPORT` checks native checked state, stable control
@@ -144,7 +193,7 @@ viewport/font changes; application state and callbacks remain in Rust.
 | --- | --- | --- |
 | Android API 28+ | Java TextView/Button/EditText/ScrollView, JNI, Taffy measurement | ARM64 and x86-64 APK builds; API 28 and API 36 emulator input, dialog IME and saved-task process recovery |
 | Browser | Real HTML controls, DOM intrinsic measurement, Taffy placement | Edge 156, Firefox 157 and Playwright WebKit 27.2 controls, nested dialogs, focus, scroll, fonts and disposal; Chromium CDP IME, synthetic composition probes on other engines |
-| iOS 14+ | Swift UILabel/UIButton/UITextField/UIScrollView, C callbacks | Rust ABI tests; Swift/Xcode compilation and device accessibility remain unverified |
+| iOS 15+ | Swift UILabel/UIButton/UITextField/UIScrollView, C callbacks | Rust ABI tests; Swift/Xcode compilation and device accessibility remain unverified |
 | Windows | Win32 STATIC/BUTTON/EDIT/COMBOBOX, retained native child windows, WIC images, modal/anchored portals and OS text measurement | Local shared-page, Unicode/undo, incremental/queue/isolation, embedded child roots, image recovery, nested modal focus and anchored popover probes; physical IME, screen reader and complete component support remain pending |
 | OHOS API 20+ native library / API 22 sample HAP | ArkUI NativeNode, Drawing measurement, UIAbility/NodeContent and NAPI callbacks; Tree/TreeItem role and selected-state mapping; checkbox, switch and radio checked-state mapping; expanded state exposed only as descriptive text | SDK20 ARM64/x86-64 native cross-checks compile; unsigned API22 HAP builds; mocked production C++ verifies checked/unchecked accessibility states; emulator runtime, accessibility-tree exposure and screen-reader output remain unverified; IDREF relations, Tabs and ExpandCollapse patterns are not implemented |
 
@@ -328,7 +377,7 @@ adb install target/native/android/native-controls.apk
 adb shell am start -n dev.jadix.nativeui/.MainActivity
 ```
 
-The sample APK is debuggable and signed with an output-local debug key. It also
+The sample APK targets Android API 26 and is debuggable and signed with an output-local debug key. It also
 contains `NativeChecks`, an Android instrumentation runner for input connections,
 state updates, scrolling, Activity recreation and stale-root rejection. Product
 packaging must supply its own application, signing and release policy.

@@ -42,7 +42,7 @@ mod application {
     struct App {
         root: NativeRoot<WindowsHost>,
         worker: Option<SyntaxWorker>,
-        ids: [NodeId; 11],
+        ids: [NodeId; 16],
         preview_ids: std::collections::BTreeMap<(usize, usize), NodeId>,
         document: TextDocument,
         display: String,
@@ -66,6 +66,11 @@ mod application {
         PresentationNode {
             id,
             descriptor: NodeDescriptor {
+                interaction: Default::default(),
+                keyboard: Default::default(),
+                navigation_keys: vec![],
+                accessibility: Default::default(),
+                accessibility_relations: Default::default(),
                 content,
                 frame: Rect::default(),
                 accessible_role: None,
@@ -176,11 +181,10 @@ mod application {
                 self.ids[TOOLBAR],
                 NodeContent::Container,
                 Some(width),
-                Some(36.0),
+                None,
             );
-            toolbar.descriptor.style.axis = style::Axis::Row;
             toolbar.descriptor.style.gap = 8.0;
-            toolbar.children.push(node(
+            let mut controls = vec![node(
                 self.ids[SEARCH],
                 NodeContent::Input {
                     max_length: None,
@@ -190,31 +194,55 @@ mod application {
                     password: false,
                     revision: self.search_revision,
                 },
-                Some(160.0),
+                Some(width.min(160.0)),
                 Some(32.0),
-            ));
+            )];
             for (index, label) in [
                 (FIND, "Find next"),
                 (SAVE, "Save source"),
                 (CANCEL, "Cancel syntax"),
                 (RESET, "Reset example"),
             ] {
-                toolbar.children.push(node(
+                controls.push(node(
                     self.ids[index],
                     NodeContent::Button {
                         label: label.into(),
                         enabled: !self.composing,
                     },
-                    Some(120.0),
+                    Some(width.min(120.0)),
                     Some(32.0),
                 ));
             }
+            let mut used = 0.0;
+            for control in controls {
+                let control_width = control.descriptor.style.width.unwrap_or(0.0);
+                if toolbar.children.is_empty() || used + 8.0 + control_width > width {
+                    let mut row = node(
+                        self.ids[11 + toolbar.children.len()],
+                        NodeContent::Container,
+                        Some(width),
+                        Some(32.0),
+                    );
+                    row.descriptor.style.axis = style::Axis::Row;
+                    row.descriptor.style.gap = 8.0;
+                    toolbar.children.push(row);
+                    used = 0.0;
+                }
+                if let Some(row) = toolbar.children.last_mut() {
+                    used += control_width + if row.children.is_empty() { 0.0 } else { 8.0 };
+                    row.children.push(control);
+                }
+            }
+            let toolbar_height = toolbar.children.len() as f32 * 40.0 - 8.0;
+            toolbar.descriptor.style.height = Some(toolbar_height);
+            let status_height = if width < 400.0 { 48.0 } else { 34.0 };
+            let document_height = (self.viewport[1] - 24.0 - toolbar_height - status_height - 24.0).max(40.0);
             outer.children.push(toolbar);
             outer.children.push(node(
                 self.ids[STATUS],
                 NodeContent::Text(self.status.clone()),
                 Some(width),
-                Some(34.0),
+                Some(status_height),
             ));
             let mut editor = node(
                 self.ids[EDITOR],
@@ -226,7 +254,7 @@ mod application {
                     revision: self.revision,
                 },
                 Some(width),
-                Some((self.viewport[1] * 0.42).max(80.0)),
+                Some(document_height * 0.55),
             );
             editor.descriptor.accessible_name = Some("Rust source, native multiline editor".into());
             editor.descriptor.style.font_family = "Consolas".into();
@@ -236,7 +264,7 @@ mod application {
                 self.ids[SCROLL],
                 NodeContent::Scroll,
                 Some(width),
-                Some((self.viewport[1] * 0.35).max(40.0)),
+                Some(document_height * 0.45),
             );
             let mut preview = node(self.ids[PREVIEW], NodeContent::Container, Some(width), None);
             let mut slot = 0usize;

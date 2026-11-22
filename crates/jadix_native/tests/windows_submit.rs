@@ -38,6 +38,10 @@ fn editor(root: RootId, multiline: bool) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
         },
         children: vec![],
@@ -63,6 +67,27 @@ fn native_enter_submits_committed_single_line_edits_and_preserves_multiline_newl
     .unwrap();
     let input = root.host().control_identity(nodes[0].id).unwrap() as HWND;
     let textarea = root.host().control_identity(nodes[1].id).unwrap() as HWND;
+    // Real keyboard input sends supplementary characters as two WM_CHARs,
+    // with an EN_CHANGE notification after each UTF-16 code unit.
+    unsafe { SendMessageW(input, WM_CHAR, 0xd83d, 1); }
+    assert!(root.poll_events().unwrap().iter().all(|event|
+        !matches!(&event.payload, EventPayload::Edit { value, .. } if !value.is_empty())
+    ));
+    unsafe { SendMessageW(input, WM_CHAR, 0xde00, 1); }
+    assert!(root.poll_events().unwrap().iter().any(|event|
+        matches!(&event.payload, EventPayload::Edit { value, .. } if value == "😀")
+    ));
+    unsafe { SendMessageW(input, WM_CHAR, 1, 1); }
+    assert_eq!(root.host().selection(nodes[0].id).unwrap(), [0, 2]);
+    unsafe { SendMessageW(input, WM_CHAR, b'x' as usize, 1); }
+    assert_eq!(root.host().text(nodes[0].id).unwrap(), "x");
+    let multiline: Vec<u16> = "多行😀".encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        SetWindowTextW(textarea, multiline.as_ptr());
+        SendMessageW(textarea, WM_CHAR, 1, 1);
+    }
+    assert_eq!(root.host().selection(nodes[1].id).unwrap(), [0, 4]);
+    unsafe { SetWindowTextW(textarea, [0u16].as_ptr()); }
     assert_ne!(
         unsafe { SendMessageW(input, WM_GETDLGCODE, 13, 0) } & DLGC_WANTMESSAGE as isize,
         0

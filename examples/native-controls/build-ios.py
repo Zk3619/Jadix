@@ -10,8 +10,8 @@ import sys
 
 
 TARGETS = {
-    "aarch64-apple-ios-sim": ("iphonesimulator", "arm64-apple-ios14.0-simulator"),
-    "aarch64-apple-ios": ("iphoneos", "arm64-apple-ios14.0"),
+    "aarch64-apple-ios-sim": ("iphonesimulator", "arm64-apple-ios15.0-simulator"),
+    "aarch64-apple-ios": ("iphoneos", "arm64-apple-ios15.0"),
 }
 
 
@@ -36,12 +36,11 @@ def swift_command(root, app, library, target, sdk_path, notes, checks=False, sel
         command += ["-D", "JADIX_NATIVE_CONSISTENT_UI"]
     if checks:
         command += ["-D", "JADIX_NATIVE_CHECKS", str(root / "examples/native-controls/ios" / ("NativePopoverChecks.swift" if popover else "NativeSelectChecks.swift" if selection else "NativeChecks.swift"))]
-    command += [str(root / "crates/jadix_native/platforms/ios/JadixNativeView.swift"),
-                str(root / "crates/jadix_native/platforms/ios/NativePopover.swift")]
+    command += [str(path) for directory in ("apple", "ios") for path in sorted((root / "crates/jadix_native/platforms" / directory).glob("*.swift"))]
     if notes:
         command += [str(root / "examples/native-controls/ios/NativeNotes.swift")]
     command += [str(root / "examples/native-controls/ios/main.swift"), str(library)]
-    for framework in ["UIKit", "Foundation", "Security", "SystemConfiguration", "ImageIO"]:
+    for framework in ["UIKit", "Foundation", "Security", "SystemConfiguration", "ImageIO", "CoreText", "WebKit", "AVKit", "AVFoundation", "Speech", "MetalKit", "UserNotifications", "AuthenticationServices", "CoreImage", "UniformTypeIdentifiers"]:
         command += ["-framework", framework]
     return command + ["-lresolv", "-lc++", "-o", str(app / "JadixNative")]
 
@@ -78,7 +77,7 @@ def main():
         parser.error("iOS packaging requires macOS, Xcode and the selected Apple SDK")
     sdk, _ = TARGETS[args.target]
     environment = os.environ.copy()
-    environment["IPHONEOS_DEPLOYMENT_TARGET"] = "14.0"
+    environment["IPHONEOS_DEPLOYMENT_TARGET"] = "15.0"
 
     def run(command):
         subprocess.run([str(item) for item in command], cwd=root, env=environment, check=True)

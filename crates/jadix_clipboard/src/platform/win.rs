@@ -415,7 +415,7 @@ impl Clipboard for ClipboardContext {
 
     fn set(&self, contents: Vec<ClipboardContent>) -> Result<()> {
         let _clip = ClipboardWin::new_attempts(10)
-            .map_err(|code| format!("Open clipboard error, code = {code}"));
+            .map_err(|code| format!("Open clipboard error, code = {code}"))?;
         let res = clipboard_win::empty();
         if let Err(e) = res {
             return Err(format!("Empty clipboard error, code = {e}").into());
@@ -423,39 +423,28 @@ impl Clipboard for ClipboardContext {
         for content in contents {
             match content {
                 ClipboardContent::Text(txt) => {
-                    let res = set_string_with(txt.as_str(), options::NoClear);
-                    if res.is_err() {
-                        continue;
-                    }
+                    set_string_with(txt.as_str(), options::NoClear)
+                        .map_err(|e| format!("set text error, code = {e}"))?;
                 }
                 ClipboardContent::Html(html) => {
                     let format_uint_html = self.html_format.code();
                     let cf_html = plain_html_to_cf_html(&html);
-                    let res = set_without_clear(format_uint_html, cf_html.as_bytes());
-                    if res.is_err() {
-                        continue;
-                    }
+                    set_without_clear(format_uint_html, cf_html.as_bytes())
+                        .map_err(|e| format!("set HTML error, code = {e}"))?;
                 }
                 #[cfg(feature = "image")]
                 ClipboardContent::Image(img) => {
                     // set image will clear clipboard
-                    let res = self.set_image(img);
-                    if res.is_err() {
-                        continue;
-                    }
+                    self.set_image(img)?;
                 }
                 ClipboardContent::Rtf(_) | ClipboardContent::Other(_, _) => {
                     let format_uint = self.get_format(&content.get_format());
-                    let res = set_without_clear(format_uint, content.as_bytes());
-                    if res.is_err() {
-                        continue;
-                    }
+                    set_without_clear(format_uint, content.as_bytes())
+                        .map_err(|e| format!("set format {format_uint} error, code = {e}"))?;
                 }
                 ClipboardContent::Files(file_list) => {
-                    let res = set_file_list_with(&file_list, options::NoClear);
-                    if res.is_err() {
-                        continue;
-                    }
+                    set_file_list_with(&file_list, options::NoClear)
+                        .map_err(|e| format!("set files error, code = {e}"))?;
                 }
             }
         }

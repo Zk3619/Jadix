@@ -36,6 +36,7 @@ public final class PopoverChecks extends Instrumentation {
     private JSONObject state() throws Exception { return new JSONObject(activity.content.state()); }
     private View named(View view, String label) {
         if (view instanceof Button && label.contentEquals(((Button)view).getText())) return view;
+        if (view instanceof NativeContentButton && label.contentEquals(view.getContentDescription())) return view;
         if (view instanceof EditText && label.contentEquals(((EditText)view).getHint())) return view;
         if (view instanceof ViewGroup) for (int index=0;index<((ViewGroup)view).getChildCount();index++) {
             View found = named(((ViewGroup)view).getChildAt(index), label);
@@ -124,7 +125,7 @@ public final class PopoverChecks extends Instrumentation {
         try {
             activity=(MainActivity)startActivitySync(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_CLEAR_TASK));
             waitForIdleSync();
-            ui(() -> require(popup()==null && rootControl("Edit profile") instanceof Button,"closed native button page"));
+            ui(() -> require(popup()==null && rootControl("Edit profile") != null,"closed native button page"));
             checks.add("initial controlled page uses native buttons and has no open PopupWindow");
             openProfile();
             AtomicReference<PopupWindow> retainedPopup=new AtomicReference<>();

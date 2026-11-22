@@ -54,6 +54,28 @@ impl ResourceUsage {
         Ok(())
     }
 
+    fn add_image(&mut self, source: &str, limits: ResourceLimits) -> Result<(), BackendError> {
+        self.image_bytes = self
+            .image_bytes
+            .checked_add(source.len())
+            .filter(|bytes| *bytes <= limits.image_bytes)
+            .ok_or(BackendError::ResourceLimit(ResourceKind::ImageBytes))?;
+        if let Some([width, height]) = NodeContent::image_source_dimensions(source) {
+            self.image_pixels = self
+                .image_pixels
+                .checked_add(u64::from(width) * u64::from(height))
+                .filter(|pixels| *pixels <= limits.image_pixels)
+                .ok_or(BackendError::ResourceLimit(ResourceKind::ImagePixels))?;
+        } else if !NodeContent::is_inline_raster_source(source)
+            && !NodeContent::is_inline_svg_source(source)
+            && !NodeContent::is_local_image_source(source)
+            && !NodeContent::is_remote_image_source(source)
+        {
+            return Err(BackendError::InvalidContent);
+        }
+        Ok(())
+    }
+
     pub(crate) fn add(
         &mut self,
         descriptor: &NodeDescriptor,
@@ -70,7 +92,15 @@ impl ResourceUsage {
         if let Some(description) = &descriptor.accessible_description {
             self.add_text(description, limits)?;
         }
+        for action in &descriptor.accessibility.actions {
+            self.add_text(&action.id, limits)?;
+            self.add_text(&action.label, limits)?;
+        }
+        if let Some(text) = descriptor.accessibility.value.as_ref().and_then(|value| value.text.as_ref()) {
+            self.add_text(text, limits)?;
+        }
         match &descriptor.content {
+            NodeContent::Hosted { specification } => self.add_text(specification, limits)?,
             NodeContent::Text(text)
             | NodeContent::Button { label: text, .. }
             | NodeContent::Checkbox { label: text, .. }
@@ -99,22 +129,15 @@ impl ResourceUsage {
             }
             NodeContent::Image { source, alt } => {
                 self.add_text(alt, limits)?;
-                self.image_bytes = self
-                    .image_bytes
-                    .checked_add(source.len())
-                    .filter(|bytes| *bytes <= limits.image_bytes)
-                    .ok_or(BackendError::ResourceLimit(ResourceKind::ImageBytes))?;
-                let [width, height] = descriptor
-                    .content
-                    .image_dimensions()
-                    .ok_or(BackendError::InvalidContent)?;
-                self.image_pixels = self
-                    .image_pixels
-                    .checked_add(u64::from(width) * u64::from(height))
-                    .filter(|pixels| *pixels <= limits.image_pixels)
-                    .ok_or(BackendError::ResourceLimit(ResourceKind::ImagePixels))?;
+                if alt.len() > 4096 {
+                    return Err(BackendError::InvalidContent);
+                }
+                self.add_image(source, limits)?;
             }
             _ => {}
+        }
+        if let Some(placeholder) = descriptor.style.image_placeholder.as_deref() {
+            self.add_image(placeholder, limits)?;
         }
         Ok(())
     }

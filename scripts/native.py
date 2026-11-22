@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import zipfile
 from datetime import datetime, timezone
 
 
@@ -74,7 +75,7 @@ def sdk_identity(path):
 def doctor(ohos_sdk=None):
     tools = {}
     versions = {"rustc": ["-vV"], "cargo": ["--version"], "rustup": ["target", "list", "--installed"],
-                "adb": ["version"], "hdc": ["-v"]}
+                "adb": ["version"], "hdc": ["-v"], "xcrun": ["--version"], "swiftc": ["--version"], "codesign": ["--version"]}
     for name, arguments in versions.items():
         executable = shutil.which(name)
         tools[name] = {"path": executable, "version": command([executable, *arguments]) if executable else None}
@@ -92,12 +93,17 @@ def doctor(ohos_sdk=None):
     api_versions = {row["metadata"].get("apiVersion") for row in sdks if row.get("available")}
     android = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT")
     android_sdk = Path(android) if android else None
+    import native_android
+    import native_linux
+    android_inventory = native_android.sdk_inventory(android_sdk) if android_sdk else None
     emulator = android_sdk / ("emulator/emulator.exe" if os.name == "nt" else "emulator/emulator") if android_sdk else None
     return {"system": platform.platform(), "machine": platform.machine(), "python": sys.version,
-            "tools": tools, "ohos_sdks": sdks, "selected_ohos_sdk": selected,
+            "macos_sdk": command(["xcrun", "--sdk", "macosx", "--show-sdk-path"]) if platform.system() == "Darwin" and tools["xcrun"]["path"] else None,
+            "tools": tools, "linux": native_linux.doctor(), "ohos_sdks": sdks, "selected_ohos_sdk": selected,
             "ohos_selection": "explicit" if ohos_sdk else "DEVECO_SDK_HOME before OHOS_NDK_HOME",
             "ohos_sdk_api_conflict": len(api_versions) > 1,
             "android_sdk": str(android_sdk) if android_sdk else None,
+            "android_components": android_inventory,
             "android_avds": command([str(emulator), "-list-avds"]) if emulator and emulator.is_file() else None,
             "android_devices": command([tools["adb"]["path"], "devices", "-l"]) if tools["adb"]["path"] else None,
             "ohos_devices": command([tools["hdc"]["path"], "list", "targets"]) if tools["hdc"]["path"] else None,
@@ -130,6 +136,7 @@ def main():
     import native_capabilities
     import native_workflow
     import native_validation
+    import native_distribution
 
     parser = argparse.ArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="operation", required=True)
@@ -145,6 +152,7 @@ def main():
         subcommand.add_argument("--output", type=Path, required=True)
     native_workflow.register(subcommands)
     native_validation.register(subcommands)
+    native_distribution.register(subcommands)
     arguments = parser.parse_args()
     output = arguments.output.resolve()
     if output.exists() or any((parent / "snapshot.json").exists() for parent in [output.parent, *output.parents]):
@@ -166,6 +174,8 @@ def main():
             result = native_validation.run(arguments, output)
         elif arguments.operation == "audit-validation":
             result = native_validation.verify(arguments.validation.resolve())
+        elif arguments.operation in native_distribution.OPERATIONS:
+            result = native_distribution.execute(arguments, output)
         else:
             result = native_workflow.execute(arguments, output)
         report = {"schema": 1, "operation": arguments.operation,
@@ -175,12 +185,14 @@ def main():
         with output.open("x", encoding="utf-8", newline="\n") as stream:
             json.dump(report, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.SubprocessError) as error:
         parser.exit(1, f"native {arguments.operation}: {error}\n")
     print(json.dumps({"output": str(output), "sha256": file_identity(output)["sha256"],
                       "runtime_acceptance": False}, ensure_ascii=False))
     if arguments.operation == "validate" and not result["checks_passed"]:
         parser.exit(1, "native validate: checks failed or sources changed; retained report identifies failures\n")
+    if arguments.operation in ("component-run", "run") and result.get("exit_code"):
+        parser.exit(result["exit_code"], "native runtime: component failed; see retained report\n")
 
 
 if __name__ == "__main__":

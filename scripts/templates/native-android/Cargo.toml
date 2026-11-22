@@ -14,7 +14,7 @@ name = "jadix_native_controls"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-jadix_components = { path = "@ROOT@/crates/jadix_components", default-features = false, features = ["macros", "theme-shadcn"] }
+jadix_components = { path = "@ROOT@/crates/jadix_components", default-features = false, features = ["macros", "theme-shadcn", "i18n"] }
 jadix_core = { path = "@ROOT@/crates/jadix_core" }
 jadix_native = { path = "@ROOT@/crates/jadix_native", features = ["android"] }
 serde_json = "1"

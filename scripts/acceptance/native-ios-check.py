@@ -15,6 +15,32 @@ import uuid
 from native_browser import validate_output
 
 
+_SIMULATOR_ENVIRONMENT_EXCLUSIONS = {"HOME", "TMPDIR", "PATH", "CFFIXED_USER_HOME"}
+_ENVIRONMENT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+
+def simulator_child_environment(declared_names, host_environment, token):
+    forwarded = {"SIMCTL_CHILD_JADIX_NATIVE_CHECK_TOKEN": token}
+    seen = set()
+    for name in declared_names:
+        if not isinstance(name, str) or not _ENVIRONMENT_NAME.fullmatch(name):
+            raise ValueError("invalid declared simulator environment name")
+        if name in seen:
+            continue
+        seen.add(name)
+        if name in _SIMULATOR_ENVIRONMENT_EXCLUSIONS or name == "JADIX_NATIVE_CHECK_TOKEN" or name.startswith(("DYLD_", "SIMULATOR_")):
+            continue
+        if name in host_environment:
+            forwarded[f"SIMCTL_CHILD_{name}"] = host_environment[name]
+    return forwarded
+
+
+def simctl_environment(declared_names, host_environment, token):
+    environment = {name: value for name, value in host_environment.items() if not name.startswith("SIMCTL_CHILD_")}
+    environment.update(simulator_child_environment(declared_names, host_environment, token))
+    return environment
+
+
 def artifact(directory):
     directory = directory.resolve()
     source = (directory / "build.json").read_bytes()
@@ -60,7 +86,7 @@ def version(text):
 
 
 def simulator_pair(inventory):
-    runtimes = [runtime for runtime in inventory["runtimes"] if runtime.get("isAvailable") is True and runtime["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-") and version(runtime["version"]) >= (14, 0, 0)]
+    runtimes = [runtime for runtime in inventory["runtimes"] if runtime.get("isAvailable") is True and runtime["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-") and version(runtime["version"]) >= (15, 0, 0)]
     for runtime in sorted(runtimes, key=lambda item: version(item["version"]), reverse=True):
         devices = [device for device in inventory["devicetypes"] if device["identifier"].startswith("com.apple.CoreSimulator.SimDeviceType.iPhone-") and version(device.get("minRuntimeVersionString", "0")) <= version(runtime["version"]) <= version(device.get("maxRuntimeVersionString", "65535.255.255"))]
         if devices:
@@ -129,7 +155,7 @@ def validate_receipt(receipt, token, build):
                 raise ValueError("missing notebook archive in UIKit receipt")
 
 
-def execute(bundle, build, output, timeout):
+def execute(bundle, build, output, timeout, declared_environment=()):
     report = {"passed": False, "scope": "Owned simulator, programmatic UIKit events, root disposal and notebook process restart; not physical IME, VoiceOver, minimum iOS or distribution acceptance", "build": build, "commands": [], "receipts": [], "cleanup": {}, "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
     owned = None
 
@@ -168,7 +194,7 @@ def execute(bundle, build, output, timeout):
         receipt_path = container / "Library/Application Support/native-checks.json"
         for phase in ("initial", "relaunch"):
             token = str(uuid.uuid4())
-            environment = {**os.environ, "SIMCTL_CHILD_JADIX_NATIVE_CHECK_TOKEN": token}
+            environment = simctl_environment(declared_environment, os.environ, token)
             command(["launch", owned, build["bundle_identifier"]], environment=environment)
             deadline = time.monotonic() + timeout
             while True:
@@ -210,6 +236,7 @@ def main():
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=180)
+    parser.add_argument("--env", action="append", default=[], metavar="NAME", help="Forward a declared host variable to the simulator app when present")
     args = parser.parse_args()
     output = args.output.resolve()
     try:
@@ -218,11 +245,12 @@ def main():
             raise ValueError("--timeout must be between 30 and 600 seconds")
         if sys.platform != "darwin":
             raise ValueError("UIKit runtime checks require macOS and Xcode")
+        simulator_child_environment(args.env, os.environ, "validation-token")
         bundle, build = artifact(args.build)
     except (ValueError, KeyError, OSError) as error:
         parser.error(str(error))
     output.mkdir(parents=True, exist_ok=True)
-    report = execute(bundle, build, output, args.timeout)
+    report = execute(bundle, build, output, args.timeout, args.env)
     print(f"{'PASS' if report['passed'] else 'FAIL'}: UIKit simulator probes; {output / 'checks.json'}")
     return 0 if report["passed"] else 1
 

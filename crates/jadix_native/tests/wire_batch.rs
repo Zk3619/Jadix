@@ -1,6 +1,34 @@
 use jadix_native::{presentation::*, wire};
 
 #[test]
+fn shared_selection_roles_preserve_native_semantics_and_tab_stops() {
+    for (role, name, tab_stop) in [
+        (AccessibleRole::ListBox, "listbox", None),
+        (AccessibleRole::ListBoxOption { tab_stop: false }, "option", Some(false)),
+        (AccessibleRole::Heading, "heading", None),
+    ] {
+        let encoded = wire::descriptor(&NodeDescriptor {
+            accessible_role: Some(role),
+            accessible_name: Some("Emoji".into()),
+            content: NodeContent::Container,
+            frame: Rect::default(),
+            style: Default::default(),
+            accessible_selected: None,
+            accessible_expanded: None,
+            accessible_description: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
+            accessibility_relations: Default::default(),
+        });
+        assert_eq!(encoded["role"], name);
+        assert_eq!(encoded["tabStop"], serde_json::json!(tab_stop));
+        assert_eq!(encoded["name"], "Emoji");
+    }
+}
+
+#[test]
 fn delta_wire_preserves_full_decimal_identity_revision_and_native_operations() {
     let root = RootId::new();
     let parent = NodeId::new(root);
@@ -12,6 +40,10 @@ fn delta_wire_preserves_full_decimal_identity_revision_and_native_operations() {
         accessible_role: Some(AccessibleRole::TreeItem),
         accessible_selected: Some(true),
         accessible_expanded: Some(false),
+        interaction: Default::default(),
+        keyboard: Default::default(),
+        navigation_keys: Vec::new(),
+        accessibility: Default::default(),
         accessibility_relations: Default::default(),
         accessible_description: Some("Supplemental 中文 help".into()),
         accessible_name: Some("caption".into()),
@@ -66,4 +98,28 @@ fn delta_wire_preserves_full_decimal_identity_revision_and_native_operations() {
     assert_eq!(operations[2]["op"], "move");
     assert!(operations[2]["parent"].is_null());
     assert!(operations[4]["id"].is_null());
+}
+
+#[test]
+fn scroll_indicator_insets_round_trip_without_changing_content_padding() {
+    let style: style::NodeStyle = serde_json::from_value(serde_json::json!({
+        "scrollbar_inset": [12.0, -2.0, 48.0, 6.0], "padding": [3.0, 4.0, 5.0, 6.0]
+    })).unwrap();
+    assert!(style.is_valid());
+    let encoded = wire::descriptor(&NodeDescriptor {
+        content: NodeContent::Scroll, style: style.clone(), frame: Rect::default(),
+        accessible_role: None, accessible_name: None, accessible_description: None,
+        accessible_selected: None, accessible_expanded: None,
+        interaction: Default::default(),
+        accessibility: Default::default(),
+        keyboard: Default::default(),
+        navigation_keys: Vec::new(), accessibility_relations: Default::default(),
+    });
+    assert_eq!(encoded["style"]["scrollbar_inset"], serde_json::json!([12.0, -2.0, 48.0, 6.0]));
+    assert_eq!(style.padding, [3.0, 4.0, 5.0, 6.0]);
+    for value in [f32::NAN, f32::INFINITY, 1_000_001.0] {
+        assert!(!style::NodeStyle { scrollbar_inset: Some([value; 4]), ..style.clone() }.is_valid());
+    }
+    let reset: style::NodeStyle = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(reset.scrollbar_inset.is_none());
 }

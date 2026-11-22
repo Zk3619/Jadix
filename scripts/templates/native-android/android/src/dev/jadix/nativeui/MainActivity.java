@@ -27,7 +27,13 @@ public final class MainActivity extends Activity {
                 android.widget.Toast.makeText(this, "Checkpoint unavailable; opened a new page", android.widget.Toast.LENGTH_LONG).show();
             }
         }
+        content.handleIntent(getIntent(), saved == null);
+        content.installBackHandler(this);
     }
+    @Override protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent); setIntent(intent); content.handleIntent(intent, false);
+    }
+
 
     @Override protected void onSaveInstanceState(Bundle saved) {
         try {
@@ -44,6 +50,7 @@ public final class MainActivity extends Activity {
         super.onSaveInstanceState(saved);
     }
 
+    @Override public void onBackPressed() { content.requestClose(this::finish); }
     @Override protected void onDestroy() {
         content.close();
         super.onDestroy();

@@ -40,7 +40,13 @@ public final class NotesActivity extends Activity {
             nativeStorageResult(content.token(), "Draft recovery unavailable; saved documents retained");
         }
         content.setStateListener(this::persist);
+        content.handleIntent(getIntent(), saved == null);
+        content.installBackHandler(this);
     }
+    @Override protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent); setIntent(intent); content.handleIntent(intent, false);
+    }
+
     private void persist(String state) {
         try {
             JSONObject value = new JSONObject(state);
@@ -64,6 +70,7 @@ public final class NotesActivity extends Activity {
         } catch (Exception error) { android.util.Log.e("JadixNotes", "Draft recovery save failed", error); }
         super.onSaveInstanceState(saved);
     }
+    @Override public void onBackPressed() { content.requestClose(this::finish); }
     @Override protected void onDestroy() {
         content.setStateListener(null);
         content.close();
