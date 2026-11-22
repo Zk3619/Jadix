@@ -317,6 +317,14 @@ pub fn accordion_scope(
 /// 也不会多占一份。不要对占位做 `position:absolute`，也不要在退场动画期间用
 /// `reactive_sync` 提前把面板打成 `Display::None`。
 pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
+    accordion_content_with_spring(None, body)
+}
+
+/// Physical reveal on the shared collapse lifecycle; `None` uses keyframes.
+pub fn accordion_content_with_spring(
+    reveal_spring: Option<crate::style::SpringPhysics>,
+    body: impl Fn() -> Element + 'static,
+) -> Element {
     let acc = require_accordion("AccordionContent");
     let item = require_accordion_item("AccordionContent");
     let value = item.value.clone();
@@ -327,15 +335,26 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
     let value_anchor = value.clone();
     let presence = use_accordion_panel_presence(&format!("{menu_id}:presence:{value}"));
     let sync_presence = presence.clone();
+    presence.set_reveal_spring(reveal_spring);
     let mounted = presence.mounted();
     let open_sync = open_sig;
     let value_for_presence = value.clone();
     sync_accordion_panel_open(open_sync, &value_for_presence, &presence);
+    let open_presence = presence.clone();
+    let open_value = value_for_presence.clone();
+    create_effect(move || {
+        let want = is_item_open(&open_sync.try_get().unwrap_or_default(), &open_value);
+        sync_accordion_panel_presence(&open_presence, want);
+    });
 
     reactive_anchor(effect_anchor, move || {
-        let want = is_item_open(&open_sync.get(), &value_for_presence);
+        // Retain child owners while mounted, including sibling toggles and reversal.
+        let want = is_item_open(
+            &open_sync.try_peek().unwrap_or_default(),
+            &value_for_presence,
+        );
         sync_accordion_panel_presence(&sync_presence, want);
-        if !mounted.get() {
+        if mounted.try_get().is_none_or(|m| !m) {
             let mut hidden = Element::new();
             hidden.style.display = Display::None;
             hidden
@@ -346,7 +365,9 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
                 .insert(ATTR_ITEM_VALUE.to_string(), value_anchor.clone());
             return hidden;
         }
-        let mut body = body();
+        // Dispose raw helper content as well as macro-authored child components
+        // when this mounted generation is replaced.
+        let mut body = crate::core::reactivity::component_root(&body);
         if body.attrs.get("jadix_fragment").map(|s| s.as_str()) == Some("1") {
             let kids = std::mem::take(&mut body.children);
             body = vstack().w("100%").min_w(0.0).children(kids).into();
@@ -405,7 +426,7 @@ fn apply_accordion_panel_motion(
     layout_tree: &mut LayoutTree,
     presence: &CollapsePanelPresence,
 ) -> LayoutStatus {
-    if accordion_use_grid_fr() {
+    if accordion_use_grid_fr() && !presence.has_reveal_spring() {
         return apply_accordion_panel_motion_grid(el, layout_tree, presence);
     }
     apply_collapse_motion(el, layout_tree, presence, CollapseKeyframes::ACCORDION)
@@ -755,6 +776,7 @@ AccordionContentProps [];
 #[allow(non_snake_case)]
 pub fn AccordionContent(
 plain [] children: Option<Element>,
+plain [] reveal_spring: Option<crate::style::SpringPhysics>,
 ) -> Element {
     let acc = require_accordion("AccordionContent");
     let item = require_accordion_item("AccordionContent");
@@ -763,6 +785,7 @@ plain [] children: Option<Element>,
     let presence = use_accordion_panel_presence(&format!("{}:presence:{value}", acc.id));
     let open_sync = open_sig;
     let value_for_presence = value.clone();
+    presence.set_reveal_spring(reveal_spring);
     sync_accordion_panel_open(open_sync, &value_for_presence, &presence);
 
     let mut body = children.unwrap_or_default();
@@ -890,11 +913,18 @@ impl From<AccordionTriggerBuilder> for Element {
 }
 
 pub struct AccordionContentBuilder {
+    reveal_spring: Option<crate::style::SpringPhysics>,
     children: Vec<Element>,
     chrome: SlotChrome,
 }
 
 impl AccordionContentBuilder {
+    /// Animate height with physical spring settling and velocity-preserving reversal.
+    pub fn reveal_spring(mut self, physics: crate::style::SpringPhysics) -> Self {
+        self.reveal_spring = Some(physics);
+        self
+    }
+
     impl_slot_chrome_methods!();
 
     pub fn text(mut self, content: impl Into<String>) -> Self {
@@ -913,6 +943,7 @@ impl From<AccordionContentBuilder> for Element {
     fn from(builder: AccordionContentBuilder) -> Self {
         let el = AccordionContent(AccordionContentProps {
             children: packed_children(builder.children),
+            reveal_spring: builder.reveal_spring,
             base: None,
         });
         builder.chrome.apply(el)
@@ -960,6 +991,7 @@ impl AccordionItemBuilder {
 
     pub fn content(mut self, child: impl Into<Element>) -> Self {
         self.content = Some(AccordionContentBuilder {
+            reveal_spring: None,
             children: crate::utils::take_packed(child.into()),
             chrome: SlotChrome::default(),
         });
@@ -971,6 +1003,7 @@ impl AccordionItemBuilder {
         f: impl FnOnce(AccordionContentBuilder) -> AccordionContentBuilder,
     ) -> Self {
         self.content = Some(f(AccordionContentBuilder {
+            reveal_spring: None,
             children: Vec::new(),
             chrome: SlotChrome::default(),
         }));

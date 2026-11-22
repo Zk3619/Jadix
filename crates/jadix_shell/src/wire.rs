@@ -23,6 +23,18 @@ pub struct ComponentRegistry {
 }
 
 impl ComponentRegistry {
+    /// Complete portable/base schemas shared by every native and script host.
+    /// `default()` remains an empty registry for intentionally restricted hosts.
+    pub fn standard() -> Self {
+        let mut registry = Self::default();
+        for source in [include_str!("../../jadix_components/schema/portable-v1.json"),
+                       include_str!("../../jadix_components/schema/extended-v1.json")] {
+            let schemas: Vec<ComponentSchema> = serde_json::from_str(source).expect("bundled component schemas");
+            for schema in schemas { registry.register(schema).expect("unique valid bundled component"); }
+        }
+        registry
+    }
+
     pub fn get(&self, name: &str) -> Option<&ComponentSchema> {
         self.components.get(name)
     }
@@ -73,6 +85,15 @@ impl ComponentRegistry {
                 .any(|name| !schema.events.contains_key(name))
             {
                 return Err(WireError::Events.into());
+            }
+            if !node.children.is_empty() && schema.kind == jadix_core::presentation::capabilities::NodeKind::Hosted {
+                let specification = match &node.props {
+                    Value::Object(props) => match props.get("specification") { Some(Value::String(value)) => value, _ => return Err(WireError::Properties.into()) },
+                    _ => return Err(WireError::Properties.into()),
+                };
+                if !jadix_core::hosted::HostedContent::from_json(specification).is_ok_and(|v| v.accepts_children()) {
+                    return Err(WireError::Children.into());
+                }
             }
             if !schema.children && !node.children.is_empty() {
                 return Err(WireError::Children.into());

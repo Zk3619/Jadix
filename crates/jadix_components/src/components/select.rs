@@ -248,6 +248,7 @@ SelectTriggerProps [];
 #[allow(non_snake_case)]
 pub fn SelectTrigger(
 plain [] size: Option<String>,
+default [] disabled: bool,
 plain [] children: Option<Element>,
 ) -> Element {
     let ctx = require_select("SelectTrigger");
@@ -285,7 +286,7 @@ plain [] children: Option<Element>,
 
     // Value + chevron must be **direct** Button children so `Button::into` rebuilds
     // bind_text via `build_text_node` (nested shells paint as empty).
-    let mut btn = button(&trigger_id).variant("outline");
+    let mut btn = button(&trigger_id).variant("outline").disabled(disabled);
     if full_width {
         // `truncate` 让 Button 重建文案叶时带上 ellipsis（SelectValue 的 overflow
         // 也会被 From 保留）；同时覆盖默认 `shrink-0`，槽位变窄时才能省略。
@@ -920,6 +921,7 @@ impl SelectContentSlotBuilder {
 
 pub struct SelectBuilder {
     id: String,
+    disabled: bool,
     value: Option<Signal<String>>,
     default_value: String,
     entries: Vec<SelectEntry>,
@@ -942,6 +944,7 @@ pub struct SelectBuilder {
 pub fn select(id: impl Into<String>) -> SelectBuilder {
     SelectBuilder {
         id: id.into(),
+        disabled: false,
         value: None,
         default_value: String::new(),
         entries: Vec::new(),
@@ -962,6 +965,8 @@ pub fn select(id: impl Into<String>) -> SelectBuilder {
 }
 
 impl SelectBuilder {
+    pub fn disabled(mut self, disabled: bool) -> Self { self.disabled = disabled; self }
+
     /// Rebuild content in the caller's retained/offscreen host instead of a
     /// window reactive-anchor island. Uses the same menu rows and geometry.
     pub fn retained(mut self, retained: bool) -> Self {
@@ -1060,6 +1065,7 @@ impl From<SelectBuilder> for Element {
     fn from(builder: SelectBuilder) -> Self {
         let SelectBuilder {
             id,
+            disabled,
             value,
             default_value,
             entries,
@@ -1135,6 +1141,7 @@ impl From<SelectBuilder> for Element {
 
             let mut trigger = SelectTrigger(SelectTriggerProps {
                 size: None,
+                disabled: Some(disabled),
                 children: Some(SelectValue(SelectValueProps {
                     placeholder: None,
                     children: None,

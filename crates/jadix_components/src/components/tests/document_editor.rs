@@ -1,6 +1,194 @@
 use super::*;
 
 #[test]
+fn deferred_clipboard_routing_retains_stages_without_early_or_fallback_insertion() {
+    let (_owner, ()) = crate::core::reactivity::create_root(|| {
+        let state = DocumentEditorState::new(crate::text::Document::rich_text([]));
+        let pending = Rc::new(RefCell::new(None::<DocumentPasteRequest>));
+        let captured = pending.clone();
+        let stages = Rc::new(std::cell::Cell::new(0));
+        let ran = stages.clone();
+        let mut bridge = EditorBridge {
+            state: state.clone(),
+            field: "deferred-paste-routing".into(),
+            value: Signal::new(String::new()),
+            active: None,
+            next_mount: 0,
+            paste_transforms: Vec::new(),
+            fragment_transforms: vec![Rc::new(move |_, fragment| {
+                ran.set(ran.get() + 1);
+                Some(fragment)
+            })],
+            deferred_paste_handler: Some(Rc::new(move |request| {
+                *captured.borrow_mut() = Some(request);
+            })),
+        };
+        bridge.paste(Some("fallback"), Some("<p><b>剪贴板</b></p>"), false);
+        assert!(state.document().source().is_empty());
+        assert_eq!(stages.get(), 0);
+        assert!(!state.can_undo());
+        let request = pending.borrow_mut().take().unwrap();
+        assert!(matches!(
+            request.content(),
+            DocumentPasteContent::RichText(_)
+        ));
+        assert!(request.accept().unwrap());
+        assert_eq!(stages.get(), 1);
+        assert_eq!(state.document().source().text(), "剪贴板");
+        assert!(state.document().rich_text_blocks()[0].spans[0].style.bold);
+        assert!(state.undo());
+        assert!(!state.can_undo());
+
+        state.set_mode(DocumentEditMode::Source);
+        bridge.paste(Some("<b>literal</b>"), Some("<b>rich</b>"), false);
+        let request = pending.borrow_mut().take().unwrap();
+        assert!(
+            matches!(request.content(), DocumentPasteContent::Text(text) if text == "<b>literal</b>")
+        );
+        assert!(request.accept().unwrap());
+        assert_eq!(state.document().source().text(), "<b>literal</b>");
+        assert!(state.undo());
+        state.set_mode(DocumentEditMode::LivePreview);
+        bridge.paste(Some("old clipboard"), None, false);
+        let request = pending.borrow_mut().take().unwrap();
+        bridge.paste(None, None, false);
+        assert!(!request.accept().unwrap());
+        assert!(pending.borrow().is_none());
+        assert!(state.document().source().is_empty());
+
+        bridge.paste_transforms.push(Rc::new(|snapshot, text| {
+            assert!(snapshot.document.source().is_empty());
+            Some(text.to_uppercase())
+        }));
+        bridge.paste(Some("plain"), Some("<b>rich</b>"), true);
+        let request = pending.borrow_mut().take().unwrap();
+        assert!(matches!(request.content(), DocumentPasteContent::Text(text) if text == "plain"));
+        assert!(request
+            .complete(DocumentPasteContent::Text("rewritten".into()))
+            .unwrap());
+        assert_eq!(state.document().source().text(), "REWRITTEN");
+        assert!(state.undo());
+        bridge.paste(Some("consumed"), None, false);
+        drop(pending.borrow_mut().take());
+        assert!(state.document().source().is_empty());
+        assert!(!state.can_undo());
+        bridge.paste(Some("late"), None, false);
+        state.set_mode(DocumentEditMode::Preview);
+        assert!(!pending.borrow_mut().take().unwrap().accept().unwrap());
+        assert!(state.document().source().is_empty());
+    });
+}
+
+#[test]
+fn deferred_paste_is_fenced_on_replacement_and_current_editor_unmount() {
+    let (_owner, ()) = crate::core::reactivity::create_root(|| {
+        let state = DocumentEditorState::new("");
+        let old: Element = document_editor("deferred-mount", state.clone())
+            .deferred_paste_handler(|request| drop(request))
+            .into();
+        let first = state
+            .defer_paste(DocumentPasteContent::Text("old".into()), &[], &[])
+            .unwrap();
+        let current: Element = document_editor("deferred-mount", state.clone()).into();
+        assert!(!first.accept().unwrap());
+        let second = state
+            .defer_paste(DocumentPasteContent::Text("current".into()), &[], &[])
+            .unwrap();
+        drop(old);
+        assert!(second.accept().unwrap());
+        assert_eq!(state.document().source().text(), "current");
+        let last = state
+            .defer_paste(DocumentPasteContent::Text("unmounted".into()), &[], &[])
+            .unwrap();
+        drop(current);
+        assert!(!last.accept().unwrap());
+        assert_eq!(state.document().source().text(), "current");
+    });
+}
+
+#[test]
+fn paste_routes_html_plain_text_and_consuming_plugins_without_losing_undo() {
+    let (_owner, ()) = crate::core::reactivity::create_root(|| {
+        let state = DocumentEditorState::new(crate::text::Document::rich_text([]));
+        let mut bridge = EditorBridge {
+            state: state.clone(),
+            field: "fragment-paste-test".into(),
+            value: Signal::new(String::new()),
+            active: None,
+            next_mount: 0,
+            paste_transforms: Vec::new(),
+            fragment_transforms: Vec::new(),
+            deferred_paste_handler: None,
+        };
+        let html = Some("<h2><b>中文</b></h2><pre>a\nb\n</pre>");
+        bridge.paste(Some("plain"), html, false);
+        assert_eq!(state.document().source().text(), "中文\na\nb\n");
+        assert_eq!(
+            state.document().blocks()[0].kind,
+            DocumentBlockKind::Heading(2)
+        );
+        assert!(state.document().blocks()[0].inlines[0].style.bold);
+        assert!(matches!(
+            state.document().blocks()[1].kind,
+            DocumentBlockKind::Code { .. }
+        ));
+        assert!(state.undo());
+        assert!(state.document().source().is_empty());
+        assert!(!state.can_undo());
+        bridge.paste(Some("plain"), html, true);
+        assert_eq!(state.document().source().text(), "plain");
+        assert!(state.undo());
+        bridge.paste(Some("fallback"), Some("<script>secret</script>"), false);
+        assert_eq!(state.document().source().text(), "fallback");
+        assert!(state.undo());
+        bridge.fragment_transforms.push(Rc::new(|_, _| None));
+        bridge.paste(Some("must not leak"), html, false);
+        assert!(state.document().source().is_empty());
+        assert!(!state.can_undo());
+        bridge.fragment_transforms.clear();
+        let changed = state.clone();
+        bridge.fragment_transforms.push(Rc::new(move |_, fragment| {
+            changed.set_mode(DocumentEditMode::Preview);
+            Some(fragment)
+        }));
+        bridge.paste(Some("must not leak"), html, false);
+        assert!(state.document().source().is_empty());
+        state.set_mode(DocumentEditMode::Source);
+        bridge.fragment_transforms.clear();
+        bridge
+            .paste_transforms
+            .push(Rc::new(|_, text| Some(text.to_uppercase())));
+        bridge.paste(Some("legacy"), html, false);
+        assert_eq!(state.document().source().text(), "LEGACY");
+        // Markdown keeps its source contract even when HTML is available.
+        bridge.state = DocumentEditorState::new("");
+        bridge.paste_transforms.clear();
+        bridge.paste(Some("**source**"), html, false);
+        assert_eq!(bridge.state.document().source().text(), "**source**");
+        // Code blocks keep literal clipboard text, including at the end of the block.
+        bridge.state = DocumentEditorState::new(
+            crate::text::Document::from_html_fragment("<pre>x</pre>").unwrap(),
+        );
+        bridge
+            .state
+            .set_selection(DocumentSelection::caret(1))
+            .unwrap();
+        bridge.paste(Some("<b>literal</b>\ny"), html, false);
+        assert_eq!(
+            bridge.state.document().source().text(),
+            "x<b>literal</b>\ny"
+        );
+        assert_eq!(bridge.state.document().blocks().len(), 1);
+        assert!(matches!(
+            bridge.state.document().blocks()[0].kind,
+            DocumentBlockKind::Code { .. }
+        ));
+        assert!(bridge.state.undo());
+        assert_eq!(bridge.state.document().source().text(), "x");
+    });
+}
+
+#[test]
 fn replaced_editor_cleanup_preserves_new_mount_buffer() {
     let (_owner, ()) = crate::core::reactivity::create_root(|| {
         let state = DocumentEditorState::new("first\n\nsecond");
@@ -134,6 +322,9 @@ fn native_keys_cross_source_lines_preserve_crlf_and_stop_on_escape() {
             value: Signal::new(String::new()),
             active: None,
             next_mount: 0,
+            paste_transforms: Vec::new(),
+            fragment_transforms: Vec::new(),
+            deferred_paste_handler: None,
         };
         bridge.sync();
         assert!(bridge.key(&named_key(NamedKey::Backspace), ModifiersState::empty()));
@@ -164,7 +355,7 @@ fn native_keys_cross_source_lines_preserve_crlf_and_stop_on_escape() {
 
 #[test]
 fn enter_in_task_item_starts_an_unchecked_item_and_preserves_the_split_text() {
-    let (_owner, ()) = crate::core::reactivity::create_root(|| {
+    let (_owner, _) = crate::core::reactivity::create_root(|| {
         for (id, source, expected) in [
             (
                 "checked-task-enter",
@@ -187,6 +378,9 @@ fn enter_in_task_item_starts_an_unchecked_item_and_preserves_the_split_text() {
                 value: Signal::new(String::new()),
                 active: None,
                 next_mount: 0,
+                paste_transforms: Vec::new(),
+                fragment_transforms: Vec::new(),
+                deferred_paste_handler: None,
             };
             bridge.sync();
             assert!(bridge.key(&named_key(NamedKey::Enter), ModifiersState::empty()));
@@ -200,7 +394,7 @@ fn enter_in_task_item_starts_an_unchecked_item_and_preserves_the_split_text() {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(tasks, [Some(true), Some(false)]);
+            assert_eq!(tasks, [Some(source.contains("[x]")), Some(false)]);
         }
         Element::new()
     });
@@ -255,6 +449,9 @@ fn ime_preedit_does_not_parse_or_replace_native_composition() {
             value: Signal::new(String::new()),
             active: None,
             next_mount: 0,
+            paste_transforms: Vec::new(),
+            fragment_transforms: Vec::new(),
+            deferred_paste_handler: None,
         };
         bridge.sync();
         let preedit = use_signal(&input_preedit_signal_key(&bridge.field), String::new);
@@ -284,6 +481,9 @@ fn live_preview_blur_commits_native_text_and_restores_preview() {
             value: Signal::new(String::new()),
             active: None,
             next_mount: 0,
+            paste_transforms: Vec::new(),
+            fragment_transforms: Vec::new(),
+            deferred_paste_handler: None,
         };
         bridge.sync();
         text_field::commit_value(&bridge.field, "**after**".into());
@@ -304,7 +504,7 @@ fn markdown_table_has_cells_shared_grid_edges_and_hidden_delimiter() {
     let mut rows = 0;
     let mut separators = 0;
     for block in document.blocks() {
-        let mut element = render_document_block(&document, block, &None, None);
+        let mut element = render_document_block(&document, block, &None, None, None);
         if let DocumentBlockKind::TableRow { header } = block.kind {
             rows += 1;
             assert_eq!(element.children.len(), 2);

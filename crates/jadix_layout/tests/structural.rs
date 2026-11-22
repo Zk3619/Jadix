@@ -13,6 +13,10 @@ fn descriptor(content: NodeContent) -> NodeDescriptor {
         accessible_role: None,
         accessible_selected: None,
         accessible_expanded: None,
+        interaction: Default::default(),
+        keyboard: Default::default(),
+        navigation_keys: Vec::new(),
+        accessibility: Default::default(),
         accessibility_relations: Default::default(),
     }
 }
@@ -50,6 +54,37 @@ fn commit(
     assert_eq!(layout.roots(), fresh);
     stats
 }
+#[test]
+fn buttons_keep_intrinsic_metrics_when_content_children_mount_and_unmount() {
+    let life = RootLifetime::new(RootId::new());
+    let button = NodeId::new(life.id());
+    let child = NodeId::new(life.id());
+    let mut layout = StructuralLayout::new(life.clone());
+    commit(&mut layout, &life, vec![Operation::Create {
+        node: button,
+        parent: None,
+        index: 0,
+        descriptor: descriptor(NodeContent::Button { label: "plain".into(), enabled: true }),
+    }]);
+    assert_eq!(layout.roots()[0].descriptor.frame.height, 16.);
+    let mut content = descriptor(NodeContent::Container);
+    content.style.height = Some(48.);
+    commit(&mut layout, &life, vec![Operation::Create {
+        node: child,
+        parent: Some(button),
+        index: 0,
+        descriptor: content,
+    }]);
+    assert_eq!(layout.roots()[0].descriptor.frame.height, 48.);
+    commit(&mut layout, &life, vec![Operation::Remove { node: child }]);
+    assert_eq!(layout.roots()[0].descriptor.frame.height, 16.);
+    commit(&mut layout, &life, vec![Operation::Update {
+        node: button,
+        descriptor: descriptor(NodeContent::Button { label: "updated".into(), enabled: true }),
+    }]);
+    assert_eq!(layout.roots()[0].descriptor.frame.height, 16.);
+}
+
 #[test]
 fn actual_delta_sync_visits_one_update_and_only_changed_parents_for_structure() {
     let life = RootLifetime::new(RootId::new());

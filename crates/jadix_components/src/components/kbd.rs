@@ -290,6 +290,14 @@ impl KbdGroupBuilder {
         self.content.push(kbd().text(label).into());
         self
     }
+
+    /// Append the labels of the same shared stroke used by a menu or command.
+    pub fn key_chord(mut self, chord: &crate::shortcut::KeyChord) -> Self {
+        for label in chord.keycaps() {
+            self = self.kbd(label);
+        }
+        self
+    }
 }
 
 impl crate::core::tree::IntoElementList for KbdGroupBuilder {

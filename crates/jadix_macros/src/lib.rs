@@ -2098,6 +2098,16 @@ fn expand_node_inner(
 
                 if tree_view_is_compound {
                     let id_expr = get_attr("id");
+                    let reveal_spring_expr =
+                        get_attr("reveal_spring").or_else(|| get_attr("revealSpring"));
+                    let (scope_fn, reveal_spring_arg) = if let Some(spring) = reveal_spring_expr {
+                        (
+                            quote! { __jadix_components::tree_view_scope_with_spring },
+                            quote! { Some(#spring), },
+                        )
+                    } else {
+                        (quote! { __jadix_components::tree_view_scope }, quote! {})
+                    };
                     let variant_expr = get_attr("variant");
                     let expanded_expr =
                         get_attr("expanded_signal").or_else(|| get_attr("expandedSignal"));
@@ -2192,7 +2202,7 @@ fn expand_node_inner(
                     return quote! {{
                         let __jadix_tv_class: Option<String> = #class_ts;
                         jadix::authoring::SlotChrome::from_opts(__jadix_tv_class, None).apply(
-                            __jadix_components::tree_view_scope(
+                            #scope_fn(
                                 #id_ts,
                                 #variant_ts,
                                 #expanded_ts,
@@ -2204,6 +2214,7 @@ fn expand_node_inner(
                                 #selected_ts,
                                 None,
                                 ::std::vec::Vec::new(),
+                                #reveal_spring_arg
                                 || #child_el,
                             )
                         )
@@ -2562,6 +2573,16 @@ fn expand_node_inner(
                     // Provide context *before* Trigger/Content (eager props order).
                     let id_expr = get_attr("id");
                     let open_expr = get_attr("open").or_else(|| get_attr("openSignal"));
+                    let controlled_open =
+                        get_attr("controlledOpen").or_else(|| get_attr("controlled_open"));
+                    let default_open = get_attr("defaultOpen").or_else(|| get_attr("default_open"));
+                    let on_open_change =
+                        get_attr("onOpenChange").or_else(|| get_attr("on_open_change"));
+                    let on_open = get_attr("onOpen").or_else(|| get_attr("on_open"));
+                    let on_close = get_attr("onClose").or_else(|| get_attr("on_close"));
+                    let on_cancel = get_attr("onCancel").or_else(|| get_attr("on_cancel"));
+                    let on_position_change =
+                        get_attr("onPositionChange").or_else(|| get_attr("on_position_change"));
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -2591,16 +2612,51 @@ fn expand_node_inner(
                     } else {
                         quote! { format!("{}:{}:Popover#{}", file!(), line!(), #idx) }
                     };
-                    let open_ts = if let Some(open) = open_expr {
-                        quote! { Some(#open) }
+                    let scope = if controlled_open.is_some()
+                        || default_open.is_some()
+                        || on_open_change.is_some()
+                        || on_open.is_some()
+                        || on_close.is_some()
+                        || on_cancel.is_some()
+                        || on_position_change.is_some()
+                    {
+                        if controlled_open.is_some() && open_expr.is_some() {
+                            return quote! { compile_error!("Popover controlledOpen and open/openSignal are mutually exclusive") };
+                        }
+                        let open = if let Some(open) = controlled_open {
+                            quote! { .controlled_open(#open) }
+                        } else if let Some(open) = open_expr {
+                            quote! { .open(#open) }
+                        } else {
+                            quote! {}
+                        };
+                        let default = default_open.map(|value| quote! { .default_open(#value) });
+                        let callback = on_open_change.map(|value| quote! { .on_open_change(#value) });
+                        let opened = on_open.map(|value| quote! { .on_open(#value) });
+                        let closed = on_close.map(|value| quote! { .on_close(#value) });
+                        let cancel = on_cancel.map(|value| quote! { .on_cancel(#value) });
+                        let position = on_position_change.map(|value| quote! { .on_position_change(#value) });
+                        quote! { __jadix_components::popover(#id_ts) #open #default #callback #opened #closed #cancel #position .child(|| #child_el) }
                     } else {
-                        quote! { None }
+                        let open = if let Some(open) = open_expr {
+                            quote! { Some(#open) }
+                        } else {
+                            quote! { None }
+                        };
+                        quote! { __jadix_components::popover_scope(#id_ts, #open, || #child_el) }
                     };
                     let native_unsupported = el.attributes.iter().any(|(name, _)| {
-                        !matches!(name.to_string().as_str(), "id" | "open" | "openSignal")
+                        !matches!(
+                            name.to_string().as_str(),
+                            "id" | "open" | "openSignal" | "controlledOpen" | "controlled_open"
+                                | "defaultOpen" | "default_open" | "onOpenChange" | "on_open_change"
+                                | "onOpen" | "on_open" | "onClose" | "on_close"
+                                | "onCancel" | "on_cancel"
+                                | "onPositionChange" | "on_position_change"
+                        )
                     });
                     return quote! {{
-                        let mut __jadix_popover = __jadix_components::popover_scope(#id_ts, #open_ts, || #child_el);
+                        let mut __jadix_popover = #scope;
                         if #native_unsupported { __jadix_popover.set_attr("jadix_native_unsupported", "Popover root options"); }
                         __jadix_popover
                     }};
@@ -4171,10 +4227,15 @@ fn expand_node_inner(
                     } else {
                         quote! { None }
                     };
+                    let content_call = if let Some(spring) = get_attr("reveal_spring") {
+                        quote! { __jadix_components::accordion_content_with_spring(Some(#spring), move || #child_el) }
+                    } else {
+                        quote! { __jadix_components::accordion_content(move || #child_el) }
+                    };
                     return quote! {{
                         let __jadix_accc_class: Option<String> = #class_ts;
                         jadix::authoring::SlotChrome::from_opts(__jadix_accc_class, None).apply(
-                            __jadix_components::accordion_content(move || #child_el)
+                            #content_call
                         )
                     }};
                 }
@@ -4207,10 +4268,15 @@ fn expand_node_inner(
                     } else {
                         quote! { None }
                     };
+                    let content_call = if let Some(spring) = get_attr("reveal_spring") {
+                        quote! { __jadix_components::collapsible_content_with_spring(Some(#spring), move || #child_el) }
+                    } else {
+                        quote! { __jadix_components::collapsible_content(move || #child_el) }
+                    };
                     return quote! {{
                         let __jadix_colc_class: Option<String> = #class_ts;
                         jadix::authoring::SlotChrome::from_opts(__jadix_colc_class, None).apply(
-                            __jadix_components::collapsible_content(move || #child_el)
+                            #content_call
                         )
                     }};
                 }
@@ -4872,6 +4938,39 @@ fn expand_node_inner(
                         .or_else(|| get_attr("sideOffset"))
                         .map(quote_length_f32)
                         .unwrap_or_else(|| quote! { jadix::utils::popup::FLOATING_TRIGGER_GAP });
+                    let margin_attr = get_attr("margin");
+                    let escape_attr = get_attr("close_on_escape").or_else(|| get_attr("closeOnEscape"));
+                    let outside_attr = get_attr("close_on_outside_click").or_else(|| get_attr("closeOnPressOutside"));
+                    let enter_attr = get_attr("enter_duration").or_else(|| get_attr("enterDuration"));
+                    let exit_attr = get_attr("exit_duration").or_else(|| get_attr("exitDuration"));
+                    let starting_attr = get_attr("popup_starting_style").or_else(|| get_attr("popupStartingStyle"));
+                    let ending_attr = get_attr("popup_ending_style").or_else(|| get_attr("popupEndingStyle"));
+                    let panel_appearance = if starting_attr.is_some() || ending_attr.is_some() {
+                        let starting = starting_attr.map_or_else(|| quote! { None }, |e| quote! { Some(#e) });
+                        let ending = ending_attr.map_or_else(|| quote! { None }, |e| quote! { Some(#e) });
+                        quote! { .popover_appearance(#starting, #ending) }
+                    } else {
+                        quote! {}
+                    };
+                    let margin = margin_attr
+                        .map(|e| quote! { Some(#e) })
+                        .unwrap_or_else(|| quote! { None });
+                    let close_on_escape = escape_attr
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let close_on_outside_click = outside_attr
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { true });
+                    let enter_duration = enter_attr.map_or_else(|| quote! { None }, |e| quote! { Some(#e) });
+                    let exit_duration = exit_attr.map_or_else(|| quote! { None }, |e| quote! { Some(#e) });
+                    let native_panel_options = if [margin_attr, escape_attr, outside_attr, enter_attr, exit_attr]
+                        .iter()
+                        .any(Option::is_some)
+                    {
+                        quote! { .native_panel_options(#margin, #close_on_escape, #close_on_outside_click, #enter_duration, #exit_duration) }
+                    } else {
+                        quote! {}
+                    };
                     let class = get_attr("class")
                         .map(|e| quote! { Some((#e).to_string()) })
                         .unwrap_or_else(|| quote! { None });
@@ -4925,6 +5024,19 @@ fn expand_node_inner(
                                 | "align"
                                 | "side_offset"
                                 | "sideOffset"
+                                | "margin"
+                                | "close_on_escape"
+                                | "closeOnEscape"
+                                | "close_on_outside_click"
+                                | "closeOnPressOutside"
+                                | "enter_duration"
+                                | "enterDuration"
+                                | "exit_duration"
+                                | "exitDuration"
+                                | "popup_starting_style"
+                                | "popupStartingStyle"
+                                | "popup_ending_style"
+                                | "popupEndingStyle"
                                 | "class"
                                 | "strategy"
                                 | "width"
@@ -4946,9 +5058,10 @@ fn expand_node_inner(
                                 width: #width,
                                 lock_page_scroll: #lock_page_scroll,
                                 scroll_freeze: #scroll_freeze,
-                            },
+                                ..Default::default()
+                            }#native_panel_options,
                             move || #child_el,
-                        );
+                        )#panel_appearance;
                         if #native_unsupported { __jadix_popover.set_attr("jadix_native_unsupported", "Popover content options"); }
                         __jadix_popover
                     }};
@@ -6600,6 +6713,39 @@ fn expand_node_inner(
                     if attr_name == "ref" {
                         ref_expr = Some(value);
                         continue;
+                    }
+
+                    // These contracts belong to the host Element, including compound
+                    // components. Do not add platform-specific component props.
+                    let input_method = match attr_name {
+                        "interaction" => Some("interaction"),
+                        "on_interaction" | "onInteraction" => Some("on_interaction"),
+                        "keyboard" => Some("keyboard"),
+                        "on_key" | "onKey" => Some("on_key"),
+                        "on_shortcut" | "onShortcut" => Some("on_shortcut"),
+                        _ => None,
+                    };
+                    if let Some(method) = input_method {
+                        let method = syn::Ident::new(method, attr.span());
+                        chrome_binds.push(quote! { __jadix_el = __jadix_el.#method(#value); });
+                        continue;
+                    }
+
+                    if name_str == "Image" {
+                        let method = match attr_name {
+                            "object_fit" | "objectFit" => Some("object_fit"),
+                            "object_position" | "objectPosition" => Some("object_position"),
+                            "placeholder" => Some("image_placeholder"),
+                            "fade_duration" | "fadeDuration" => Some("image_fade_ms"),
+                            "blur_radius" | "blurRadius" => Some("image_blur_radius"),
+                            "on_load_event" | "onLoadEvent" => Some("on_image_load_event"),
+                            _ => None,
+                        };
+                        if let Some(method) = method {
+                            let method = syn::Ident::new(method, attr.span());
+                            chrome_binds.push(quote! { __jadix_el = __jadix_el.#method(#value); });
+                            continue;
+                        }
                     }
 
                     // Event handlers belong to the component's host element, not its public props.
@@ -9616,6 +9762,15 @@ fn expand_node_inner(
                         element = quote! { #element.text_size(jadix::core::tree::IntoF32::into_f32(#value)) }
                     }
                     "p" | "padding" => element = quote! { #element.p(#value) },
+                    "view_appearance" | "viewAppearance" => {
+                        element = quote! { #element.view_appearance(#value) }
+                    }
+                    "text_appearance" | "textAppearance" => {
+                        element = quote! { #element.text_appearance(#value) }
+                    }
+                    "window_drag" | "windowDrag" => {
+                        element = quote! { #element.window_drag(#value) }
+                    }
                     "px" | "padding_x" | "paddingX" => element = quote! { #element.px(#value) },
                     "py" | "padding_y" | "paddingY" => element = quote! { #element.py(#value) },
                     "pt" | "padding_top" | "paddingTop" => element = quote! { #element.pt(#value) },
@@ -9822,6 +9977,11 @@ fn expand_node_inner(
                             element = quote! { #element.#method(#value) };
                         }
                     }
+                    "interaction" => element = quote! { #element.interaction(#value) },
+                    "on_interaction" | "onInteraction" => element = quote! { #element.on_interaction(#value) },
+                    "keyboard" => element = quote! { #element.keyboard(#value) },
+                    "on_key" | "onKey" => element = quote! { #element.on_key(#value) },
+                    "on_shortcut" | "onShortcut" => element = quote! { #element.on_shortcut(#value) },
                     "on_click" | "onClick" => element = quote! { #element.on_click(#value) },
                     "on_hover" | "onHover" => element = quote! { #element.on_hover(#value) },
                     "on_wheel" | "onWheel" => element = quote! { #element.on_wheel(#value) },

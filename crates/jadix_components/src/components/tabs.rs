@@ -55,6 +55,7 @@
 //! - Trigger `focus_id = "{tabs_id}:{value}"`；方向键只移焦点环，点击 / Enter / Space 改选中。
 //! - 无头 `focus_id` 为 `tabstrip:{id}`（AccessKit TabList）。
 
+use crate::app::pointer_events::{EventPhase, MouseButton};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_in_flow};
 use crate::components::base::SlotChrome;
 use crate::components::toggle_group::toggle_group;
@@ -428,12 +429,24 @@ fn build_trigger(ctx: &TabsCtx, value: &str, label: String, disabled: bool) -> E
     let focus_id = format!("{}:{value}", ctx.id);
     let sel = ctx.value;
     let v = value.to_string();
+    let fid_down = focus_id.clone();
     let fid_click = focus_id.clone();
     let disabled = disabled || ctx.disabled;
     let mut el: Element = interactive(chip)
         .focus_id(focus_id.clone())
         .focusable(!disabled)
         .focus_ring(!disabled)
+        .on_mousedown(move |event| {
+            // Wait for descendants to decline their default action before taking focus.
+            if !disabled
+                && event.phase != EventPhase::Capture
+                && event.button == MouseButton::Left
+                && !event.default_prevented()
+            {
+                crate::utils::roving::focus_id_only(fid_down.clone());
+                event.prevent_default();
+            }
+        })
         .on_click(move || {
             if !disabled {
                 use_signal("__jadix_button_focus_id", String::new).set(fid_click.clone());
@@ -746,6 +759,7 @@ TabsTriggerProps [];
 pub fn TabsTrigger(
 default [] value: String,
 default [] disabled: bool,
+plain [] accessibility_description: Option<String>,
 plain [] children: Option<Element>,
 ) -> Element {
     let ctx = require_tabs("TabsTrigger");
@@ -756,13 +770,18 @@ plain [] children: Option<Element>,
         .iter()
         .find_map(caption_text)
         .unwrap_or_else(|| value.clone());
-    build_trigger(&ctx, &value, label, disabled)
+    let mut trigger = build_trigger(&ctx, &value, label, disabled);
+    if let Some(description) = accessibility_description {
+        trigger.set_attr("aria-description", description);
+    }
+    trigger
 }
 }
 
 pub struct TabsTriggerBuilder {
     value: String,
     disabled: bool,
+    accessibility_description: Option<String>,
     children: Vec<Element>,
     chrome: SlotChrome,
 }
@@ -771,6 +790,7 @@ pub fn tabs_trigger(value: impl Into<String>) -> TabsTriggerBuilder {
     TabsTriggerBuilder {
         value: value.into(),
         disabled: false,
+        accessibility_description: None,
         children: Vec::new(),
         chrome: SlotChrome::default(),
     }
@@ -778,6 +798,12 @@ pub fn tabs_trigger(value: impl Into<String>) -> TabsTriggerBuilder {
 
 impl TabsTriggerBuilder {
     crate::impl_slot_chrome_methods!();
+
+    /// Additional assistive text, separate from the visible tab name.
+    pub fn accessibility_description(mut self, description: impl Into<String>) -> Self {
+        self.accessibility_description = Some(description.into());
+        self
+    }
 
     pub fn disabled(mut self, v: bool) -> Self {
         self.disabled = v;
@@ -801,6 +827,7 @@ impl From<TabsTriggerBuilder> for Element {
         let el = TabsTrigger(TabsTriggerProps {
             value: Some(builder.value),
             disabled: Some(builder.disabled),
+            accessibility_description: builder.accessibility_description,
             children: crate::components::base::packed_children(builder.children),
             base: None,
         });

@@ -341,43 +341,11 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
         // While a nested submenu is open: ↑↓/Enter stay inside it; ← closes it
         // (Esc is usually handled by overlay `try_close_top` before this runs).
         if let Some(sid) = dropdown_menu_open_sub_id(&menu_id) {
-            let n = activate_count(&sid);
             let sub_active = use_signal(format!("{sid}__dd_active").as_str(), || ACTIVE_NONE);
+            if subtree::navigate_menu(&sid, "dd_active", sub_active, &ev.logical_key) {
+                return true;
+            }
             return match &ev.logical_key {
-                Key::Named(NamedKey::ArrowDown) => {
-                    if n == 0 {
-                        return true;
-                    }
-                    let cur = sub_active.peek();
-                    let Some(next) = activate_registry::move_enabled(&sid, cur, 1) else {
-                        return true;
-                    };
-                    set_dd_active(sub_active, next);
-                    true
-                }
-                Key::Named(NamedKey::ArrowUp) => {
-                    if n == 0 {
-                        return true;
-                    }
-                    let cur = sub_active.peek();
-                    let Some(next) = activate_registry::move_enabled(&sid, cur, -1) else {
-                        return true;
-                    };
-                    set_dd_active(sub_active, next);
-                    true
-                }
-                Key::Named(NamedKey::Home) => {
-                    if let Some(i) = activate_registry::enabled_edge(&sid, false) {
-                        set_dd_active(sub_active, i);
-                    }
-                    true
-                }
-                Key::Named(NamedKey::End) => {
-                    if let Some(i) = activate_registry::enabled_edge(&sid, true) {
-                        set_dd_active(sub_active, i);
-                    }
-                    true
-                }
                 k if crate::utils::keyboard::is_enter_or_space(k) => {
                     let ix = sub_active.peek();
                     if ix == ACTIVE_NONE {
@@ -401,39 +369,11 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
         if n == 0 {
             return false;
         }
+        if subtree::navigate_menu(&menu_id, "dd_active", active_keys, &ev.logical_key) {
+            close_open_subs(&menu_id);
+            return true;
+        }
         match &ev.logical_key {
-            Key::Named(NamedKey::ArrowDown) => {
-                let cur = active_keys.peek();
-                let Some(next) = activate_registry::move_enabled(&menu_id, cur, 1) else {
-                    return false;
-                };
-                close_open_subs(&menu_id);
-                set_dd_active(active_keys, next);
-                true
-            }
-            Key::Named(NamedKey::ArrowUp) => {
-                let cur = active_keys.peek();
-                let Some(next) = activate_registry::move_enabled(&menu_id, cur, -1) else {
-                    return false;
-                };
-                close_open_subs(&menu_id);
-                set_dd_active(active_keys, next);
-                true
-            }
-            Key::Named(NamedKey::Home) => {
-                if let Some(i) = activate_registry::enabled_edge(&menu_id, false) {
-                    close_open_subs(&menu_id);
-                    set_dd_active(active_keys, i);
-                }
-                true
-            }
-            Key::Named(NamedKey::End) => {
-                if let Some(i) = activate_registry::enabled_edge(&menu_id, true) {
-                    close_open_subs(&menu_id);
-                    set_dd_active(active_keys, i);
-                }
-                true
-            }
             Key::Named(NamedKey::ArrowRight) => {
                 let ix = active_keys.peek();
                 if ix == ACTIVE_NONE {
@@ -627,7 +567,7 @@ pub fn dropdown_menu_content(
             scroll_area(scroll_id.as_str())
                 .overflow_x("hidden")
                 .overflow_y("auto")
-                .scrollbar_visibility("auto")
+                .scrollbar_visibility("never")
                 .w("100%")
                 .h("auto")
                 .min_h(0.0)
@@ -1304,15 +1244,30 @@ pub(crate) fn dropdown_menu_sub_content_ex(
         for k in kids {
             rows = rows.child(k);
         }
+        let scroll_id = format!("{sid}__dd_scroll");
+        let viewport: Element = untrack(|| {
+            scroll_area(&scroll_id)
+                .overflow_x("hidden")
+                .overflow_y("auto")
+                .scrollbar_visibility("never")
+                .w("100%")
+                .h("auto")
+                .min_h(0.0)
+                .flex_grow(1.0)
+                .flex_shrink(1.0)
+                .child(rows)
+                .into()
+        });
         let mut panel: Element = vstack()
             .w("auto")
             .h("auto")
             .min_w("12rem")
+            .min_h(0.0)
             .p("0.25rem")
             .gap("0")
             .overflow_x("hidden")
             .overflow_y("hidden")
-            .child(rows)
+            .child(viewport)
             .into();
         panel = panel
             .bg(tokens::popover())

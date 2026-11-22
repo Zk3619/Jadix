@@ -1,6 +1,75 @@
 use super::*;
 
 #[test]
+fn pointer_press_focuses_tab_without_activating_or_stealing_nested_focus() {
+    use crate::app::pointer_events::{dispatch_pointer, HitPathEntry, MouseEvent, PointerKind};
+    use crate::core::reactivity::{create_root, create_signal};
+
+    let (_owner, (root, selected, focus)) = create_root(|| {
+        let selected = create_signal("first".to_string());
+        let focus = use_signal("__jadix_button_focus_id", String::new);
+        let root = tabs_scope(
+            "press-tabs",
+            Some(selected),
+            "first",
+            "horizontal",
+            false,
+            || {
+                Element::new().children(vec![
+                    tabs_trigger("second").text("Second").into(),
+                    tabs_trigger("disabled").disabled(true).into(),
+                ])
+            },
+        );
+        (root, selected, focus)
+    });
+    let trigger = &root.children[0];
+    let path = vec![HitPathEntry::from_element(trigger, [0.0, 0.0, 100.0, 30.0])];
+    focus.set("outside".into());
+    let mut down = MouseEvent::new(5.0, 5.0, MouseButton::Left, 1);
+    dispatch_pointer(&path, &mut down, PointerKind::Down);
+    assert_eq!(focus.get(), "press-tabs:second");
+    assert_eq!(selected.get(), "first", "press only moves focus");
+    let mut click = MouseEvent::new(5.0, 5.0, MouseButton::Left, 1);
+    dispatch_pointer(&path, &mut click, PointerKind::Click);
+    assert_eq!(selected.get(), "second");
+
+    for (entry, button, prevented) in [
+        (path[0].clone(), MouseButton::Right, false),
+        (path[0].clone(), MouseButton::Left, true),
+        (
+            HitPathEntry::from_element(&root.children[1], [0.0; 4]),
+            MouseButton::Left,
+            false,
+        ),
+    ] {
+        focus.set("outside".into());
+        let mut event = MouseEvent::new(5.0, 5.0, button, 1);
+        if prevented {
+            event.prevent_default();
+        }
+        dispatch_pointer(&[entry], &mut event, PointerKind::Down);
+        assert_eq!(focus.get(), "outside");
+    }
+
+    let child = Element::new()
+        .focus_id("nested-control")
+        .on_mousedown(move |event| {
+            assert_eq!(focus.get(), "outside", "capture must not steal focus first");
+            crate::utils::roving::focus_id_only("nested-control");
+            event.prevent_default(); // Deliberately bubble: the Tab must respect this.
+        });
+    let nested_path = vec![
+        path[0].clone(),
+        HitPathEntry::from_element(&child, [0.0; 4]),
+    ];
+    let mut event = MouseEvent::new(5.0, 5.0, MouseButton::Left, 1);
+    dispatch_pointer(&nested_path, &mut event, PointerKind::Down);
+    assert_eq!(focus.get(), "nested-control");
+    assert_eq!(selected.get(), "second");
+}
+
+#[test]
 fn tabs_scope_wires_trigger_for_and_selected() {
     let value = use_signal("tabs_test_value", || "account".to_string());
     let el = tabs_scope(
@@ -24,12 +93,14 @@ fn tabs_scope_wires_trigger_for_and_selected() {
                         TabsTrigger(TabsTriggerProps {
                             value: Some("account".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("Account")),
                             base: None,
                         }),
                         TabsTrigger(TabsTriggerProps {
                             value: Some("password".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("Password")),
                             base: None,
                         }),
@@ -105,12 +176,14 @@ fn tabs_trigger_hover_uses_shadcn_foreground() {
                         TabsTrigger(TabsTriggerProps {
                             value: Some("account".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("Account")),
                             base: None,
                         }),
                         TabsTrigger(TabsTriggerProps {
                             value: Some("password".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("Password")),
                             base: None,
                         }),
@@ -246,6 +319,7 @@ fn tabs_trigger_text_paints_in_content_box_centered() {
                     frag.children(vec![TabsTrigger(TabsTriggerProps {
                         value: Some("list".into()),
                         disabled: None,
+                        accessibility_description: None,
                         children: Some(Element::new().text("List")),
                         base: None,
                     })])
@@ -378,12 +452,14 @@ fn tabs_content_hidden_slot_is_display_none_zero_shell() {
                         TabsTrigger(TabsTriggerProps {
                             value: Some("list".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("List")),
                             base: None,
                         }),
                         TabsTrigger(TabsTriggerProps {
                             value: Some("grid".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("Grid")),
                             base: None,
                         }),
@@ -433,6 +509,7 @@ fn tabs_chips_prefer_intrinsic_content_width_in_narrow_parent() {
                     TabsTrigger(TabsTriggerProps {
                         value: Some(lab.to_lowercase()),
                         disabled: None,
+                        accessibility_description: None,
                         children: Some(Element::new().text(*lab)),
                         base: None,
                     })
@@ -596,18 +673,21 @@ fn radio_sync_must_not_nest_indicator_under_tabs_trigger() {
                         TabsTrigger(TabsTriggerProps {
                             value: Some("date".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("Date")),
                             base: None,
                         }),
                         TabsTrigger(TabsTriggerProps {
                             value: Some("datetime".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("DateTime")),
                             base: None,
                         }),
                         TabsTrigger(TabsTriggerProps {
                             value: Some("time".into()),
                             disabled: None,
+                            accessibility_description: None,
                             children: Some(Element::new().text("Time")),
                             base: None,
                         }),
@@ -750,6 +830,7 @@ fn tabs_sync_strips_stray_radio_indicator_from_trigger() {
         TabsTrigger(TabsTriggerProps {
             value: Some("a".into()),
             disabled: None,
+            accessibility_description: None,
             children: Some(Element::new().text("Alpha")),
             base: None,
         })
@@ -850,4 +931,76 @@ fn unselected_content_is_display_none_and_does_not_stack_root_gap() {
         one.layout_bounds[3],
         many.layout_bounds[3]
     );
+}
+
+#[test]
+fn tab_description_preserves_name_and_selection_across_sync() {
+    use crate::core::reactivity::{create_root, create_signal};
+    let (_owner, (mut root, selected)) = create_root(|| {
+        let selected = create_signal("account".to_string());
+        let root = tabs_scope(
+            "described-tabs",
+            Some(selected),
+            "account",
+            "horizontal",
+            false,
+            || {
+                let builder: Element = tabs_trigger("account")
+                    .text("Account")
+                    .accessibility_description("Manage your profile")
+                    .into();
+                let rsx = crate::ui! {
+                    <TabsTrigger value="password" accessibility_description="Change your credentials">
+                        "Password"
+                    </TabsTrigger>
+                };
+                Element::new().children(vec![builder, rsx])
+            },
+        );
+        (root, selected)
+    });
+    let mut layout = LayoutTree::new();
+    for active in ["account", "password"] {
+        selected.set(active.to_string());
+        let mut impact = LayoutStatus::Clean;
+        sync_tabs_trigger_subtree(&mut root, &mut layout, &mut impact);
+        let triggers = &root.children;
+        for (trigger, value, label, description) in [
+            (&triggers[0], "account", "Account", "Manage your profile"),
+            (
+                &triggers[1],
+                "password",
+                "Password",
+                "Change your credentials",
+            ),
+        ] {
+            assert_eq!(trigger.text.as_deref(), Some(label));
+            assert_eq!(trigger.attrs["aria-description"], description);
+            assert_eq!(
+                trigger.attrs["data-state"],
+                if value == active {
+                    "active"
+                } else {
+                    "inactive"
+                }
+            );
+            #[cfg(feature = "a11y")]
+            {
+                use crate::a11y::bridge::{node_id_for_key, tree_update_from_elements};
+                let update = tree_update_from_elements(&root, None);
+                let id = node_id_for_key(trigger.focus_id.as_deref().unwrap());
+                let node = &update
+                    .nodes
+                    .iter()
+                    .find(|(nid, _)| *nid == id)
+                    .expect("tab semantics")
+                    .1;
+                assert_eq!(node.role(), accesskit::Role::Tab);
+                assert_eq!(node.label(), Some(label));
+                assert_eq!(node.description(), Some(description));
+                assert_eq!(node.is_selected(), Some(value == active));
+                assert_eq!(node.toggled(), None);
+            }
+        }
+    }
 }

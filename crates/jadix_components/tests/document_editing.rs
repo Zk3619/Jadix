@@ -37,6 +37,214 @@ fn texts(element: &Element) -> String {
 }
 
 #[test]
+fn selectable_document_links_reach_the_public_callback_once() {
+    use jadix_components::app::pointer_events::{dispatch_pointer, hit_path, PointerKind};
+    use std::{cell::RefCell, rc::Rc};
+    use winit::event::MouseButton;
+    let (_owner, ()) = create_root(|| {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let mut root: Element = document_view("document-links")
+            .document(Document::markdown(
+                "before [guide](https://example.com/guide) after",
+            ))
+            .selectable(true)
+            .on_link({
+                let calls = calls.clone();
+                move |href| calls.borrow_mut().push(href.to_owned())
+            })
+            .into();
+        LayoutTree::new().build_and_layout(&mut root, 400.0, 200.0, [-1.0; 2]);
+        let leaf = find(&root, "data-document-kind", "Paragraph").unwrap();
+        assert!(leaf.text_style.selectable);
+        let [x, y, _, _] = leaf.layout_bounds;
+        let path = hit_path(&root, x + 2.0, y + 2.0);
+        assert_eq!(path.last().unwrap().node_id, leaf.layout_node_id());
+        let mut event = MouseEvent::new(x + 2.0, y + 2.0, MouseButton::Left, 1);
+        event.text_link = Some(TextLinkHit {
+            href: "https://example.com/guide".into(),
+            span_index: 1,
+        });
+        dispatch_pointer(&path, &mut event, PointerKind::Up);
+        assert_eq!(&*calls.borrow(), &["https://example.com/guide".to_owned()]);
+        assert!(event.is_consumed());
+        let mut event = MouseEvent::new(x + 2.0, y + 2.0, MouseButton::Left, 1);
+        dispatch_pointer(&path, &mut event, PointerKind::Up);
+        assert_eq!(
+            calls.borrow().len(),
+            1,
+            "ordinary selection has no link activation"
+        );
+    });
+}
+
+#[test]
+fn document_link_hover_ownership_is_per_view_and_clears_on_unmount() {
+    use jadix_components::app::pointer_events::{dispatch_pointer, hit_path, PointerKind};
+    use std::{cell::RefCell, rc::Rc};
+    use winit::event::MouseButton;
+    let (_owner, ()) = create_root(|| {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let callback: DocumentLinkHoverHandler = Rc::new({
+            let calls = calls.clone();
+            move |hover| calls.borrow_mut().push(hover)
+        });
+        let document = Document::markdown("[guide](https://example.com/guide)");
+        let mut first: Element = document_view("first-view")
+            .document(document.clone())
+            .on_link_hover({
+                let callback = callback.clone();
+                move |event| callback(event)
+            })
+            .on_link(|_| panic!("hover must not activate"))
+            .into();
+        let mut second = ui! {
+            <DocumentView id="second-view" document={document} on_link_hover={callback} />
+        };
+        for view in [&mut first, &mut second] {
+            LayoutTree::new().build_and_layout(view, 400.0, 200.0, [-1.0; 2]);
+            let leaf = find(view, "data-document-kind", "Paragraph").unwrap();
+            let [x, y, _, _] = leaf.layout_bounds;
+            let mut path = hit_path(view, x + 2.0, y + 2.0);
+            path.last_mut().unwrap().text_link = Some(TextLinkHit {
+                href: "https://example.com/guide".into(),
+                span_index: 0,
+            });
+            for _ in 0..2 {
+                let mut event = MouseEvent::new(x + 2.0, y + 2.0, MouseButton::Left, 0);
+                dispatch_pointer(&path, &mut event, PointerKind::Move);
+            }
+        }
+        assert_eq!(calls.borrow().len(), 2, "one transition per view");
+        first.on_unmount.take().unwrap().fire();
+        {
+            let calls = calls.borrow();
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|event| event.view_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["first-view", "second-view", "first-view"]
+            );
+            assert!(calls[0].href.is_some() && calls[1].href.is_some());
+            assert!(calls[2].href.is_none());
+            assert_eq!(calls[0].position, calls[2].position);
+        }
+        second.on_unmount.take().unwrap().fire();
+        assert_eq!(calls.borrow().last().unwrap().view_id, "second-view");
+        assert!(calls.borrow().last().unwrap().href.is_none());
+    });
+}
+
+#[test]
+fn document_inline_styles_share_core_semantics_and_one_wrapping_selection_leaf() {
+    use jadix_components::text::{
+        document_inline_spans, is_safe_document_destination, parse_markdown_blocks,
+        parse_markdown_inline,
+    };
+    let source = "before **bold** *italic* ~~deleted words across the line~~ `code` [good](HTTPS://example.com) [bad](javascript:run) after";
+    let document = Document::markdown(source);
+    let paragraph = document
+        .blocks()
+        .iter()
+        .find(|block| block.kind == DocumentBlockKind::Paragraph)
+        .unwrap();
+    let expected = paragraph.text();
+    let core = document_inline_spans(&paragraph.inlines);
+    assert_eq!(parse_markdown_inline(source), core);
+    let blocks = parse_markdown_blocks(source);
+    assert_eq!(
+        find_text(&blocks, &expected)
+            .unwrap()
+            .text_spans
+            .as_ref()
+            .unwrap(),
+        &core
+    );
+    assert!(core.iter().any(|span| span.strikethrough));
+    assert!(core.iter().any(|span| span.weight == Some(700)));
+    assert!(core.iter().any(|span| span.italic));
+    assert!(core.iter().any(|span| span.monospace));
+    assert_eq!(
+        core.iter()
+            .find(|span| span.text == "good")
+            .unwrap()
+            .href
+            .as_deref(),
+        Some("HTTPS://example.com")
+    );
+    let blocked = core.iter().find(|span| span.text == "bad").unwrap();
+    assert!(blocked.href.is_none() && !blocked.underline);
+    for target in [
+        "#heading",
+        "../image.png",
+        "https://example.com",
+        "HTTP://example.com",
+        "MAILTO:a@example.com",
+        "DATA:IMAGE/png;base64,AA==",
+    ] {
+        assert!(is_safe_document_destination(target), "{target}");
+    }
+    for target in [
+        "javascript:run",
+        "VbScript:run",
+        "data:text/html,body",
+        "file:///private",
+        "\nhttps://example.com",
+        "https://example.com\t",
+    ] {
+        assert!(!is_safe_document_destination(target), "{target:?}");
+    }
+    let (_owner, ()) = create_root(|| {
+        let mut heights = Vec::new();
+        for width in [640.0, 180.0] {
+            let mut root: Element = document_view(format!("shared-inline-{width}"))
+                .document(document.clone())
+                .selectable(true)
+                .into();
+            let output = LayoutTree::new().build_and_layout(&mut root, width, 600.0, [-1.0; 2]);
+            let leaf = find(&root, "data-document-kind", "Paragraph").unwrap();
+            assert_eq!(
+                leaf.text.as_deref(),
+                Some(expected.as_str()),
+                "ordinary styled text must remain one selection leaf"
+            );
+            assert!(leaf.children.is_empty());
+            let spans = leaf.text_spans.as_ref().unwrap();
+            assert_eq!(spans.len(), core.len());
+            for (actual, expected) in spans.iter().zip(&core) {
+                assert_eq!(
+                    (
+                        &actual.text,
+                        actual.weight,
+                        actual.size,
+                        actual.italic,
+                        actual.monospace,
+                        actual.strikethrough,
+                        actual.underline,
+                        &actual.href
+                    ),
+                    (
+                        &expected.text,
+                        expected.weight,
+                        expected.size,
+                        expected.italic,
+                        expected.monospace,
+                        expected.strikethrough,
+                        expected.underline,
+                        &expected.href
+                    )
+                );
+            }
+            assert_eq!(output.text_nodes.len(), 1);
+            assert_eq!(output.text_nodes[0].spans.as_ref().unwrap(), spans);
+            assert!(leaf.layout_bounds[2] <= width);
+            heights.push(leaf.layout_bounds[3]);
+        }
+        assert!(heights[1] > heights[0], "narrow paragraphs must reflow");
+    });
+}
+
+#[test]
 fn commonmark_blocks_retain_source_and_render_real_semantics() {
     let source = "# title\n\n- [x] done\n- pending\n\n| a | b |\n| :- | -: |\n| 1 | 2 |\n\n$$\n\\frac{1}{2}\n$$\n";
     let document = Document::markdown(source);
@@ -268,6 +476,98 @@ fn selection_search_and_undo_cover_unmounted_content() {
 }
 
 #[test]
+fn paste_pipeline_uses_document_selection_and_one_undo() {
+    use std::{cell::RefCell, rc::Rc};
+    let (_owner, ()) = create_root(|| {
+        let original = "before\n\n中文\n\nafter";
+        let state = DocumentEditorState::new(original);
+        let selection = DocumentSelection {
+            anchor: 14,
+            caret: 8,
+        };
+        state.set_selection(selection).unwrap();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let first = seen.clone();
+        let second = seen.clone();
+        let transforms: Vec<DocumentPasteTransform> = vec![
+            Rc::new(move |snapshot, text| {
+                assert_eq!(snapshot.selection, selection);
+                first.borrow_mut().push(text.clone());
+                Some(text.trim().to_uppercase())
+            }),
+            Rc::new(move |_, text| {
+                second.borrow_mut().push(text.clone());
+                Some(format!("**{text}**\nnext"))
+            }),
+        ];
+        assert!(state.paste_text(" hello ", &transforms).unwrap());
+        assert_eq!(*seen.borrow(), [" hello ", "HELLO"]);
+        assert_eq!(
+            state.document().source().text(),
+            "before\n\n**HELLO**\nnext\n\nafter"
+        );
+        assert!(state.undo());
+        assert_eq!(state.document().source().text(), original);
+        assert_eq!(state.selection(), selection);
+        assert!(!state.undo());
+        assert!(state.redo());
+        assert_eq!(state.selected_text(), "");
+
+        // Both authoring surfaces accept the same shared callback type.
+        let editor = ui! { <DocumentEditor id="paste-rsx" state={state.clone()} paste_transforms={transforms} /> };
+        assert_eq!(editor.attrs["data-slot"], "document-editor");
+        let _: Element = document_editor("paste-builder", state)
+            .paste_transform(|_, text| Some(text))
+            .into();
+    });
+}
+
+#[test]
+fn paste_pipeline_stops_on_consumption_or_state_change() {
+    use std::rc::Rc;
+    let (_owner, ()) = create_root(|| {
+        for change in ["consume", "document", "selection", "mode", "empty"] {
+            let state = DocumentEditorState::new("abc");
+            state.set_selection(DocumentSelection::caret(1)).unwrap();
+            let changed = state.clone();
+            let transforms: Vec<DocumentPasteTransform> = vec![
+                Rc::new(move |_, text| {
+                    match change {
+                        "consume" => return None,
+                        "document" => changed.replace(0..0, "!").unwrap(),
+                        "selection" => changed.set_selection(DocumentSelection::caret(3)).unwrap(),
+                        "mode" => changed.set_mode(DocumentEditMode::Preview),
+                        "empty" => return Some(String::new()),
+                        _ => unreachable!(),
+                    }
+                    Some(text)
+                }),
+                Rc::new(|_, text| {
+                    assert!(
+                        text.is_empty(),
+                        "stale/consumed requests must stop before the next stage"
+                    );
+                    Some(text)
+                }),
+            ];
+            assert!(!state.paste_text("paste", &transforms).unwrap());
+            assert_eq!(
+                state.document().source().text(),
+                if change == "document" { "!abc" } else { "abc" }
+            );
+        }
+        let readonly = DocumentEditorState::new("readonly");
+        readonly.set_mode(DocumentEditMode::Preview);
+        assert!(!readonly
+            .paste_text("paste", &[Rc::new(|_, _| panic!("read-only"))])
+            .unwrap());
+        let (owner, dead) = create_root(|| DocumentEditorState::new("dead"));
+        drop(owner);
+        assert!(!dead.paste_text("paste", &[]).unwrap());
+    });
+}
+
+#[test]
 fn rich_text_formatting_preserves_source_and_is_undoable() {
     let rich = Document::rich_text([RichTextBlock::paragraph([RichTextSpan::new("hello world")])]);
     let state = DocumentEditorState::new(rich);
@@ -436,4 +736,151 @@ fn find_text<'a>(element: &'a Element, text: &str) -> Option<&'a Element> {
         .children
         .iter()
         .find_map(|child| find_text(child, text))
+}
+
+#[test]
+fn document_tasks_are_controlled_and_resolve_live_block_identity() {
+    use std::{cell::RefCell, rc::Rc};
+    let (_owner, ()) = create_root(|| {
+        let document = use_signal("task-document", || {
+            Document::markdown("intro\n\n- [ ] **todo**\n- [x] done\n")
+        });
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let sink = requests.clone();
+        let mut root: Element = document_view("task-view")
+            .document_signal(document)
+            .on_task_toggle(move |event| sink.borrow_mut().push(event))
+            .into();
+        let checkbox = find(&root, "aria-label", "todo").unwrap();
+        assert_eq!(checkbox.attrs["aria-checked"], "false");
+        assert_eq!(checkbox.attrs["aria-readonly"], "false");
+        assert!(checkbox.focus_id.is_some());
+        assert!(!checkbox.text_style.selectable);
+        let click = checkbox.on_click.clone().unwrap();
+        let id = document
+            .peek()
+            .blocks()
+            .iter()
+            .find(|block| block.text() == "todo")
+            .unwrap()
+            .id;
+        // A retained virtual row must resolve its new source coordinates.
+        let changed = document.peek().replace(1..2, "longer").unwrap();
+        let block = changed
+            .blocks()
+            .iter()
+            .find(|block| block.id == id)
+            .unwrap();
+        let expected = DocumentTaskToggle {
+            block_id: id,
+            revision: changed.revision(),
+            source: block.source.clone(),
+            checked: true,
+        };
+        document.set(changed);
+        let mut layout = LayoutTree::new();
+        sync(&mut root, &mut layout);
+        assert!(Rc::ptr_eq(
+            &click,
+            find(&root, "aria-label", "todo")
+                .unwrap()
+                .on_click
+                .as_ref()
+                .unwrap()
+        ));
+        click.borrow_mut()();
+        assert_eq!(*requests.borrow(), vec![expected.clone()]);
+        assert!(document.peek().source().text().contains("[ ]"));
+        // The application applies the request, creating a fresh checked block.
+        let marker = document.peek().source().text()[expected.source.clone()]
+            .find("[ ]")
+            .unwrap();
+        let offset = expected.source.start + marker + 1;
+        document.set(document.peek().replace(offset..offset + 1, "x").unwrap());
+        sync(&mut root, &mut layout);
+        assert_eq!(
+            find(&root, "aria-label", "todo").unwrap().attrs["aria-checked"],
+            "true"
+        );
+        click.borrow_mut()();
+        assert_eq!(
+            requests.borrow().len(),
+            1,
+            "removed identities must not toggle a new row"
+        );
+        find(&root, "aria-label", "todo")
+            .unwrap()
+            .on_click
+            .as_ref()
+            .unwrap()
+            .borrow_mut()();
+        assert!(!requests.borrow().last().unwrap().checked);
+    });
+}
+
+#[test]
+fn document_task_rsx_preserves_readonly_and_custom_renderer_contracts() {
+    use std::rc::Rc;
+    let (_owner, ()) = create_root(|| {
+        let readonly: Element = document_view("readonly-tasks")
+            .document("- [ ] todo")
+            .into();
+        let checkbox = find(&readonly, "accesskit_role", "checkbox").unwrap();
+        assert!(checkbox.on_click.is_none());
+        assert_eq!(checkbox.attrs["aria-readonly"], "true");
+        #[cfg(feature = "a11y")]
+        {
+            let update = jadix::a11y::bridge::tree_update_from_elements(&readonly, None);
+            let node = &update
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some("todo"))
+                .unwrap()
+                .1;
+            assert_eq!(format!("{:?}", node.toggled()), "Some(False)");
+            assert!(node.is_read_only());
+        }
+        let state = DocumentEditorState::new("intro\n\n- [ ] todo");
+        let editor: Element = document_editor("editable-tasks", state.clone()).into();
+        assert_eq!(
+            find(&editor, "accesskit_role", "checkbox").unwrap().attrs["aria-readonly"],
+            "false"
+        );
+        state.set_mode(DocumentEditMode::Preview);
+        let preview: Element = document_editor("preview-tasks", state).into();
+        assert_eq!(
+            find(&preview, "accesskit_role", "checkbox").unwrap().attrs["aria-readonly"],
+            "true"
+        );
+        let handler: DocumentTaskHandler = Rc::new(|_| {});
+        let rsx =
+            ui! { <DocumentView id="rsx-tasks" text="- [ ] todo" on_task_toggle={handler} /> };
+        assert!(find(&rsx, "accesskit_role", "checkbox")
+            .unwrap()
+            .on_click
+            .is_some());
+        #[cfg(feature = "a11y")]
+        {
+            let checked: Element = document_view("checked-tasks")
+                .document("- [x] done")
+                .on_task_toggle(|_| {})
+                .into();
+            let update = jadix::a11y::bridge::tree_update_from_elements(&checked, None);
+            let node = &update
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some("done"))
+                .unwrap()
+                .1;
+            assert_eq!(format!("{:?}", node.toggled()), "Some(True)");
+            assert!(!node.is_read_only());
+        }
+        let custom: Element = document_view("custom-tasks")
+            .document("- [ ] todo")
+            .on_task_toggle(|_| panic!("custom renderer owns its interactions"))
+            .block_renderer(|_, _| Some(Element::new().text("custom")))
+            .into();
+        assert!(find(&custom, "accesskit_role", "checkbox").is_none());
+        assert_eq!(texts(&custom), "custom");
+    });
 }

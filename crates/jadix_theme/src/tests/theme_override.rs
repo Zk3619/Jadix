@@ -2,19 +2,33 @@ use super::*;
 
 #[test]
 fn toml_patch_parses_kebab_keys() {
-    let raw = r#"
+    let raw = r##"
             [light]
             primary-foreground = "oklch(0.985 0 0)"
             destructive = "oklch(0.577 0.245 27.325)"
             warn = "oklch(0.75 0.15 70)"
+            match-foreground = "#123456"
             [dark]
             primary = "oklch(0.922 0 0)"
-        "#;
+            match-foreground = "#abcdef"
+        "##;
     let patch = parse_theme_overrides_str(raw).expect("toml");
     assert!(patch.light.primary_foreground.is_some());
     assert!(patch.light.destructive.is_some());
     assert!(patch.light.warning.is_some());
     assert!(patch.dark.primary.is_some());
+    for (patch, mode) in [
+        (&patch.light, ThemeMode::Light),
+        (&patch.dark, ThemeMode::Dark),
+    ] {
+        let theme = apply_theme_patch(patch, mode);
+        assert_eq!(
+            theme.colors.match_foreground,
+            crate::try_parse_color(patch.match_foreground.as_deref().unwrap()).unwrap()
+        );
+        assert_ne!(theme.colors.match_foreground, theme.colors.primary);
+        assert_ne!(theme.colors.match_foreground, theme.colors.foreground);
+    }
 }
 
 #[test]

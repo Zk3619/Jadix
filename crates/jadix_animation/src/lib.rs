@@ -8,6 +8,7 @@ pub mod icon_morph;
 #[cfg(feature = "animation-path")]
 pub mod path;
 pub mod physics;
+pub mod presentation;
 pub mod timeline;
 pub mod timing;
 pub use animation::*;

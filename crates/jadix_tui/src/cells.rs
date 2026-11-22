@@ -2443,7 +2443,11 @@ fn paint_grid(
         .iter()
         .find(|g| g.row == last)
         .is_some_and(|g| g.base_rtl);
-    let ellipsis = hidden && overflow == TextOverflow::Ellipsis;
+    let ellipsis = hidden
+        && matches!(
+            overflow,
+            TextOverflow::Ellipsis | TextOverflow::EllipsisStart | TextOverflow::EllipsisMiddle
+        );
     for g in &layout.glyphs {
         if g.row >= limit {
             continue;

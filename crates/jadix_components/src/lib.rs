@@ -2,6 +2,7 @@
 pub use jadix::authoring::widgets::navigation_chevron as chrome_nav_chevron;
 pub use jadix::*;
 pub mod schema;
+pub mod emoji_picker;
 #[cfg(feature = "gpu")]
 pub use jadix::{app, authoring, core, layout, media, motion, primitives, renderer, style, text};
 
@@ -24,7 +25,7 @@ pub mod utils {
 pub mod prelude {
     pub use crate::components::*;
     #[cfg(feature = "gpu")]
-    pub use crate::components::{image, marker};
+    pub use crate::components::{image, link, marker};
     #[cfg(feature = "macros")]
     pub use crate::ui;
     pub use jadix::prelude::*;

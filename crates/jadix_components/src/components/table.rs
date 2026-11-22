@@ -80,14 +80,14 @@
 use std::rc::Rc;
 
 use crate::app::reactive::reactive_view;
-use crate::components::base::{packed_children, SlotChrome, SlotStyleFn};
+use crate::components::base::{SlotChrome, SlotStyleFn, packed_children};
 use crate::components::button::button;
 use crate::components::virtual_list::virtual_list;
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::{Signal, use_signal};
 use crate::core::tree::{Element, Handler, LayoutStatus};
 use crate::impl_simple_slot_builder;
+use crate::primitives::r#box::{r#box, gstack, hstack, vstack};
 use crate::primitives::interactive::mark_hover_paint_dirty;
-use crate::primitives::r#box::{gstack, hstack, r#box, vstack};
 use crate::primitives::text::text;
 use crate::style::parse_color;
 use crate::style::parse_text_color;
@@ -111,6 +111,20 @@ fn table_footer_bg() -> [f32; 4] {
     parse_color("muted/50")
 }
 
+fn table_stripe_bg() -> [f32; 4] {
+    parse_color("muted/25")
+}
+
+pub(super) fn table_row_rest_bg(row: &Element) -> [f32; 4] {
+    if row.attrs.get("data-table-footer-row").map(String::as_str) == Some("1") {
+        table_footer_bg()
+    } else if row.attrs.get("data-table-striped-row").map(String::as_str) == Some("1") {
+        table_stripe_bg()
+    } else {
+        [0.0; 4]
+    }
+}
+
 fn strip_last_row_border(mut rows: Vec<Element>) -> Vec<Element> {
     if let Some(last) = rows.last_mut() {
         last.style.set_border_side_width(2, 0.0);
@@ -125,7 +139,8 @@ fn apply_table_row_state(mut row: Element, selected: bool) -> Element {
         row.authoring_state
             .remove::<crate::components::button::ButtonHoverPaint>();
     } else {
-        row = row.bg([0.0, 0.0, 0.0, 0.0]);
+        let background = table_row_rest_bg(&row);
+        row = row.bg(background);
         row.attrs.remove("data-state");
     }
     row
@@ -222,7 +237,7 @@ fn apply_cell_align_in_place(el: &mut Element, align: TableAlign) -> bool {
 }
 
 fn parse_table_col_width(raw: &str) -> crate::layout::dimension::CssDim {
-    use crate::layout::dimension::{parse_css_dim, CssDim};
+    use crate::layout::dimension::{CssDim, parse_css_dim};
     let s = raw.trim();
     if s.is_empty() {
         return CssDim::Auto;
@@ -285,7 +300,7 @@ fn infer_shared_column_tracks(sections: &[Element]) -> Option<Vec<crate::layout:
 /// 从行内单元格的 `data-table-col-w` 生成共享列轨（各行同模板 → 列纵向对齐）。
 fn table_row_grid_template_from_cells(cells: &[Element]) -> Vec<crate::layout::GridTrack> {
     use crate::layout::track_fr_1;
-    use taffy::prelude::{length, GridTemplateComponent};
+    use taffy::prelude::{GridTemplateComponent, length};
 
     if cells.is_empty() {
         return crate::layout::cols_equal_fr(1);
@@ -305,7 +320,7 @@ fn table_row_grid_template_from_cells(cells: &[Element]) -> Vec<crate::layout::G
 }
 
 fn table_row_grid_template_from_columns(columns: &[TableColumn]) -> Vec<crate::layout::GridTrack> {
-    use crate::layout::{track_fr_1, GridTrack};
+    use crate::layout::{GridTrack, track_fr_1};
     use taffy::prelude::{fr, length, minmax};
 
     if columns.is_empty() {
@@ -1006,6 +1021,7 @@ pub struct TableBuilder {
     row_height: Option<f32>,
     height: f32,
     density: TableDensity,
+    stripe: bool,
     scrollbar_visibility: String,
     selected: Option<Signal<Option<usize>>>,
     sort: Option<Signal<TableSortState>>,
@@ -1026,6 +1042,7 @@ pub fn table(id: impl Into<String>) -> TableBuilder {
         row_height: None,
         height: 240.0,
         density: TableDensity::Default,
+        stripe: false,
         scrollbar_visibility: "auto".to_string(),
         selected: None,
         sort: None,
@@ -1078,17 +1095,28 @@ impl TableBuilder {
     }
 
     pub fn row_height(mut self, h: f32) -> Self {
-        self.row_height = Some(h.max(1.0));
+        if h.is_finite() {
+            self.row_height = Some(h.max(1.0));
+        }
         self
     }
 
     pub fn height(mut self, h: f32) -> Self {
-        self.height = h.max(1.0);
+        if h.is_finite() {
+            self.height = h.max(1.0);
+        }
         self
     }
 
     pub fn density(mut self, d: impl Into<TableDensity>) -> Self {
         self.density = d.into();
+        self
+    }
+
+    /// Alternate visible row backgrounds, continuing through an underfilled viewport.
+    /// Empty stripes are decoration only: they never become selectable or scrollable rows.
+    pub fn stripe(mut self, yes: bool) -> Self {
+        self.stripe = yes;
         self
     }
 
@@ -1139,9 +1167,9 @@ impl TableBuilder {
     pub fn style(
         mut self,
         f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
+            crate::components::base::BaseComponentBuilder,
+        ) -> crate::components::base::BaseComponentBuilder
+        + 'static,
     ) -> Self {
         self.style = Some(std::rc::Rc::new(f));
         self
@@ -1216,6 +1244,7 @@ impl From<TableBuilder> for Element {
             row_height,
             height,
             density,
+            stripe,
             scrollbar_visibility,
             selected,
             sort,
@@ -1364,6 +1393,9 @@ impl From<TableBuilder> for Element {
                     if is_last {
                         row_el.style.set_border_side_width(2, 0.0);
                     }
+                    if stripe && vis_i % 2 == 1 {
+                        row_el.set_attr("data-table-striped-row", "1");
+                    }
                     row_el = apply_table_row_state(row_el, is_sel);
 
                     for (ci, col) in cols.iter().enumerate() {
@@ -1396,6 +1428,45 @@ impl From<TableBuilder> for Element {
             let mut header_wrap: Element =
                 mark_slot(vstack().w("100%").child(header_row).into(), SLOT_HEADER);
             header_wrap.set_attr("data-slot", "table-header");
+            let list = if stripe && (row_count_vis as f32 * row_h) < height {
+                // Keep decoration outside VirtualList's data/content extent. In
+                // particular, painting an empty tail must never scroll or notify.
+                let mut stripes: Element = r#box()
+                    .absolute(true)
+                    .top(0.0)
+                    .left(0.0)
+                    .w("100%")
+                    .h(height)
+                    .pointer_events("none")
+                    .into();
+                stripes.set_attr("aria-hidden", "true");
+                stripes.set_attr("data-slot", "table-empty-stripes");
+                let first = row_count_vis | 1;
+                let end = (height / row_h).ceil() as usize;
+                for index in (first..end).step_by(2) {
+                    let top = index as f32 * row_h;
+                    stripes = stripes.child(
+                        r#box()
+                            .absolute(true)
+                            .top(top)
+                            .left(0.0)
+                            .w("100%")
+                            .h(row_h.min(height - top))
+                            .bg(table_stripe_bg()),
+                    );
+                }
+                r#box()
+                    .relative(true)
+                    .w("100%")
+                    .min_w(0.0)
+                    .h(height)
+                    .flex_shrink(0.0)
+                    .child(stripes)
+                    .child(list)
+                    .into()
+            } else {
+                list
+            };
             let mut body_wrap: Element = mark_slot(list, SLOT_BODY);
             body_wrap.set_attr("data-slot", "table-body");
 
@@ -1551,13 +1622,17 @@ identity [] id: String,
 default [] row_count: usize,
 plain [] height: Option<f32>,
 plain [] density: Option<String>,
+default [] stripe: bool,
 plain [] scrollbar_visibility: Option<String>,
 default [] sortable: bool,
 plain [] caption: Option<String>,
 plain [] children: Option<Element>,
 ) -> Element {
     let _ = children;
-    let mut b = data_table(id).row_count(row_count).sortable(sortable);
+    let mut b = data_table(id)
+        .row_count(row_count)
+        .sortable(sortable)
+        .stripe(stripe);
     if let Some(h) = height {
         b = b.height(h);
     }

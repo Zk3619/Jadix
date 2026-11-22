@@ -1,5 +1,10 @@
 use jadix::portable::{authoring::BaseComponentBuilder, core::tree::Handler, Element, Signal};
-use jadix::presentation::NodeContent;
+pub use jadix::portable::window::{window, Window, WindowBuilder, WindowProps};
+pub use jadix::portable::virtual_list::{virtual_list, VirtualListBuilder, VirtualListState};
+use jadix::presentation::{
+    style::{ImageFit, ImagePosition},
+    ImageLoadEvent, NodeContent,
+};
 
 type Base = Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>;
 
@@ -10,6 +15,14 @@ pub use dialog::*;
 #[path = "portable/popover.rs"]
 mod popover;
 pub use popover::*;
+
+#[path = "portable/hover.rs"]
+mod hover;
+pub use hover::*;
+
+#[path = "portable/menu.rs"]
+mod menu;
+pub use menu::*;
 
 #[path = "portable/select.rs"]
 mod select;
@@ -35,6 +48,58 @@ pub use radio_group::*;
 mod navigation;
 pub use navigation::*;
 
+#[path = "portable/hosted.rs"]
+mod hosted;
+pub use hosted::*;
+
+#[path = "portable/emoji_picker.rs"]
+mod emoji_picker;
+pub use emoji_picker::*;
+
+#[path = "portable/tree_view.rs"]
+mod tree_view;
+pub use tree_view::*;
+
+#[path = "portable/text_view.rs"]
+mod text_view;
+pub use text_view::*;
+
+#[path = "portable/table.rs"]
+mod table;
+pub use table::*;
+
+#[path = "portable/toast.rs"]
+mod toast;
+pub use toast::*;
+
+#[path = "portable/range.rs"]
+mod range;
+pub use range::*;
+
+#[path = "portable/toggle.rs"]
+mod toggle;
+pub use toggle::*;
+
+#[path = "portable/error_boundary.rs"]
+mod error_boundary;
+pub use error_boundary::*;
+
+#[path = "portable/resizable.rs"]
+mod resizable;
+pub use resizable::*;
+
+#[path = "portable/command.rs"]
+mod command;
+pub use command::*;
+
+#[path = "portable/toolbar.rs"]
+mod toolbar;
+pub use toolbar::*;
+
+#[path = "portable/dock.rs"]
+mod dock;
+pub use dock::*;
+
 pub struct ButtonBuilder {
     element: Element,
 }
@@ -49,11 +114,37 @@ pub fn button(id: &str) -> ButtonBuilder {
 }
 
 impl ButtonBuilder {
+    pub fn hit_slop(mut self, edges: [f64; 4]) -> Self {
+        self.element = self.element.hit_slop(edges); self
+    }
+    pub fn pointer_events(mut self, mode: jadix::presentation::interaction::PointerEvents) -> Self {
+        self.element = self.element.pointer_events(mode); self
+    }
+    pub fn interaction(mut self, policy: jadix::presentation::interaction::InteractionPolicy) -> Self {
+        self.element = self.element.interaction(policy); self
+    }
+    pub fn on_interaction(mut self, callback: impl FnMut(&jadix::presentation::interaction::InteractionEvent) + 'static) -> Self {
+        self.element = self.element.on_interaction(callback); self
+    }
+    pub fn keyboard(mut self, policy: jadix::presentation::keyboard::KeyboardPolicy) -> Self {
+        self.element = self.element.keyboard(policy); self
+    }
+    pub fn on_key(mut self, callback: impl FnMut(&jadix::presentation::keyboard::KeyEvent) + 'static) -> Self {
+        self.element = self.element.on_key(callback); self
+    }
+    pub fn on_shortcut(mut self, callback: impl FnMut(&str) + 'static) -> Self {
+        self.element = self.element.on_shortcut(callback); self
+    }
     pub fn text(self, content: impl Into<String>) -> Self {
-        self.child(Element::new().text(content.into()))
+        // A text caption uses the platform control's intrinsic measurement.
+        let mut builder = self;
+        builder.element.children.push(Element::new().text(content.into()));
+        builder
     }
 
     pub fn child(mut self, child: impl Into<Element>) -> Self {
+        // Explicit content retains its own styles and layout in every host.
+        self.element.attrs.insert("button:content".into(), "true".into());
         self.element.children.push(child.into());
         self
     }
@@ -374,6 +465,18 @@ pub fn image() -> ImageBuilder {
 }
 
 impl ImageBuilder {
+    pub fn hit_slop(mut self, edges: [f64; 4]) -> Self {
+        self.element = self.element.hit_slop(edges); self
+    }
+    pub fn pointer_events(mut self, mode: jadix::presentation::interaction::PointerEvents) -> Self {
+        self.element = self.element.pointer_events(mode); self
+    }
+    pub fn interaction(mut self, policy: jadix::presentation::interaction::InteractionPolicy) -> Self {
+        self.element = self.element.interaction(policy); self
+    }
+    pub fn on_interaction(mut self, callback: impl FnMut(&jadix::presentation::interaction::InteractionEvent) + 'static) -> Self {
+        self.element = self.element.on_interaction(callback); self
+    }
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.element.template_id = Some(id.into());
         self
@@ -391,6 +494,30 @@ impl ImageBuilder {
         if let NodeContent::Image { alt: current, .. } = &mut self.element.descriptor.content {
             *current = alt.into();
         }
+        self
+    }
+    pub fn object_fit(mut self, fit: ImageFit) -> Self {
+        self.element = self.element.object_fit(fit);
+        self
+    }
+    pub fn object_position(mut self, position: ImagePosition) -> Self {
+        self.element = self.element.object_position(position);
+        self
+    }
+    pub fn placeholder(mut self, source: impl Into<String>) -> Self {
+        self.element = self.element.image_placeholder(source);
+        self
+    }
+    pub fn blur_radius(mut self, radius: f32) -> Self {
+        self.element = self.element.image_blur_radius(radius);
+        self
+    }
+    pub fn fade_duration(mut self, milliseconds: u32) -> Self {
+        self.element = self.element.image_fade_ms(milliseconds);
+        self
+    }
+    pub fn on_load_event(mut self, callback: impl FnMut(&ImageLoadEvent) + 'static) -> Self {
+        self.element = self.element.on_image_load_event(callback);
         self
     }
 }

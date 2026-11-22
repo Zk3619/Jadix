@@ -53,6 +53,20 @@ fn kbd_group_unpacks_and_sets_slot() {
 fn kbd_group_builder_kbd_helper() {
     let el: Element = kbd_group().kbd("Ctrl").kbd("B").into();
     assert_eq!(el.children.len(), 2);
+    let chord = "Alt+Shift+=".parse().unwrap();
+    let el: Element = kbd_group().key_chord(&chord).into();
+    let captions: Vec<_> = el
+        .children
+        .iter()
+        .map(|cap| {
+            assert_eq!(cap.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_KBD));
+            cap.children
+                .iter()
+                .find_map(|leaf| leaf.text.as_deref())
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(captions, ["Alt", "Shift", "="]);
 }
 
 #[test]

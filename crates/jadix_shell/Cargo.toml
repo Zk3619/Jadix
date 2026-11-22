@@ -9,18 +9,21 @@ readme = "README.md"
 
 [features]
 default = []
-native-vm = ["dep:rquickjs", "dep:stacker"]
-native-host = ["dep:jadix_native"]
+native-vm = ["dep:rquickjs", "dep:stacker", "jadix_core/performance", "dep:jadix_net", "jadix_net/json"]
+i18n = ["jadix_core/i18n", "jadix_native?/i18n", "jadix?/i18n"]
+native-host = ["dep:jadix_native", "jadix_native/performance", "i18n"]
+native-linux = ["native-host", "jadix_native/linux"]
+native-windows = ["native-host", "jadix_native/windows"]
 native-store = ["dep:jadix_net"]
 native-https = ["native-store", "jadix_net/native-https"]
-gpu-host = ["native-vm", "dep:base64", "dep:jadix_components", "dep:jadix", "jadix/gpu", "dep:winit", "dep:wgpu"]
+gpu-host = ["native-vm", "i18n", "dep:base64", "dep:jadix_components", "dep:jadix", "jadix/gpu", "dep:winit", "dep:wgpu"]
 text-undo = ["gpu-host", "jadix/text-undo"]
 backend-dx12 = ["gpu-host", "jadix/backend-dx12"]
 backend-vulkan = ["gpu-host", "jadix/backend-vulkan"]
 backend-metal = ["gpu-host", "jadix/backend-metal"]
 
 [dependencies]
-jadix_core.workspace = true
+jadix_core = { workspace = true, features = ["updater"] }
 jadix_components = { workspace = true, optional = true, default-features = false, features = ["gpu"] }
 base64 = { version = "=0.22.1", optional = true }
 winit = { workspace = true, optional = true }
@@ -36,6 +39,9 @@ ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rquickjs = { version = "=0.14.0", optional = true, default-features = false, features = ["std"] }
 stacker = { workspace = true, optional = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+rquickjs = { version = "=0.14.0", optional = true, default-features = false, features = ["std", "bindgen"] }
 
 [dev-dependencies]
 jadix_native.workspace = true

@@ -3,19 +3,7 @@
 use jadix_shell::{application::ScriptApplication, gpu::GpuApplication, wire::ComponentRegistry};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Read;
-    let mut registry = ComponentRegistry::default();
-    let schemas: Vec<jadix_core::presentation::component::ComponentSchema> = serde_json::from_str(
-        include_str!("../../jadix_components/schema/portable-v1.json"),
-    )?;
-    for schema in schemas.into_iter().chain(serde_json::from_str::<
-        Vec<jadix_core::presentation::component::ComponentSchema>,
-    >(include_str!(
-        "../../jadix_components/schema/extended-v1.json"
-    ))?) {
-        registry
-            .register(schema)
-            .map_err(|e| format!("schema: {e:?}"))?;
-    }
+    let registry = ComponentRegistry::standard();
     let mut path = None;
     let mut retained = false;
     let mut benchmark_rows = None;

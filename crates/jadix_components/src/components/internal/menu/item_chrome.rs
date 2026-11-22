@@ -3,8 +3,8 @@
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::r#box::{hstack, BoxBuilder};
-use crate::style::{parse_color, parse_text_color, WhiteSpace};
+use crate::primitives::r#box::{BoxBuilder, hstack};
+use crate::style::{WhiteSpace, parse_color, parse_text_color};
 
 /// Shared item chrome. Do **not** use `min_w(0)` — that collapses wrapping labels to 1ch.
 pub fn item_row_chrome(inset: bool) -> BoxBuilder {
@@ -80,6 +80,11 @@ pub fn sync_item_paint_node(
             .and_then(|s| s.parse::<usize>().ok());
         let id = el.attrs.get(cfg.attr_menu_id).cloned();
         if let (Some(id), Some(ix)) = (id, ix) {
+            crate::utils::activate_registry::update_bounds(&id, ix, el.layout_bounds);
+            el.set_attr(
+                "jadix_scroll_target",
+                super::subtree::menu_row_target(&id, ix),
+            );
             let key = format!("{id}{}", cfg.active_key_suffix);
             let active = use_signal(key.as_str(), || cfg.active_none).peek();
             let on = !disabled && active == ix;

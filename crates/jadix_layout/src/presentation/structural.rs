@@ -517,7 +517,8 @@ impl StructuralLayout {
                     }
                 }
                 Operation::Update { node, descriptor } => {
-                    validate_descriptor(descriptor, node.root)?;
+                    // Admission checks the final candidate below, just as the
+                    // retained leaf path does after coalescing duplicate updates.
                     nodes
                         .get_mut(node)
                         .ok_or(LayoutError::InvalidTree)?

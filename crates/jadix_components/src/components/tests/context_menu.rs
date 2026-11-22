@@ -2,6 +2,47 @@ use super::*;
 use std::cell::Cell;
 
 #[test]
+fn keyboard_open_respects_focus_modifiers_repeat_and_trigger_anchor() {
+    use crate::core::reactivity::create_root;
+    use winit::{event::ElementState, keyboard::ModifiersState};
+    let (owner, ()) = create_root(|| {
+        let open = Signal::new(false);
+        context_menu_scope("keyboard-context", Some(open), || {
+            let ctx = use_context_menu().unwrap();
+            let trigger = ContextMenuTrigger(ContextMenuTriggerProps {
+                id: "keyboard-trigger".into(), children: None, base: None,
+            });
+            let handler = &crate::authoring::keys::handlers(&trigger)[0];
+            let key = Key::Named(NamedKey::F10);
+            let dispatch = |modifiers, repeat| handler.dispatch(crate::authoring::keys::Context {
+                key: &key, modifiers, repeat, state: ElementState::Pressed,
+            });
+            let focus = use_signal("__jadix_button_focus_id", String::new);
+            focus.set("another-trigger".into());
+            assert!(!dispatch(ModifiersState::SHIFT, false));
+            focus.set("keyboard-trigger".into());
+            assert!(!dispatch(ModifiersState::empty(), false));
+            assert!(!dispatch(ModifiersState::SHIFT | ModifiersState::CONTROL, false));
+            assert!(dispatch(ModifiersState::SHIFT, true));
+            assert!(!open.peek());
+            ctx.cursor.set([200.0, 300.0]);
+            assert!(dispatch(ModifiersState::SHIFT, false));
+            assert!(open.peek());
+            assert_eq!(ctx.cursor.peek(), [-1.0, -1.0]);
+            assert_eq!(ctx.active.peek(), 0);
+            open.set(false);
+            assert!(handler.dispatch(crate::authoring::keys::Context {
+                key: &Key::Named(NamedKey::ContextMenu), modifiers: ModifiersState::empty(),
+                repeat: false, state: ElementState::Pressed,
+            }));
+            assert!(open.peek());
+            trigger
+        });
+    });
+    owner.dispose();
+}
+
+#[test]
 fn rsx_menu_hugs_content_in_tall_viewport_after_open_and_idle() {
     use crate::app::portal_overlay::clear_overlay_stack;
     use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};

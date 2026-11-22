@@ -16,6 +16,8 @@
 //! [`TreeViewChrome::Sidebar`]：侧栏语义色、`height` 默认 0（交给 [`crate::components::SidebarContent`] 滚动）。
 //!
 //! `collapsible` 默认不互斥（与 [`collapsible_scope`] 一致）。`exclusive={true}` 时同层兄弟目录只展开一项。
+//! 可选 `.reveal_spring(SpringPhysics::default_css())` / `reveal_spring={spring}`
+//! 为各层分支复用共享物理高度揭示；省略时保留 keyframes，`flat` 不使用该配置。
 //! 旧 `variant="accordion"` / `"sections"` 映射为 `collapsible`（Accordion 变体已废弃）。
 //!
 //! `<TreeView>` in `ui!` / `<TreeViewItem>` 由宏展开（[`tree_view_scope`] /
@@ -52,7 +54,7 @@ use std::sync::OnceLock;
 
 use crate::components::base::{BaseComponentBuilder, SlotChrome, SlotStyleFn};
 use crate::components::collapsible::{
-    collapsible_content, collapsible_scope, CollapsibleTrigger, CollapsibleTriggerProps,
+    collapsible_content_with_spring, collapsible_scope, CollapsibleTrigger, CollapsibleTriggerProps,
 };
 use crate::components::scroll_area::scroll_area;
 use crate::components::virtual_list::virtual_list;
@@ -64,8 +66,8 @@ use crate::core::tree::{parse_text_color, Element, LayoutStatus};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{
-    css_transition_needs_frame, is_variant_style_overridden, parse_color, TransitionEntry,
-    TransitionProperty, VariantStyleField,
+    css_transition_needs_frame, is_variant_style_overridden, parse_color, SpringPhysics,
+    TransitionEntry, TransitionProperty, VariantStyleField,
 };
 use crate::tokens;
 use crate::utils::motion::ensure_motion_transitions;
@@ -218,6 +220,8 @@ pub struct TreeViewCtx {
     pub exclusive: bool,
     pub chrome: TreeViewChrome,
     pub selected: Option<Signal<String>>,
+    /// Optional physical height reveal for recursive branches; flat lists ignore it.
+    pub reveal_spring: Option<SpringPhysics>,
 }
 
 #[derive(Clone)]
@@ -786,7 +790,7 @@ fn build_collapsible_node(
                     branch_row_visual(&ctx_trigger, &label, depth, &row_nid),
                 ))),
             });
-            let content = collapsible_content(move || {
+            let content = collapsible_content_with_spring(ctx_clone.reveal_spring, move || {
                 let kids: Vec<Element> = children
                     .iter()
                     .map(|c| build_collapsible_node(&ctx_clone, c, depth + 1, &child_parent))
@@ -937,6 +941,40 @@ pub fn tree_view_scope(
     prefab_roots: Vec<TreeNode>,
     body: impl FnOnce() -> Element,
 ) -> Element {
+    tree_view_scope_with_spring(
+        id,
+        variant,
+        expanded,
+        expanded_storage_key,
+        row_height,
+        height,
+        exclusive,
+        chrome,
+        selected,
+        on_select,
+        prefab_roots,
+        None,
+        body,
+    )
+}
+
+/// Tree scope with optional physical reveal for `Collapsible` branches.
+/// `None` keeps keyframes; `Flat` retains its virtualized row behavior.
+pub fn tree_view_scope_with_spring(
+    id: impl Into<String>,
+    variant: TreeViewVariant,
+    expanded: Option<Signal<HashSet<String>>>,
+    expanded_storage_key: Option<String>,
+    row_height: f32,
+    height: Option<f32>,
+    exclusive: Option<bool>,
+    chrome: TreeViewChrome,
+    selected: Option<Signal<String>>,
+    on_select: Option<Rc<dyn Fn(String)>>,
+    prefab_roots: Vec<TreeNode>,
+    reveal_spring: Option<SpringPhysics>,
+    body: impl FnOnce() -> Element,
+) -> Element {
     let id = resolve_instance_id(id, "tree-view");
     let default_exp_key = format!("{id}__tree_exp");
     let expanded_storage_key = expanded_storage_key
@@ -957,6 +995,7 @@ pub fn tree_view_scope(
         exclusive,
         chrome,
         selected,
+        reveal_spring,
     };
     register_tree_on_select(&id, on_select);
     let kids = with_child_owner(|| {
@@ -1072,6 +1111,7 @@ plain [] height: Option<f32>,
 plain [] exclusive: Option<bool>,
 plain [] chrome: Option<String>,
 plain [] selected: Option<Signal<String>>,
+plain [] reveal_spring: Option<SpringPhysics>,
 plain [] children: Option<Element>,
 ) -> Element {
     let variant = variant
@@ -1081,7 +1121,7 @@ plain [] children: Option<Element>,
         .map(|s| TreeViewChrome::parse(&s))
         .unwrap_or_default();
     let row_height = row_height.unwrap_or(32.0);
-    tree_view_scope(
+    tree_view_scope_with_spring(
         id,
         variant,
         expanded,
@@ -1093,6 +1133,7 @@ plain [] children: Option<Element>,
         selected,
         None,
         Vec::new(),
+        reveal_spring,
         move || children.unwrap_or_default(),
     )
 }
@@ -1133,6 +1174,7 @@ pub struct TreeViewBuilder {
     chrome: TreeViewChrome,
     selected: Option<Signal<String>>,
     on_select: Option<Rc<dyn Fn(String)>>,
+    reveal_spring: Option<SpringPhysics>,
 }
 
 pub fn tree_view(id: impl Into<String>) -> TreeViewBuilder {
@@ -1150,10 +1192,18 @@ pub fn tree_view(id: impl Into<String>) -> TreeViewBuilder {
         chrome: TreeViewChrome::Default,
         selected: None,
         on_select: None,
+        reveal_spring: None,
     }
 }
 
 impl TreeViewBuilder {
+    /// Reveal recursive branches with the shared physical height spring.
+    /// Only applies to `variant("collapsible")`; omitted configuration keeps keyframes.
+    pub fn reveal_spring(mut self, physics: SpringPhysics) -> Self {
+        self.reveal_spring = Some(physics);
+        self
+    }
+
     pub fn variant(mut self, v: impl Into<TreeViewVariant>) -> Self {
         self.variant = v.into();
         self
@@ -1222,7 +1272,7 @@ impl TreeViewBuilder {
 
     /// 在上下文内构建任意子树（`TreeViewItem` 等）。
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
-        SlotChrome::from_opts(self.class, self.style).apply(tree_view_scope(
+        SlotChrome::from_opts(self.class, self.style).apply(tree_view_scope_with_spring(
             self.id,
             self.variant,
             self.expanded,
@@ -1234,6 +1284,7 @@ impl TreeViewBuilder {
             self.selected,
             self.on_select,
             Vec::new(),
+            self.reveal_spring,
             body,
         ))
     }
@@ -1255,8 +1306,9 @@ impl From<TreeViewBuilder> for Element {
             chrome,
             selected,
             on_select,
+            reveal_spring,
         } = builder;
-        SlotChrome::from_opts(class, style).apply(tree_view_scope(
+        SlotChrome::from_opts(class, style).apply(tree_view_scope_with_spring(
             id,
             variant,
             expanded,
@@ -1268,6 +1320,7 @@ impl From<TreeViewBuilder> for Element {
             selected,
             on_select,
             roots,
+            reveal_spring,
             Element::new,
         ))
     }

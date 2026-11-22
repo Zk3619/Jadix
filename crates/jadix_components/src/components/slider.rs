@@ -172,12 +172,8 @@ pub(crate) fn clear_slider_drag_if_any() {
 }
 
 fn quantize(v: f32, min: f32, max: f32, step: f32) -> f32 {
-    let v = v.clamp(min, max);
-    if step <= 1e-8 {
-        return v;
-    }
-    let n = ((v - min) / step).round();
-    (min + n * step).clamp(min, max)
+    jadix::core::range::Range::new(min as f64, max as f64, if step <= 1e-8 { 0. } else { step as f64 })
+        .ok().and_then(|range| range.snap(v as f64)).map(|value| value as f32).unwrap_or(min)
 }
 
 /// 指针映射：连续值，不按 `step` 量化（步进仅键盘）。

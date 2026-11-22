@@ -24,6 +24,9 @@ strikethrough and rich-span ellipsis return explicit host errors. Image accepts 
 contract. `window_app --bundle PATH --width 640 --height 480` loads a development
 bundle; production hosts load an authenticated package through `from_package`.
 
+The presentation SDK also accepts `ellipsis_start` and `ellipsis_middle` for
+AppKit labels. GPU and terminal hosts render these values as tail ellipsis.
+
 Feature `native-https` adds `ota::download_https_release`, composing the explicit
 installed-curl transport with existing signature, resource digest, release floor,
 durable trial, health and rollback checks. Configure trusted release keys and the
@@ -190,7 +193,23 @@ controlled edits with a fresh revision. Events use session-exported handles;
 revocation also invalidates already queued deliveries. `PopoverContent` binds an
 anchor key to one keyed node across tree moves, resolves forward references,
 rejects absent/ambiguous/descendant anchors before native publication, and maps
-dismissal back to the session-owned TSX event. Hosts without popover capability
+dismissal back to the session-owned TSX event. AppKit also delivers `cancel`
+with `backdrop: true` for an outside press and `backdrop: false` for Escape,
+including attempts blocked by the dismissal policy. `positionChange` carries
+the resolved `position` with frame, placement and available size. The payload
+is empty when a previously positioned panel loses its visible anchor.
+`PopoverContent` accepts `margin` in whole points and `close_on_escape`
+independently of `close_on_outside_click`. On AppKit, `events.open` and
+`events.close` observe committed state changes on a mounted panel.
+`style.popover_enter_ms` and `style.popover_exit_ms` set AppKit transition
+durations. `style.popover_starting` and `style.popover_ending` accept
+`opacity`, uniform `scale`, an `offset` in right/down points, an optional
+RGBA `background` and a `corner_radius` in logical points. Unset endpoint
+backgrounds retain the panel background.
+Omitted endpoints fade, and omitted durations switch immediately. AppKit honors
+Reduce Motion. The open event waits for a visible anchor. The close event
+follows the transition when the panel stays mounted.
+Hosts without popover capability
 reject the candidate without publishing it.
 
 The Windows `native-tsx` product compiles actual TSX into an IIFE, executes it in

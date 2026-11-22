@@ -88,6 +88,8 @@ pub struct DesignTokensPatch {
     pub code_highlight: Option<String>,
     #[serde(alias = "code-number")]
     pub code_number: Option<String>,
+    #[serde(alias = "match-foreground")]
+    pub match_foreground: Option<String>,
     #[serde(alias = "caret-color")]
     pub caret: Option<String>,
     #[serde(alias = "selection-background", alias = "selection")]
@@ -382,6 +384,7 @@ fn apply_design_tokens_patch(
     apply_color!(code_foreground, "code-foreground");
     apply_color!(code_highlight, "code-highlight");
     apply_color!(code_number, "code-number");
+    apply_color!(match_foreground, "match-foreground");
     apply_color!(caret, "caret");
     apply_color!(selection_background, "selection-background");
     apply_color!(selection_foreground, "selection-foreground");

@@ -1,6 +1,7 @@
 //! Shared menu definitions rendered and operated in terminal cells.
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 pub use jadix_core::menu::MenuItem;
+use jadix_core::shortcut::{KeyChord, ShortcutKey, ShortcutModifier};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -60,43 +61,30 @@ fn label(item: &MenuItem) -> &str {
     }
 }
 pub(crate) fn chord(value: &str) -> io::Result<(KeyCode, KeyModifiers)> {
-    let parts: Vec<_> = value.split('+').collect();
+    let chord: KeyChord = value.parse().map_err(|_| invalid())?;
     let mut modifiers = KeyModifiers::NONE;
-    for part in &parts[..parts.len().saturating_sub(1)] {
-        let modifier = match part.to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => KeyModifiers::CONTROL,
-            "cmdorctrl" => {
-                if cfg!(target_os = "macos") {
-                    KeyModifiers::SUPER
-                } else {
-                    KeyModifiers::CONTROL
-                }
-            }
-            "cmd" | "command" | "super" | "meta" => KeyModifiers::SUPER,
-            "alt" | "option" => KeyModifiers::ALT,
-            "shift" => KeyModifiers::SHIFT,
-            _ => return Err(invalid()),
+    for modifier in chord.modifiers() {
+        modifiers |= match modifier.resolved() {
+            ShortcutModifier::Control => KeyModifiers::CONTROL,
+            ShortcutModifier::Alt => KeyModifiers::ALT,
+            ShortcutModifier::Shift => KeyModifiers::SHIFT,
+            ShortcutModifier::Super => KeyModifiers::SUPER,
+            ShortcutModifier::CommandOrControl => unreachable!("resolved modifier"),
         };
-        if modifiers.contains(modifier) {
-            return Err(invalid());
-        }
-        modifiers |= modifier;
     }
-    let key = parts.last().ok_or_else(invalid)?.to_ascii_lowercase();
-    let code = if key.starts_with('f') && key.len() > 1 {
-        let n = key[1..].parse().map_err(|_| invalid())?;
-        if !(1..=24).contains(&n) {
-            return Err(invalid());
-        }
-        KeyCode::F(n)
-    } else if key.chars().count() == 1
-        && modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER)
-    {
-        KeyCode::Char(key.chars().next().unwrap())
-    } else {
-        return Err(invalid());
+    let code = match chord.key() {
+        ShortcutKey::Character(c) => KeyCode::Char(c),
+        ShortcutKey::Function(n) => KeyCode::F(n),
     };
     Ok((code, modifiers))
+}
+
+fn shortcut_label(value: &str) -> String {
+    value
+        .parse::<KeyChord>()
+        .expect("validated accelerator")
+        .keycaps()
+        .join("+")
 }
 fn validate(items: &[MenuItem]) -> io::Result<()> {
     jadix_core::menu::validate(items).map_err(io::Error::other)?;
@@ -566,7 +554,7 @@ impl TerminalMenu {
                             MenuItem::Command {
                                 accelerator: Some(a),
                                 ..
-                            } => a.len() + 3,
+                            } => Line::from(shortcut_label(a)).width() + 3,
                             MenuItem::Submenu { .. } => 3,
                             _ => 0,
                         }
@@ -633,7 +621,7 @@ impl TerminalMenu {
                         },
                         accelerator
                             .as_ref()
-                            .map_or(String::new(), |a| format!("  {a}"))
+                            .map_or(String::new(), |a| format!("  {}", shortcut_label(a)))
                     ),
                     MenuItem::Submenu { label, .. } => format!("{label} ›"),
                 };

@@ -4,9 +4,727 @@ export const schemas = [
     "kind": "container",
     "properties": {
       "type": "object",
-      "fields": {}
+      "fields": {
+        "accessibleActiveDescendant": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleControls": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "max_bytes": 4096
+            },
+            "max_items": 64
+          },
+          "required": false
+        },
+        "accessibleRole": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 64
+          },
+          "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "keyboard": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "focusable": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "keyDown": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "keyUp": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "shortcuts": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "key": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "modifiers": {
+                        "schema": {
+                          "type": "object",
+                          "fields": {
+                            "shift": {
+                              "schema": {
+                                "type": "bool"
+                              },
+                              "required": false
+                            },
+                            "control": {
+                              "schema": {
+                                "type": "bool"
+                              },
+                              "required": false
+                            },
+                            "alt": {
+                              "schema": {
+                                "type": "bool"
+                              },
+                              "required": false
+                            },
+                            "meta": {
+                              "schema": {
+                                "type": "bool"
+                              },
+                              "required": false
+                            },
+                            "capsLock": {
+                              "schema": {
+                                "type": "bool"
+                              },
+                              "required": false
+                            }
+                          }
+                        },
+                        "required": false
+                      }
+                    }
+                  },
+                  "max_items": 64
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
+        },
+        "focusRequest": {
+          "schema": {
+            "type": "number"
+          },
+          "required": false
+        },
+        "interaction": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "press": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "pinch": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "rotation": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "touch": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hover": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "longPressMillis": {
+                "schema": {
+                  "type": "number"
+                },
+                "required": false
+              },
+              "pan": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "panActivation": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "activeOffsetX": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "activeOffsetY": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "failOffsetX": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "failOffsetY": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "pointerEvents": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "hitSlop": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "max_items": 4
+                },
+                "required": false
+              },
+              "fileDrop": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
+        }
+      }
     },
-    "events": {},
+    "events": {
+      "key": {
+        "type": "object",
+        "fields": {
+          "phase": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 4
+            },
+            "required": true
+          },
+          "key": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "code": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "modifiers": {
+            "schema": {
+              "type": "object",
+              "fields": {
+                "shift": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "control": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "alt": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "meta": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "capsLock": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                }
+              }
+            },
+            "required": true
+          },
+          "repeat": {
+            "schema": {
+              "type": "bool"
+            },
+            "required": true
+          }
+        }
+      },
+      "shortcut": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          }
+        }
+      },
+      "interaction": {
+        "type": "object",
+        "fields": {
+          "kind": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 32
+            },
+            "required": true
+          },
+          "phase": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 32
+            },
+            "required": true
+          },
+          "position": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": true
+          },
+          "timestamp": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "modifiers": {
+            "schema": {
+              "type": "object",
+              "fields": {
+                "shift": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "control": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "alt": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "meta": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "capsLock": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                }
+              }
+            },
+            "required": false
+          },
+          "translation": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": false
+          },
+          "velocity": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": false
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          },
+          "rate": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          },
+          "touches": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "fields": {
+                  "id": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "position": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": true
+                  },
+                  "force": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "kind": {
+                    "schema": {
+                      "type": "string",
+                      "max_bytes": 32
+                    },
+                    "required": true
+                  },
+                  "tilt": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "max_items": 10
+            },
+            "required": false
+          },
+          "activeTouches": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "fields": {
+                  "id": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "position": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": true
+                  },
+                  "force": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "kind": {
+                    "schema": {
+                      "type": "string",
+                      "max_bytes": 32
+                    },
+                    "required": true
+                  },
+                  "tilt": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "max_items": 10
+            },
+            "required": false
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          }
+        }
+      },
+      "fileDrop": {
+        "type": "object",
+        "fields": {
+          "phase": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 16
+            },
+            "required": true
+          },
+          "position": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": true
+          },
+          "uris": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "max_bytes": 8192
+              },
+              "max_items": 64
+            },
+            "required": true
+          }
+        }
+      }
+    },
     "children": true
   },
   {
@@ -21,10 +739,550 @@ export const schemas = [
             "max_bytes": 65536
           },
           "required": true
+        },
+        "accessibleActiveDescendant": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleControls": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "max_bytes": 4096
+            },
+            "max_items": 64
+          },
+          "required": false
+        },
+        "accessibleRole": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 64
+          },
+          "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "interaction": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "press": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "pinch": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "rotation": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "touch": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hover": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "longPressMillis": {
+                "schema": {
+                  "type": "number"
+                },
+                "required": false
+              },
+              "pan": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "panActivation": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "activeOffsetX": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "activeOffsetY": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "failOffsetX": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "failOffsetY": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "pointerEvents": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "hitSlop": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "max_items": 4
+                },
+                "required": false
+              },
+              "fileDrop": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
         }
       }
     },
-    "events": {},
+    "events": {
+      "interaction": {
+        "type": "object",
+        "fields": {
+          "kind": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 32
+            },
+            "required": true
+          },
+          "phase": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 32
+            },
+            "required": true
+          },
+          "position": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": true
+          },
+          "timestamp": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "modifiers": {
+            "schema": {
+              "type": "object",
+              "fields": {
+                "shift": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "control": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "alt": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "meta": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "capsLock": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                }
+              }
+            },
+            "required": false
+          },
+          "translation": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": false
+          },
+          "velocity": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": false
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          },
+          "rate": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          },
+          "touches": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "fields": {
+                  "id": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "position": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": true
+                  },
+                  "force": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "kind": {
+                    "schema": {
+                      "type": "string",
+                      "max_bytes": 32
+                    },
+                    "required": true
+                  },
+                  "tilt": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "max_items": 10
+            },
+            "required": false
+          },
+          "activeTouches": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "fields": {
+                  "id": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "position": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": true
+                  },
+                  "force": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "kind": {
+                    "schema": {
+                      "type": "string",
+                      "max_bytes": 32
+                    },
+                    "required": true
+                  },
+                  "tilt": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "max_items": 10
+            },
+            "required": false
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          }
+        }
+      },
+      "fileDrop": {
+        "type": "object",
+        "fields": {
+          "phase": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 16
+            },
+            "required": true
+          },
+          "position": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": true
+          },
+          "uris": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "max_bytes": 8192
+              },
+              "max_items": 64
+            },
+            "required": true
+          }
+        }
+      }
+    },
     "children": false
   },
   {
@@ -45,15 +1303,794 @@ export const schemas = [
             "type": "bool"
           },
           "required": false
+        },
+        "accessibleActiveDescendant": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleControls": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "max_bytes": 4096
+            },
+            "max_items": 64
+          },
+          "required": false
+        },
+        "accessibleRole": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 64
+          },
+          "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "focusRequest": {
+          "schema": {
+            "type": "number"
+          },
+          "required": false
+        },
+        "navigationKeys": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "max_bytes": 16
+            },
+            "max_items": 12
+          },
+          "required": false
+        },
+        "keyboard": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "focusable": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "keyDown": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "keyUp": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "shortcuts": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "key": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "modifiers": {
+                        "schema": {
+                          "type": "object",
+                          "fields": {
+                            "shift": {
+                              "schema": {
+                                "type": "bool"
+                              },
+                              "required": false
+                            },
+                            "control": {
+                              "schema": {
+                                "type": "bool"
+                              },
+                              "required": false
+                            },
+                            "alt": {
+                              "schema": {
+                                "type": "bool"
+                              },
+                              "required": false
+                            },
+                            "meta": {
+                              "schema": {
+                                "type": "bool"
+                              },
+                              "required": false
+                            },
+                            "capsLock": {
+                              "schema": {
+                                "type": "bool"
+                              },
+                              "required": false
+                            }
+                          }
+                        },
+                        "required": false
+                      }
+                    }
+                  },
+                  "max_items": 64
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
+        },
+        "interaction": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "press": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "pinch": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "rotation": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "touch": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hover": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "longPressMillis": {
+                "schema": {
+                  "type": "number"
+                },
+                "required": false
+              },
+              "pan": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "panActivation": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "activeOffsetX": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "activeOffsetY": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "failOffsetX": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "failOffsetY": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "pointerEvents": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "hitSlop": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "max_items": 4
+                },
+                "required": false
+              },
+              "fileDrop": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
         }
       }
     },
     "events": {
       "activate": {
         "type": "null"
+      },
+      "navigate": {
+        "type": "object",
+        "fields": {
+          "key": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 16
+            },
+            "required": true
+          },
+          "shift": {
+            "schema": {
+              "type": "bool"
+            },
+            "required": true
+          },
+          "control": {
+            "schema": {
+              "type": "bool"
+            },
+            "required": true
+          }
+        }
+      },
+      "hover": {
+        "type": "object",
+        "fields": {
+          "inside": {
+            "schema": {
+              "type": "bool"
+            },
+            "required": true
+          }
+        }
+      },
+      "pointerMove": {
+        "type": "object",
+        "fields": {
+          "x": {
+            "required": true,
+            "schema": {
+              "type": "number"
+            }
+          },
+          "y": {
+            "required": true,
+            "schema": {
+              "type": "number"
+            }
+          }
+        }
+      },
+      "key": {
+        "type": "object",
+        "fields": {
+          "phase": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 4
+            },
+            "required": true
+          },
+          "key": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "code": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "modifiers": {
+            "schema": {
+              "type": "object",
+              "fields": {
+                "shift": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "control": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "alt": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "meta": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "capsLock": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                }
+              }
+            },
+            "required": true
+          },
+          "repeat": {
+            "schema": {
+              "type": "bool"
+            },
+            "required": true
+          }
+        }
+      },
+      "shortcut": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          }
+        }
+      },
+      "interaction": {
+        "type": "object",
+        "fields": {
+          "kind": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 32
+            },
+            "required": true
+          },
+          "phase": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 32
+            },
+            "required": true
+          },
+          "position": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": true
+          },
+          "timestamp": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "modifiers": {
+            "schema": {
+              "type": "object",
+              "fields": {
+                "shift": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "control": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "alt": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "meta": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "capsLock": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                }
+              }
+            },
+            "required": false
+          },
+          "translation": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": false
+          },
+          "velocity": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": false
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          },
+          "rate": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          },
+          "touches": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "fields": {
+                  "id": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "position": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": true
+                  },
+                  "force": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "kind": {
+                    "schema": {
+                      "type": "string",
+                      "max_bytes": 32
+                    },
+                    "required": true
+                  },
+                  "tilt": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "max_items": 10
+            },
+            "required": false
+          },
+          "activeTouches": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "fields": {
+                  "id": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "position": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": true
+                  },
+                  "force": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "kind": {
+                    "schema": {
+                      "type": "string",
+                      "max_bytes": 32
+                    },
+                    "required": true
+                  },
+                  "tilt": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "max_items": 10
+            },
+            "required": false
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          }
+        }
+      },
+      "fileDrop": {
+        "type": "object",
+        "fields": {
+          "phase": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 16
+            },
+            "required": true
+          },
+          "position": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": true
+          },
+          "uris": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "max_bytes": 8192
+              },
+              "max_items": 64
+            },
+            "required": true
+          }
+        }
       }
     },
-    "children": false
+    "children": true
   },
   {
     "name": "Input",
@@ -84,6 +2121,198 @@ export const schemas = [
         "maxLength": {
           "schema": {
             "type": "number"
+          },
+          "required": false
+        },
+        "navigationKeys": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "max_bytes": 16
+            },
+            "max_items": 12
+          },
+          "required": false
+        },
+        "accessibleActiveDescendant": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleControls": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "max_bytes": 4096
+            },
+            "max_items": 64
+          },
+          "required": false
+        },
+        "accessibleRole": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 64
+          },
+          "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "focusRequest": {
+          "schema": {
+            "type": "number"
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
           },
           "required": false
         }
@@ -128,6 +2357,48 @@ export const schemas = [
             "required": false
           }
         }
+      },
+      "navigate": {
+        "type": "object",
+        "fields": {
+          "key": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 16
+            },
+            "required": true
+          },
+          "shift": {
+            "schema": {
+              "type": "bool"
+            },
+            "required": true
+          },
+          "control": {
+            "schema": {
+              "type": "bool"
+            },
+            "required": true
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          }
+        }
       }
     },
     "children": false
@@ -137,7 +2408,183 @@ export const schemas = [
     "kind": "scroll",
     "properties": {
       "type": "object",
-      "fields": {}
+      "fields": {
+        "accessibleActiveDescendant": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleControls": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "max_bytes": 4096
+            },
+            "max_items": 64
+          },
+          "required": false
+        },
+        "accessibleRole": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 64
+          },
+          "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
+        }
+      }
     },
     "events": {
       "scroll": {
@@ -154,6 +2601,18 @@ export const schemas = [
               "type": "number"
             },
             "required": true
+          },
+          "width": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          },
+          "height": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
           }
         }
       },
@@ -171,6 +2630,316 @@ export const schemas = [
               "type": "number"
             },
             "required": true
+          }
+        }
+      },
+      "scrollZoom": {
+        "type": "object",
+        "fields": {
+          "scale": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "x": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "y": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "width": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "height": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          }
+        }
+      },
+      "scrollActivity": {
+        "type": "object",
+        "fields": {
+          "activity": {
+            "required": true,
+            "schema": {
+              "type": "object",
+              "fields": {
+                "phase": {
+                  "required": true,
+                  "schema": {
+                    "type": "string",
+                    "max_bytes": 32
+                  }
+                },
+                "distance": {
+                  "required": false,
+                  "schema": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "children": true
+  },
+  {
+    "name": "Hosted",
+    "kind": "hosted",
+    "properties": {
+      "type": "object",
+      "fields": {
+        "specification": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 1048576
+          },
+          "required": true
+        },
+        "accessibleActiveDescendant": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleControls": {
+          "schema": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "max_bytes": 4096
+            },
+            "max_items": 64
+          },
+          "required": false
+        },
+        "accessibleRole": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 64
+          },
+          "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
+        }
+      }
+    },
+    "events": {
+      "hosted": {
+        "type": "object",
+        "fields": {
+          "event": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 32
+            },
+            "required": true
+          },
+          "data": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 16384
+            },
+            "required": true
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
           }
         }
       }
@@ -209,15 +2978,260 @@ export const schemas = [
           },
           "required": false
         },
+        "margin": {
+          "schema": {
+            "type": "number"
+          },
+          "required": false
+        },
+        "close_on_escape": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
         "close_on_outside_click": {
           "schema": {
             "type": "bool"
+          },
+          "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
           },
           "required": false
         }
       }
     },
     "events": {
+      "open": {
+        "type": "object",
+        "fields": {}
+      },
+      "close": {
+        "type": "object",
+        "fields": {}
+      },
+      "cancel": {
+        "type": "object",
+        "fields": {
+          "backdrop": {
+            "schema": {
+              "type": "bool"
+            },
+            "required": true
+          }
+        }
+      },
+      "positionChange": {
+        "type": "object",
+        "fields": {
+          "position": {
+            "schema": {
+              "type": "object",
+              "fields": {
+                "frame": {
+                  "schema": {
+                    "type": "object",
+                    "fields": {
+                      "x": {
+                        "schema": {
+                          "type": "number"
+                        },
+                        "required": true
+                      },
+                      "y": {
+                        "schema": {
+                          "type": "number"
+                        },
+                        "required": true
+                      },
+                      "width": {
+                        "schema": {
+                          "type": "number"
+                        },
+                        "required": true
+                      },
+                      "height": {
+                        "schema": {
+                          "type": "number"
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "required": true
+                },
+                "placement": {
+                  "schema": {
+                    "type": "string",
+                    "max_bytes": 16
+                  },
+                  "required": true
+                },
+                "availableWidth": {
+                  "schema": {
+                    "type": "number"
+                  },
+                  "required": true
+                },
+                "availableHeight": {
+                  "schema": {
+                    "type": "number"
+                  },
+                  "required": true
+                }
+              }
+            },
+            "required": false
+          }
+        }
+      },
       "dismiss": {
         "type": "object",
         "fields": {
@@ -233,6 +3247,24 @@ export const schemas = [
               "max_bytes": 20
             },
             "required": true
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
           }
         }
       }
@@ -268,6 +3300,156 @@ export const schemas = [
         "maxLength": {
           "schema": {
             "type": "number"
+          },
+          "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
           },
           "required": false
         }
@@ -312,6 +3494,24 @@ export const schemas = [
             "required": false
           }
         }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          }
+        }
       }
     },
     "children": false
@@ -340,6 +3540,162 @@ export const schemas = [
             "type": "bool"
           },
           "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "focusRequest": {
+          "schema": {
+            "type": "number"
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
         }
       }
     },
@@ -359,6 +3715,24 @@ export const schemas = [
               "max_bytes": 20
             },
             "required": true
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
           }
         }
       }
@@ -389,6 +3763,162 @@ export const schemas = [
             "type": "bool"
           },
           "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "focusRequest": {
+          "schema": {
+            "type": "number"
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
         }
       }
     },
@@ -408,6 +3938,24 @@ export const schemas = [
               "max_bytes": 20
             },
             "required": true
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
           }
         }
       }
@@ -433,10 +3981,538 @@ export const schemas = [
             "max_bytes": 4096
           },
           "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "interaction": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "press": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "pinch": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "rotation": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "touch": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hover": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "longPressMillis": {
+                "schema": {
+                  "type": "number"
+                },
+                "required": false
+              },
+              "pan": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "panActivation": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "activeOffsetX": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "activeOffsetY": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "failOffsetX": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    },
+                    "failOffsetY": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "pointerEvents": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "hitSlop": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "max_items": 4
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
         }
       }
     },
-    "events": {},
+    "events": {
+      "loadStart": {
+        "type": "null"
+      },
+      "progress": {
+        "type": "object",
+        "fields": {
+          "loaded": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "total": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          }
+        }
+      },
+      "load": {
+        "type": "object",
+        "fields": {
+          "width": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "height": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          }
+        }
+      },
+      "error": {
+        "type": "object",
+        "fields": {
+          "message": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 1024
+            },
+            "required": true
+          }
+        }
+      },
+      "loadEnd": {
+        "type": "null"
+      },
+      "interaction": {
+        "type": "object",
+        "fields": {
+          "kind": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 32
+            },
+            "required": true
+          },
+          "phase": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 32
+            },
+            "required": true
+          },
+          "position": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": true
+          },
+          "timestamp": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "modifiers": {
+            "schema": {
+              "type": "object",
+              "fields": {
+                "shift": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "control": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "alt": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "meta": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                },
+                "capsLock": {
+                  "schema": {
+                    "type": "bool"
+                  },
+                  "required": false
+                }
+              }
+            },
+            "required": false
+          },
+          "translation": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": false
+          },
+          "velocity": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "max_items": 2
+            },
+            "required": false
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          },
+          "rate": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          },
+          "touches": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "fields": {
+                  "id": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "position": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": true
+                  },
+                  "force": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "kind": {
+                    "schema": {
+                      "type": "string",
+                      "max_bytes": 32
+                    },
+                    "required": true
+                  },
+                  "tilt": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "max_items": 10
+            },
+            "required": false
+          },
+          "activeTouches": {
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "fields": {
+                  "id": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "position": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": true
+                  },
+                  "force": {
+                    "schema": {
+                      "type": "number"
+                    },
+                    "required": true
+                  },
+                  "kind": {
+                    "schema": {
+                      "type": "string",
+                      "max_bytes": 32
+                    },
+                    "required": true
+                  },
+                  "tilt": {
+                    "schema": {
+                      "type": "array",
+                      "items": {
+                        "type": "number"
+                      },
+                      "max_items": 2
+                    },
+                    "required": false
+                  }
+                }
+              },
+              "max_items": 10
+            },
+            "required": false
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
+          }
+        }
+      }
+    },
     "children": false
   },
   {
@@ -454,6 +4530,156 @@ export const schemas = [
         "close_on_overlay_click": {
           "schema": {
             "type": "bool"
+          },
+          "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
           },
           "required": false
         }
@@ -475,6 +4701,24 @@ export const schemas = [
               "max_bytes": 20
             },
             "required": true
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
           }
         }
       }
@@ -538,6 +4782,162 @@ export const schemas = [
             "type": "bool"
           },
           "required": false
+        },
+        "accessibleName": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleDescription": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 4096
+          },
+          "required": false
+        },
+        "accessibleSelected": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        },
+        "focusRequest": {
+          "schema": {
+            "type": "number"
+          },
+          "required": false
+        },
+        "accessibility": {
+          "schema": {
+            "type": "object",
+            "fields": {
+              "accessible": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "hidden": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "disabled": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "busy": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "readOnly": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "role": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 32
+                },
+                "required": false
+              },
+              "checked": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 8
+                },
+                "required": false
+              },
+              "live": {
+                "schema": {
+                  "type": "string",
+                  "max_bytes": 16
+                },
+                "required": false
+              },
+              "value": {
+                "schema": {
+                  "type": "object",
+                  "fields": {
+                    "min": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "max": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "now": {
+                      "schema": {
+                        "type": "number"
+                      },
+                      "required": true
+                    },
+                    "text": {
+                      "schema": {
+                        "type": "string",
+                        "max_bytes": 4096
+                      },
+                      "required": false
+                    }
+                  }
+                },
+                "required": false
+              },
+              "actions": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "id": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 128
+                        },
+                        "required": true
+                      },
+                      "label": {
+                        "schema": {
+                          "type": "string",
+                          "max_bytes": 512
+                        },
+                        "required": true
+                      }
+                    }
+                  },
+                  "max_items": 32
+                },
+                "required": false
+              },
+              "pressed": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              },
+              "invalid": {
+                "schema": {
+                  "type": "bool"
+                },
+                "required": false
+              }
+            }
+          },
+          "required": false
         }
       }
     },
@@ -558,6 +4958,24 @@ export const schemas = [
               "max_bytes": 20
             },
             "required": true
+          }
+        }
+      },
+      "accessibilityAction": {
+        "type": "object",
+        "fields": {
+          "id": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 128
+            },
+            "required": true
+          },
+          "value": {
+            "schema": {
+              "type": "number"
+            },
+            "required": false
           }
         }
       }

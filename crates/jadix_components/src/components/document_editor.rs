@@ -16,7 +16,8 @@ use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::text::{
     DocumentBlock, DocumentBlockKind, DocumentEditMode, DocumentEditorSnapshot,
-    DocumentEditorState, DocumentMark, DocumentSelection,
+    DocumentEditorState, DocumentFragmentTransform, DocumentMark, DocumentPasteContent,
+    DocumentPasteRequest, DocumentPasteTransform, DocumentSelection,
 };
 use crate::utils::text_field::{
     self, input_caret_signal_key, input_preedit_signal_key, input_selection_signal_key,
@@ -26,6 +27,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 
+pub type DocumentDeferredPasteHandler = Rc<dyn Fn(DocumentPasteRequest)>;
+
 pub fn document_editor(id: impl Into<String>, state: DocumentEditorState) -> DocumentEditorBuilder {
     DocumentEditorBuilder {
         id: id.into(),
@@ -34,6 +37,9 @@ pub fn document_editor(id: impl Into<String>, state: DocumentEditorState) -> Doc
         overscan: 3,
         renderer: None,
         asset_root: None,
+        paste_transforms: Vec::new(),
+        fragment_transforms: Vec::new(),
+        deferred_paste_handler: None,
         chrome: SlotChrome::default(),
     }
 }
@@ -45,11 +51,42 @@ pub struct DocumentEditorBuilder {
     overscan: usize,
     renderer: Option<DocumentBlockRenderer>,
     asset_root: Option<std::path::PathBuf>,
+    paste_transforms: Vec<DocumentPasteTransform>,
+    fragment_transforms: Vec<DocumentFragmentTransform>,
+    deferred_paste_handler: Option<DocumentDeferredPasteHandler>,
     chrome: SlotChrome,
 }
 
 impl DocumentEditorBuilder {
     crate::impl_slot_chrome_methods!();
+    /// Defer insertion to application-owned asynchronous work. The request carries
+    /// routed clipboard content and the configured transforms. Complete it on the
+    /// UI thread; dropping it consumes the paste without a plain-text fallback.
+    pub fn deferred_paste_handler(
+        mut self,
+        handler: impl Fn(DocumentPasteRequest) + 'static,
+    ) -> Self {
+        self.deferred_paste_handler = Some(Rc::new(handler));
+        self
+    }
+    /// Append a synchronous paste stage; returning `None` consumes the paste.
+    pub fn paste_transform(
+        mut self,
+        transform: impl Fn(&DocumentEditorSnapshot, String) -> Option<String> + 'static,
+    ) -> Self {
+        self.paste_transforms.push(Rc::new(transform));
+        self
+    }
+    /// Transform imported rich-text fragments before their single undoable edit.
+    /// Legacy text stages select the plain-text path; use fragment stages to retain styles.
+    pub fn fragment_transform(
+        mut self,
+        transform: impl Fn(&DocumentEditorSnapshot, crate::text::Document) -> Option<crate::text::Document>
+            + 'static,
+    ) -> Self {
+        self.fragment_transforms.push(Rc::new(transform));
+        self
+    }
     pub fn asset_root(mut self, path: impl Into<std::path::PathBuf>) -> Self {
         self.asset_root = Some(path.into());
         self
@@ -84,6 +121,9 @@ struct EditorBridge {
     value: Signal<String>,
     active: Option<NativeEdit>,
     next_mount: u64,
+    paste_transforms: Vec<DocumentPasteTransform>,
+    fragment_transforms: Vec<DocumentFragmentTransform>,
+    deferred_paste_handler: Option<DocumentDeferredPasteHandler>,
 }
 
 fn reveal_range(snapshot: &DocumentEditorSnapshot) -> Option<Range<usize>> {
@@ -151,6 +191,55 @@ fn replacement_delta<'a>(previous: &str, next: &'a str) -> (Range<usize>, &'a st
 }
 
 impl EditorBridge {
+    fn paste(&self, text: Option<&str>, html: Option<&str>, plain: bool) {
+        self.state.cancel_pending_paste();
+        let snapshot = self.state.snapshot();
+        let in_code = snapshot
+            .document
+            .block_at(snapshot.selection.range().start)
+            .and_then(|index| snapshot.document.blocks().get(index))
+            .is_some_and(|block| matches!(block.kind, DocumentBlockKind::Code { .. }));
+        if !plain
+            && !in_code
+            && snapshot.mode != DocumentEditMode::Source
+            && self.paste_transforms.is_empty()
+            && snapshot.document.format() == crate::text::DocumentFormat::RichText
+        {
+            if let Some(fragment) = html
+                .and_then(|html| crate::text::Document::from_html_fragment(html).ok())
+                .filter(|fragment| !fragment.source().is_empty())
+            {
+                self.deliver_paste(DocumentPasteContent::RichText(fragment));
+                return;
+            }
+        }
+        if let Some(text) = text {
+            self.deliver_paste(DocumentPasteContent::Text(text.to_owned()));
+        }
+    }
+
+    fn deliver_paste(&self, content: DocumentPasteContent) {
+        if let Some(handler) = &self.deferred_paste_handler {
+            if let Some(request) =
+                self.state
+                    .defer_paste(content, &self.paste_transforms, &self.fragment_transforms)
+            {
+                handler(request);
+            }
+        } else {
+            match content {
+                DocumentPasteContent::Text(text) => {
+                    let _ = self.state.paste_text(&text, &self.paste_transforms);
+                }
+                DocumentPasteContent::RichText(fragment) => {
+                    let _ = self
+                        .state
+                        .paste_document(fragment, &self.fragment_transforms);
+                }
+            }
+        }
+    }
+
     fn sync(&mut self) {
         if !self.state.signal().is_alive() {
             return;
@@ -299,6 +388,29 @@ impl EditorBridge {
         }
         if shortcut {
             match crate::utils::clipboard::edit_shortcut_letter(event) {
+                Some(letter @ ('c' | 'x')) => {
+                    let _ = self.state.transfer_selection(
+                        letter == 'x',
+                        crate::utils::clipboard::set_text_and_html,
+                    );
+                    // Never fall through to copying/cutting only the mounted leaf.
+                    return true;
+                }
+                Some('v') => {
+                    let text = crate::utils::clipboard::get_text();
+                    let html = (!modifiers.shift_key()
+                        && self.paste_transforms.is_empty()
+                        && snapshot.document.format() == crate::text::DocumentFormat::RichText)
+                        .then(|| {
+                            crate::utils::clipboard::get_with_mime(
+                                crate::utils::clipboard::mime::TEXT_HTML,
+                            )
+                        })
+                        .flatten();
+                    self.paste(text.as_deref(), html.as_deref(), modifiers.shift_key());
+                    // Consumed/stale pastes must never fall through to a local-line insertion.
+                    return true;
+                }
                 Some('a') => {
                     let _ = self.state.set_selection(DocumentSelection {
                         anchor: 0,
@@ -480,12 +592,16 @@ impl From<DocumentEditorBuilder> for Element {
         let mount_owner = use_signal(&mount_key, || 0u64);
         let mount = NEXT_EDITOR_MOUNT.fetch_add(1, Ordering::Relaxed);
         mount_owner.set_silent(mount);
+        builder.state.cancel_pending_paste();
         let bridge = Rc::new(RefCell::new(EditorBridge {
             state: builder.state.clone(),
             field: field.clone(),
             value: use_signal(&value_key, String::new),
             active: None,
             next_mount: 0,
+            paste_transforms: builder.paste_transforms,
+            fragment_transforms: builder.fragment_transforms,
+            deferred_paste_handler: builder.deferred_paste_handler,
         }));
         bridge.borrow_mut().sync();
         let surface_bridge = bridge.clone();
@@ -552,6 +668,7 @@ impl From<DocumentEditorBuilder> for Element {
                         &block,
                         &renderer,
                         asset_root.as_deref(),
+                        None,
                     )
                 };
                 #[cfg(not(feature = "webview"))]
@@ -560,6 +677,7 @@ impl From<DocumentEditorBuilder> for Element {
                     &block,
                     &renderer,
                     asset_root.as_deref(),
+                    None,
                 );
                 let mut element = element;
                 if let DocumentBlockKind::ListItem {
@@ -572,6 +690,7 @@ impl From<DocumentEditorBuilder> for Element {
                     {
                         let toggle_state = state.clone();
                         let block_id = block.id;
+                        element.children[0].set_attr("aria-readonly", "false");
                         element.children[0] = std::mem::take(&mut element.children[0])
                             .cursor("pointer")
                             .on_mousedown(move |event| {
@@ -669,6 +788,7 @@ impl From<DocumentEditorBuilder> for Element {
                 }
                 return;
             }
+            bridge.borrow().state.cancel_pending_paste();
             bridge.borrow_mut().sync();
             let focus = use_signal("__jadix_button_focus_id", String::new);
             if focus.peek() == text_field::textarea_focus_id(&field) {
@@ -691,12 +811,22 @@ pub fn DocumentEditor(
 identity [] id: String,
 default [] state: DocumentEditorState,
 plain [] viewport_h: Option<f32>,
+plain [] paste_transforms: Option<Vec<DocumentPasteTransform>>,
+plain [] fragment_transforms: Option<Vec<DocumentFragmentTransform>>,
+plain [] deferred_paste_handler: Option<DocumentDeferredPasteHandler>,
 plain [] children: Option<crate::core::tree::Element>,
 ) -> Element {
     let mut builder = document_editor(id, state);
     if let Some(height) = viewport_h {
         builder = builder.viewport_h(height);
     }
+    if let Some(transforms) = paste_transforms {
+        builder.paste_transforms = transforms;
+    }
+    if let Some(transforms) = fragment_transforms {
+        builder.fragment_transforms = transforms;
+    }
+    builder.deferred_paste_handler = deferred_paste_handler;
     builder.into()
 }
 }

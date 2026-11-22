@@ -10,8 +10,9 @@ use std::cell::RefCell;
 use std::{
     rc::Rc,
     sync::{
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc,
     },
 };
 
@@ -52,6 +53,7 @@ pub(crate) fn decorate_editor(
             let previous = Rc::new(RefCell::new((String::new(), false, 0u64)));
             let result = Rc::new(RefCell::new(results));
             let template = text_field::input_text_template_id(field);
+            let syntax_field = field.to_string();
             fn attach(
                 element: &mut Element,
                 template: &str,
@@ -68,33 +70,43 @@ pub(crate) fn decorate_editor(
                     }
                 }
             }
-            let callback = move |leaf: &mut Element, layout: &mut crate::core::tree::LayoutTree| {
-                let text = leaf.text.as_deref().unwrap_or("");
-                let dark = crate::style::is_dark_theme();
-                let mut previous = previous.borrow_mut();
-                let mut changed = false;
-                if previous.0 != text || previous.1 != dark {
-                    let version = revision.fetch_add(1, Ordering::AcqRel) + 1;
-                    *previous = (text.to_string(), dark, version);
-                    *pending.lock().unwrap_or_else(|error| error.into_inner()) =
-                        Some((version, text.to_string(), dark));
-                    let _ = requests.try_send(());
-                    changed = leaf.text_spans.take().is_some();
-                }
-                while let Ok((version, spans)) = result.borrow_mut().try_recv() {
-                    if version == previous.2 {
-                        leaf.text_spans =
-                            (!spans.iter().all(|span| span.color.is_none())).then_some(spans);
+            let callback =
+                move |leaf: &mut Element, _layout: &mut crate::core::tree::LayoutTree| {
+                    let text = leaf.text.as_deref().unwrap_or("");
+                    let dark = crate::style::is_dark_theme();
+                    let mut previous = previous.borrow_mut();
+                    let mut changed = false;
+                    if previous.0 != text || previous.1 != dark {
+                        let version = revision.fetch_add(1, Ordering::AcqRel) + 1;
+                        *previous = (text.to_string(), dark, version);
+                        *pending.lock().unwrap_or_else(|error| error.into_inner()) =
+                            Some((version, text.to_string(), dark));
+                        let _ = requests.try_send(());
+                        crate::utils::text_annotations::set_text_field_syntax(
+                            &syntax_field,
+                            text,
+                            None,
+                        );
                         changed = true;
                     }
-                }
-                if changed {
-                    layout.mark_element_layout_dirty(leaf);
-                    LayoutStatus::LayoutChanged
-                } else {
-                    LayoutStatus::Clean
-                }
-            };
+                    while let Ok((version, spans)) = result.borrow_mut().try_recv() {
+                        if version == previous.2 {
+                            crate::utils::text_annotations::set_text_field_syntax(
+                                &syntax_field,
+                                text,
+                                (!spans.iter().all(|span| span.color.is_none())).then_some(spans),
+                            );
+                            changed = true;
+                        }
+                    }
+                    if changed {
+                        // The shared text-field paint pass merges syntax and source annotations.
+                        crate::app::runtime::request_redraw();
+                        LayoutStatus::StyleChanged
+                    } else {
+                        LayoutStatus::Clean
+                    }
+                };
             attach(&mut editor, &template, &mut Some(Box::new(callback)));
         }
         #[cfg(not(feature = "syntax-highlighting"))]

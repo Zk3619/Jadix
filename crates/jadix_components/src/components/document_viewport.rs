@@ -219,6 +219,7 @@ pub(crate) fn document_viewport(
     let mut body = Element::new().flex_col().w("100%").flex_shrink(0.0);
     mount_window(&mut body, &mut state, &initial, &render, range);
     let state = Rc::new(RefCell::new(state));
+    let scroll_id = id.to_owned();
     let body = body.reactive_sync(move |body, _layout| {
         if let Some(before_sync) = &before_sync {
             before_sync();
@@ -300,11 +301,24 @@ pub(crate) fn document_viewport(
                 }
             }
         }
-        next_offset =
-            next_offset.clamp(0.0, (state.heights.total() - f64::from(viewport)).max(0.0));
+        let max = (state.heights.total() - f64::from(viewport)).max(0.0);
+        if active_changed {
+            crate::core::scroll_viewport::cancel_scroll_end_y(&scroll_id);
+        }
+        let end_offset = crate::core::scroll_viewport::reconcile_scroll_end_y(
+            &scroll_id,
+            max as f32,
+            next_offset as f32,
+        );
+        next_offset = end_offset
+            .map(f64::from)
+            .unwrap_or(next_offset)
+            .clamp(0.0, max);
         if (next_offset - old_offset).abs() > 0.5 {
             offset.set_silent(next_offset as f32);
-            target.set_silent(next_offset as f32);
+            if end_offset.is_none() {
+                target.set_silent(next_offset as f32);
+            }
         }
         let range = state
             .heights

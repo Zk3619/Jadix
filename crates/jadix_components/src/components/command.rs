@@ -10,7 +10,9 @@
 //! - **Pure overlay** [`command_overlay_scope`] / `<CommandOverlay>`: viewport-centered palette (ShadCN `CommandDialog` chrome, no `Dialog` wrapper).
 //!   stage via [`mount_viewport_portal_stage`](crate::utils::popup::mount_viewport_portal_stage) (not Dialog centered chrome).
 //!
-//! cmdk-like behavior: **type-to-filter**, ↑↓ highlight, Enter run; Esc closes overlay / Dialog.
+//! cmdk-like behavior: **type-to-filter**, ↑↓ highlight enabled items with wraparound,
+//! Enter run; Esc closes overlay / Dialog. Filtering or disabling an active row
+//! clears its highlight when no enabled replacement remains.
 //!
 //! ## Usage (composite / front-end style)
 //!
@@ -67,31 +69,45 @@
 //! // Centered Dialog: `.dialog()`
 //!     .action(CommandAction::new("ping", "Ping", || log::info!("ping")))
 //! ```
+//!
+//! Use [`command_query`] with the root's explicit stable id to read or change its
+//! search text, including before mounting. It shares the Input's editing store:
+//! `command_query("pal").set("settings")`. Reads subscribe to typed edits and
+//! Escape/session resets; dismissible palettes retain their normal reset policy.
+//! Builder `.query_signal(query)` binds that committed store to application state,
+//! with blur/IME protection for subsequent external writes.
+//! Builder `.filterable(false)` preserves externally ranked results, while
+//! `.searchable(false)` replaces the search field with list keyboard/typeahead
+//! navigation. `.loading_signal(busy)` exposes pending work without showing a
+//! misleading empty result. These settings also apply to Builder `.child(...)`.
 
+use crate::text_filter::TextFilter;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::authoring::widgets::scroll::reset_scroll_item_into_view;
 use crate::components::base::SlotChrome;
-use crate::components::dialog::{dialog_content, dialog_scope, use_dialog, DialogContentOpts};
+use crate::components::dialog::{DialogContentOpts, dialog_content, dialog_scope, use_dialog};
 use crate::components::input::{
     input, input_caret_signal_key, input_selection_signal_key, input_value_signal_key, lucide_named,
 };
 use crate::components::label::label;
-use crate::components::scroll_area::scroll_area;
+use crate::components::scroll_area::{scroll_area, scroll_into_view};
 use crate::components::separator::separator;
+use crate::components::virtual_list::{VirtualListHandle, virtual_list};
 use crate::core::reactivity::{
-    batch, create_context, provide_context, use_context, use_signal, with_child_owner, Context,
-    Signal,
+    Context, Signal, batch, create_context, create_memo, provide_context, use_context, use_signal,
+    with_child_owner,
 };
 use crate::core::tree::{CursorKind, Element, Handler, LayoutStatus};
 use crate::impl_simple_slot_builder;
-use crate::layout::layout_tree::{LayoutTree, ATTR_ESCAPE_OVERFLOW_CLIP};
-use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
+use crate::layout::layout_tree::{ATTR_ESCAPE_OVERFLOW_CLIP, LayoutTree};
 use crate::primitives::r#box::{hstack, vstack};
+use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::text::text;
-use crate::style::{parse_color, parse_text_color, TAILWIND_TEXT_SM_LEADING_SCALE};
+use crate::style::{TAILWIND_TEXT_SM_LEADING_SCALE, parse_color, parse_text_color};
 use crate::tokens;
 use crate::utils::activate_registry;
 use crate::utils::modal_shell::ShellOverlayOpts;
@@ -100,8 +116,8 @@ use crate::utils::take_packed;
 use crate::utils::text_field::input_focus_id;
 use crate::utils::text_node::build_icon_text_node;
 use crate::utils::viewport_modal::{
-    viewport_modal_is_mounted, viewport_modal_layer, viewport_modal_motion_busy,
-    ViewportModalLayerOpts,
+    ViewportModalLayerOpts, viewport_modal_is_mounted, viewport_modal_layer,
+    viewport_modal_motion_busy,
 };
 use winit::keyboard::{Key, NamedKey};
 
@@ -148,9 +164,85 @@ pub struct CommandCtx {
     pub surface: CommandSurface,
 }
 
+/// Programmatic access to a Command's existing query, without a second store.
+#[derive(Clone, Debug)]
+pub struct CommandQuery {
+    field_id: String,
+}
+
+/// Access the query for a Command root with this explicit, nonempty stable id.
+///
+/// Use within the same window's reactive context as the Command. Clones and
+/// repeated calls with the same id address the same Input editing store.
+pub fn command_query(id: impl AsRef<str>) -> CommandQuery {
+    let id = id.as_ref();
+    assert!(
+        !id.is_empty(),
+        "command_query requires an explicit Command id"
+    );
+    CommandQuery {
+        field_id: format!("{id}__filter"),
+    }
+}
+
+impl CommandQuery {
+    /// Read the current query, subscribing the current reactive observer.
+    pub fn get(&self) -> String {
+        use_signal(&input_value_signal_key(&self.field_id), String::new).get()
+    }
+
+    /// Replace the query through the shared text-field commit path.
+    pub fn set(&self, query: impl Into<String>) {
+        crate::utils::text_field::commit_value(&self.field_id, query.into());
+    }
+}
+
 fn command_context() -> Context<CommandCtx> {
     static CTX: OnceLock<Context<CommandCtx>> = OnceLock::new();
     *CTX.get_or_init(create_context::<CommandCtx>)
+}
+
+fn command_filter_context() -> Context<Rc<RefCell<TextFilter>>> {
+    thread_local! {
+        static CTX: Context<Rc<RefCell<TextFilter>>> = create_context();
+    }
+    CTX.with(|ctx| *ctx)
+}
+
+#[derive(Clone)]
+struct CommandBehavior {
+    searchable: bool,
+    filterable: bool,
+    retain_active_by_value: bool,
+    loading: Option<Signal<bool>>,
+    query: Option<Signal<String>>,
+    selection: Option<Signal<Vec<String>>>,
+    confirm: Option<Rc<dyn Fn(Vec<String>)>>,
+}
+
+impl Default for CommandBehavior {
+    fn default() -> Self {
+        Self {
+            searchable: true,
+            filterable: true,
+            retain_active_by_value: false,
+            loading: None,
+            query: None,
+            selection: None,
+            confirm: None,
+        }
+    }
+}
+
+fn command_behavior_context() -> Context<CommandBehavior> {
+    thread_local! {
+        static CTX: Context<CommandBehavior> = create_context();
+    }
+    CTX.with(|ctx| *ctx)
+}
+
+fn command_behavior() -> CommandBehavior {
+    use_context(command_behavior_context()).unwrap_or_default()
 }
 
 /// Read the nearest [`Command`] context.
@@ -167,16 +259,14 @@ fn extract_text_leaf(el: &Element) -> String {
     crate::core::tree::first_text_leaf(el)
 }
 
-fn label_matches_query(label: &str, query: &str) -> bool {
-    query.is_empty() || label.to_lowercase().contains(&query.to_lowercase())
-}
-
 fn command_item_matches_query(label: &str, value: &str, keywords: &[String], query: &str) -> bool {
-    label_matches_query(label, query)
-        || label_matches_query(value, query)
-        || keywords
-            .iter()
-            .any(|keyword| label_matches_query(keyword, query))
+    let mut filter = TextFilter::default();
+    filter.begin(query);
+    filter.matches(
+        [label, value]
+            .into_iter()
+            .chain(keywords.iter().map(String::as_str)),
+    )
 }
 
 fn has_shortcut_slot(el: &Element) -> bool {
@@ -197,10 +287,6 @@ fn reset_activates(id: &str) {
     activate_registry::reset(id);
 }
 
-fn push_activate(id: &str, f: Rc<dyn Fn()>) {
-    activate_registry::push(id, f);
-}
-
 fn take_activate(id: &str, ix: usize) -> Option<Rc<dyn Fn()>> {
     activate_registry::take(id, ix)
 }
@@ -210,6 +296,8 @@ fn is_palette(surface: CommandSurface) -> bool {
 }
 
 fn reset_command_session(id: &str) {
+    reset_scroll_item_into_view(&format!("{id}:list"));
+    command_pointer(id).set_silent(None);
     let filter_id = format!("{id}__filter");
     use_signal(input_value_signal_key(&filter_id).as_str(), String::new).set(String::new());
     use_signal(
@@ -226,9 +314,14 @@ fn reset_command_session(id: &str) {
 
 const NO_ACTIVE_COMMAND: usize = usize::MAX;
 
+fn command_pointer(id: &str) -> Signal<Option<[f32; 2]>> {
+    use_signal(&format!("{id}__cmd_pointer"), || None)
+}
+
 /// Filter box only consumes list nav / run / dismiss. Backspace, Delete, arrows, Home/End, and chars go to text editing.
 fn command_filter_consumes_key(key: &Key) -> bool {
     crate::utils::list_nav::is_list_nav_key(key)
+        || matches!(key, Key::Named(NamedKey::PageUp | NamedKey::PageDown))
 }
 
 fn set_command_active(active: Signal<usize>, next: usize) {
@@ -303,8 +396,11 @@ fn command_paint(
     surface: CommandSurface,
     body: Rc<dyn Fn() -> Element>,
 ) -> Element {
+    let behavior = command_behavior();
     let filter_id = format!("{id}__filter");
     let active = use_signal(format!("{id}__cmd_active").as_str(), || NO_ACTIVE_COMMAND);
+    // Retain the last real pointer sample through query and layout rebuilds.
+    let _ = command_pointer(&id);
     let visible = use_signal(
         format!("{id}__cmd_visible").as_str(),
         Vec::<CommandVisibleItem>::new,
@@ -313,7 +409,20 @@ fn command_paint(
         crate::tr_default_zh("jadix.command.empty", "No results found.", "未找到结果。")
     });
     let query_sig = use_signal(input_value_signal_key(&filter_id).as_str(), String::new);
+    let filter = use_signal(format!("{id}__cmd_text_filter").as_str(), || {
+        Rc::new(RefCell::new(TextFilter::default()))
+    })
+    .peek();
+    // Preserve identity before the Builder replaces the visible snapshot and registry.
+    // A removed/disabled result clears the highlight rather than invoking its new neighbour.
+    let previous_active = behavior
+        .retain_active_by_value
+        .then(|| {
+            visible.with_untracked(|items| items.get(active.peek()).map(|item| item.value.clone()))
+        })
+        .flatten();
     let open_now = open.peek();
+    let searchable = behavior.searchable;
     let painted = with_child_owner({
         let id = id.clone();
         let filter_id = filter_id.clone();
@@ -331,8 +440,21 @@ fn command_paint(
                     surface,
                 },
             );
-            let _ = query_sig.get();
+            let query = query_sig.get();
+            filter
+                .borrow_mut()
+                .begin(if behavior.filterable && behavior.searchable {
+                    &query
+                } else {
+                    ""
+                });
+            provide_context(command_filter_context(), filter.clone());
             visible.set(Vec::new());
+            use_signal(
+                &format!("{id}__cmd_virtual_rows"),
+                || None::<Rc<Vec<usize>>>,
+            )
+            .set_silent(None);
             reset_activates(&id);
             // Do not reset `active` here. `visible` was just cleared, so the old
             // `if active != 0 && visible.is_empty()` always fired and forced index 0
@@ -342,7 +464,18 @@ fn command_paint(
             // Palette filter focus is applied in `sync_command_item_paint_subtree`
             // after enter motion is idle — not here, which runs at mount (first
             // enter frame) and would show the caret during zoom/fade.
-            command_root_shell(surface, take_packed(body()))
+            let children = take_packed(body());
+            if let Some(value) = previous_active {
+                let ctx = require_command("dynamic Command results");
+                let next = visible.with_untracked(|items| {
+                    items
+                        .iter()
+                        .position(|item| item.value == value && !item.disabled)
+                });
+                reveal_command_active(&ctx, next);
+            }
+            filter.borrow_mut().finish();
+            command_root_shell(surface, children)
         }
     });
     // DialogContent sets `min_h:0` + `flex_grow:1` on the returned root. Keep intrinsic height on the inner shell so it is not crushed to 0.
@@ -357,6 +490,9 @@ fn command_paint(
         painted
     };
     stamp_command_palette_attrs(&mut painted, &id, surface, open_now, &filter_id);
+    if !searchable {
+        painted.set_attr("jadix_command_focus", format!("{id}:listbox"));
+    }
     painted
 }
 
@@ -421,7 +557,11 @@ fn sync_command_palette_focus(el: &Element) {
     if command_palette_motion_busy(id, surface) {
         return;
     }
-    let want = input_focus_id(filter_id);
+    let want = el
+        .attrs
+        .get("jadix_command_focus")
+        .cloned()
+        .unwrap_or_else(|| input_focus_id(filter_id));
     let focus = use_signal("__jadix_button_focus_id", String::new);
     if focus.peek() != want {
         focus.set(want);
@@ -633,6 +773,19 @@ pub struct CommandAction {
     pub run: Rc<dyn Fn()>,
 }
 
+// Callback identity participates so replacing only a callback refreshes the registry.
+impl PartialEq for CommandAction {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.label == other.label
+            && self.keywords == other.keywords
+            && self.shortcut == other.shortcut
+            && self.disabled == other.disabled
+            && Rc::ptr_eq(&self.run, &other.run)
+    }
+}
+impl Eq for CommandAction {}
+
 impl CommandAction {
     pub fn new(id: impl Into<String>, label: impl Into<String>, run: impl Fn() + 'static) -> Self {
         Self {
@@ -667,7 +820,7 @@ impl CommandAction {
 }
 
 /// Builder group.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CommandGroupData {
     pub heading: String,
     pub items: Vec<CommandAction>,
@@ -687,6 +840,7 @@ impl CommandGroupData {
     }
 }
 
+#[derive(Clone, PartialEq, Eq)]
 enum CommandEntry {
     Item(CommandAction),
     Group(CommandGroupData),
@@ -697,8 +851,10 @@ pub struct CommandBuilder {
     id: String,
     open: Option<Signal<bool>>,
     entries: Vec<CommandEntry>,
+    actions: Option<Signal<Vec<CommandAction>>>,
     placeholder: String,
     surface: CommandSurface,
+    behavior: CommandBehavior,
 }
 
 /// Command palette entry. With [`CommandBuilder::open_signal`], defaults to top-centered overlay; [`.dialog()`](CommandBuilder::dialog) uses Dialog.
@@ -707,16 +863,61 @@ pub fn command(id: impl Into<String>) -> CommandBuilder {
         id: id.into(),
         open: None,
         entries: Vec::new(),
+        actions: None,
         placeholder: crate::tr_default_zh(
             "jadix.command.placeholder",
             "Type a command or search...",
             "输入命令或搜索…",
         ),
         surface: CommandSurface::Overlay,
+        behavior: CommandBehavior::default(),
     }
 }
 
 impl CommandBuilder {
+    /// Bind committed search text to application state, including typed edits and
+    /// Escape/session resets. External writes wait while the field is focused or
+    /// composing; local edits win. Also applies to `child` and searchless lists.
+    pub fn query_signal(mut self, query: Signal<String>) -> Self {
+        self.behavior.query = Some(query);
+        self
+    }
+
+    /// Controlled multi-selection, keyed by stable, unique action IDs (or compound
+    /// `CommandItem::value`). Selection survives filtering and virtual row unmounts.
+    /// Clicking or activating toggles membership before running the item callback;
+    /// the palette stays open. Without `on_confirm`, Enter also toggles the item.
+    pub fn selection_signal(mut self, selection: Signal<Vec<String>>) -> Self {
+        self.behavior.selection = Some(selection);
+        self
+    }
+
+    /// With `selection_signal`, Enter confirms the current values, including an
+    /// empty selection, before dismissing a dialog/overlay. Searchless lists also
+    /// support Space to toggle the active item without confirming.
+    pub fn on_confirm(mut self, confirm: impl Fn(Vec<String>) + 'static) -> Self {
+        self.behavior.confirm = Some(Rc::new(confirm));
+        self
+    }
+
+    /// Keep the supplied result order and membership (for external/async search).
+    pub fn filterable(mut self, filterable: bool) -> Self {
+        self.behavior.filterable = filterable;
+        self
+    }
+
+    /// Without a search field, focus the list and use typeahead/keyboard navigation.
+    pub fn searchable(mut self, searchable: bool) -> Self {
+        self.behavior.searchable = searchable;
+        self
+    }
+
+    /// Pending work is owned by the application; existing rows remain usable.
+    pub fn loading_signal(mut self, loading: Signal<bool>) -> Self {
+        self.behavior.loading = Some(loading);
+        self
+    }
+
     pub fn open_signal(mut self, s: Signal<bool>) -> Self {
         self.open = Some(s);
         self
@@ -730,6 +931,18 @@ impl CommandBuilder {
             .extend(actions.into_iter().map(CommandEntry::Item));
         self
     }
+    /// Controlled flat results, replacing static actions/groups. Pair with
+    /// `filterable(false)` for externally ranked async search and `loading_signal`
+    /// for pending work. Keep IDs unique and stable: reordering preserves the
+    /// highlighted ID; removal or disabling clears it. Query and selection survive.
+    /// Replacing a callback (even with identical metadata) updates activation.
+    /// This applies to the Builder data path; `child` supplies its own results.
+    pub fn actions_signal(mut self, actions: Signal<Vec<CommandAction>>) -> Self {
+        self.actions = Some(actions);
+        self.behavior.retain_active_by_value = true;
+        self
+    }
+
     pub fn action(mut self, action: CommandAction) -> Self {
         self.entries.push(CommandEntry::Item(action));
         self
@@ -761,118 +974,274 @@ impl CommandBuilder {
 
     /// Build Input / List / Item subtrees inside the context.
     pub fn child(self, body: impl Fn() -> Element + 'static) -> Element {
-        command_scope(self.id, self.open, self.placeholder, self.surface, body)
+        assert!(
+            self.behavior.confirm.is_none() || self.behavior.selection.is_some(),
+            "Command::on_confirm requires selection_signal"
+        );
+        with_child_owner(|| {
+            let id = crate::utils::resolve_instance_id(self.id, "cmd");
+            if let Some(query) = self.behavior.query {
+                crate::utils::text_field::bind_text_query_signal(&format!("{id}__filter"), query);
+            }
+            provide_context(command_behavior_context(), self.behavior);
+            match (self.open, self.surface) {
+                (Some(open), CommandSurface::Dialog) => {
+                    command_dialog_scope(id, Some(open), self.placeholder, false, body)
+                }
+                (Some(open), CommandSurface::Overlay) => {
+                    command_overlay_scope(id, Some(open), self.placeholder, body)
+                }
+                _ => command_scope(
+                    id,
+                    self.open,
+                    self.placeholder,
+                    CommandSurface::Inline,
+                    body,
+                ),
+            }
+        })
     }
 }
 
-fn builder_palette_body(placeholder: String, entries: Vec<CommandEntry>) -> Element {
-    let mut list_kids: Vec<Element> = Vec::new();
-    list_kids.push(CommandEmpty(CommandEmptyProps {
-        children: Some(Element::new().text(crate::tr_default_zh(
-            "jadix.command.empty",
-            "No results found.",
-            "未找到结果。",
-        ))),
-        base: None,
-    }));
-    for e in entries {
-        match e {
-            CommandEntry::Item(a) => list_kids.push(builder_item(a)),
-            CommandEntry::Group(g) => {
-                let mut kids: Vec<Element> = Vec::new();
-                for a in g.items {
-                    kids.push(builder_item(a));
-                }
-                let mut frag = Element::new();
-                frag.set_attr("jadix_fragment", "1");
-                list_kids.push(CommandGroup(CommandGroupProps {
-                    heading: Some(g.heading),
-                    children: Some(frag.children(kids)),
-                    base: None,
-                }));
+// Rows reference immutable Builder data; filtering never clones every action or builds
+// discarded Element trees. Item indices exclude headings and separators.
+#[derive(Clone, Copy)]
+enum BuilderRow {
+    Item {
+        entry: usize,
+        child: Option<usize>,
+        index: usize,
+    },
+    Heading(usize),
+    Separator,
+}
+
+fn builder_action(entries: &[CommandEntry], entry: usize, child: Option<usize>) -> &CommandAction {
+    match &entries[entry] {
+        CommandEntry::Item(action) => action,
+        CommandEntry::Group(group) => &group.items[child.unwrap()],
+        CommandEntry::Separator => unreachable!(),
+    }
+}
+
+fn builder_palette_body(placeholder: String, entries: Rc<Vec<CommandEntry>>) -> Element {
+    let ctx = require_command("command Builder");
+    let _ = CommandEmpty(CommandEmptyProps::default());
+    let filter = use_context(command_filter_context()).expect("Command filter pass");
+    let mut rows = Vec::new();
+    let mut item_rows = Vec::new();
+    let mut visible = Vec::new();
+    let mut pending_separator = false;
+    for (entry, value) in entries.iter().enumerate() {
+        let actions = match value {
+            CommandEntry::Item(action) => std::slice::from_ref(action),
+            CommandEntry::Group(group) => group.items.as_slice(),
+            CommandEntry::Separator => {
+                pending_separator = !rows.is_empty();
+                continue;
             }
-            CommandEntry::Separator => list_kids.push(CommandSeparator(CommandSeparatorProps {
-                children: None,
-                base: None,
-            })),
+        };
+        let mut first = true;
+        for (child, action) in actions.iter().enumerate() {
+            let value = if action.id.is_empty() {
+                &action.label
+            } else {
+                &action.id
+            };
+            if !filter.borrow_mut().matches(
+                [action.label.as_str(), value.as_str()]
+                    .into_iter()
+                    .chain(action.keywords.iter().map(String::as_str)),
+            ) {
+                continue;
+            }
+            if first {
+                if pending_separator {
+                    rows.push(BuilderRow::Separator);
+                }
+                pending_separator = false;
+                if let CommandEntry::Group(group) = &entries[entry] {
+                    if !group.heading.is_empty() {
+                        rows.push(BuilderRow::Heading(entry));
+                    }
+                }
+                first = false;
+            }
+            let index = visible.len();
+            item_rows.push(rows.len());
+            rows.push(BuilderRow::Item {
+                entry,
+                child: matches!(entries[entry], CommandEntry::Group(_)).then_some(child),
+                index,
+            });
+            visible.push(CommandVisibleItem {
+                value: value.clone(),
+                label: action.label.clone(),
+                disabled: action.disabled,
+            });
+            activate_registry::push_enabled(
+                &ctx.id,
+                command_item_activation(value.clone(), action.run.clone()),
+                !action.disabled,
+            );
         }
     }
-    let mut list_frag = Element::new();
-    list_frag.set_attr("jadix_fragment", "1");
+    ctx.visible.set_silent(visible);
+    clamp_command_active(&ctx);
+    let rows = Rc::new(rows);
+    let count = rows.len();
+    let item_rows = Rc::new(item_rows);
+    // Page navigation needs logical rows, including offscreen items. Ordinary
+    // compound lists continue using their actual measured item bounds.
+    use_signal(&format!("{}__cmd_virtual_rows", ctx.id), || {
+        None::<Rc<Vec<usize>>>
+    })
+    .set_silent((count >= 64).then(|| item_rows.clone()));
+    let geometry = (count >= 64).then(VirtualListHandle::default);
+    use_signal(&format!("{}__cmd_virtual_geometry", ctx.id), || {
+        None::<VirtualListHandle>
+    })
+    .set_silent(geometry.clone());
+    let render = {
+        let rows = rows.clone();
+        let ctx = ctx.clone();
+        move |row: usize| {
+            with_child_owner(|| {
+                provide_context(command_context(), ctx.clone());
+                match rows[row] {
+                    BuilderRow::Item {
+                        entry,
+                        child,
+                        index,
+                    } => {
+                        let item = builder_item(
+                            builder_action(&entries, entry, child),
+                            ctx.clone(),
+                            index,
+                        );
+                        if child.is_some() {
+                            vstack().w("100%").px("0.25rem").child(item).into()
+                        } else {
+                            item
+                        }
+                    }
+                    BuilderRow::Heading(entry) => {
+                        let CommandEntry::Group(group) = &entries[entry] else {
+                            unreachable!()
+                        };
+                        let head: Element = label(format!("{}:grp:{}", ctx.id, group.heading))
+                            .text(group.heading.clone())
+                            .size(12.0)
+                            .line_height(12.0)
+                            .font_weight(500.0)
+                            .color(parse_text_color("muted-foreground"))
+                            .into();
+                        head.w("100%").px("0.75rem").py("0.375rem")
+                    }
+                    BuilderRow::Separator => CommandSeparator(CommandSeparatorProps::default()),
+                }
+            })
+        }
+    };
+    let list = if count >= 64 {
+        // A highlight is persistent, but revealing it is a keyboard intent.
+        // Consume that intent so wheel/drag scrolling can leave it offscreen.
+        let reveal = use_signal(&format!("{}__cmd_virtual_focus", ctx.id), || {
+            NO_ACTIVE_COMMAND
+        });
+        reveal.set_silent(ctx.active.peek());
+        let mut list: Element = virtual_list(format!("{}:list", ctx.id))
+            .handle(geometry.unwrap())
+            .item_count(count)
+            .item_height(32.0)
+            .measure_rows()
+            .height(300.0)
+            .focused_index_fn(move || {
+                let index = reveal.peek();
+                reveal.set_silent(NO_ACTIVE_COMMAND);
+                item_rows.get(index).copied()
+            })
+            .render_item(render)
+            .into();
+        list = list.max_h("18.75rem").min_h(0.0).flex_shrink(1.0);
+        list.set_attr("data-slot", "command-list");
+        list.set_attr("id", format!("{}:listbox", ctx.id));
+        list = command_list_interaction(list.accesskit_role("listbox"), &ctx);
+        reset_scroll_item_into_view(&format!("{}:list", ctx.id));
+        list
+    } else {
+        let mut fragment = Element::new();
+        fragment.set_attr("jadix_fragment", "1");
+        CommandList(CommandListProps {
+            children: Some(fragment.children((0..count).map(render).collect::<Vec<_>>())),
+            base: None,
+        })
+    };
     let mut root = Element::new();
     root.set_attr("jadix_fragment", "1");
     root.children(vec![
         CommandInput(CommandInputProps {
             placeholder: Some(placeholder),
-            children: None,
-            base: None,
+            ..Default::default()
         }),
-        CommandList(CommandListProps {
-            children: Some(list_frag.children(list_kids)),
-            base: None,
-        }),
+        list,
     ])
 }
 
-fn builder_item(a: CommandAction) -> Element {
-    let mut kids = vec![Element::new().text(a.label.clone())];
-    if let Some(s) = a.shortcut.clone() {
+fn builder_item(action: &CommandAction, ctx: CommandCtx, index: usize) -> Element {
+    let mut kids = vec![Element::new().text(action.label.clone())];
+    if let Some(shortcut) = &action.shortcut {
         kids.push(CommandShortcut(CommandShortcutProps {
-            children: Some(Element::new().text(s)),
+            children: Some(Element::new().text(shortcut.clone())),
             base: None,
         }));
     }
-    let mut frag = Element::new();
-    frag.set_attr("jadix_fragment", "1");
-    let run = a.run.clone();
-    CommandItem(CommandItemProps {
-        value: Some(a.id),
-        disabled: Some(a.disabled),
-        checked: None,
-        keywords: Some(a.keywords),
-        on_click: Some(Handler::new(move |_| (run)())),
-        children: Some(frag.children(kids)),
-        base: None,
+    let value = if action.id.is_empty() {
+        &action.label
+    } else {
+        &action.id
+    };
+    command_item_row(
+        ctx,
+        index,
+        action.disabled,
+        false,
+        command_item_activation(value.clone(), action.run.clone()),
+        kids,
+    )
+}
+
+fn command_item_activation(value: String, action: Rc<dyn Fn()>) -> Rc<dyn Fn()> {
+    let Some(selection) = command_behavior().selection else {
+        return action;
+    };
+    Rc::new(move || {
+        selection.set(super::toggle_group::multi_select_after_click(
+            &selection.peek(),
+            &value,
+        ));
+        mark_hover_paint_dirty();
+        action();
     })
 }
 
 impl From<CommandBuilder> for Element {
-    fn from(builder: CommandBuilder) -> Self {
-        let CommandBuilder {
-            id,
-            open,
-            entries,
-            placeholder,
-            surface,
-        } = builder;
-        let entries = Rc::new(entries);
-        let placeholder_c = placeholder.clone();
-        let body = {
-            let entries = entries.clone();
-            move || builder_palette_body(placeholder_c.clone(), clone_entries(&entries))
-        };
-        if open.is_some() {
-            match surface {
-                CommandSurface::Dialog => command_dialog_scope(id, open, placeholder, false, body),
-                CommandSurface::Overlay | CommandSurface::Inline => {
-                    command_overlay_scope(id, open, placeholder, body)
-                }
-            }
-        } else {
-            command_scope(id, open, placeholder, CommandSurface::Inline, body)
-        }
-    }
-}
-
-fn clone_entries(entries: &Rc<Vec<CommandEntry>>) -> Vec<CommandEntry> {
-    entries
-        .iter()
-        .map(|e| match e {
-            CommandEntry::Item(a) => CommandEntry::Item(a.clone()),
-            CommandEntry::Group(g) => CommandEntry::Group(g.clone()),
-            CommandEntry::Separator => CommandEntry::Separator,
+    fn from(mut builder: CommandBuilder) -> Self {
+        let entries = Rc::new(std::mem::take(&mut builder.entries));
+        // Build immutable result data once per source change, not per query/key press.
+        let dynamic = builder.actions.map(|actions| {
+            create_memo(move || {
+                Rc::new(actions.get().into_iter().map(CommandEntry::Item).collect())
+            })
+        });
+        let placeholder = builder.placeholder.clone();
+        builder.child(move || {
+            builder_palette_body(
+                placeholder.clone(),
+                dynamic.map_or_else(|| entries.clone(), |items| items.get()),
+            )
         })
-        .collect()
+    }
 }
 
 impl crate::core::tree::IntoElementList for CommandBuilder {
@@ -921,6 +1290,176 @@ plain [] children: Option<Element>,
 }
 }
 
+fn reveal_command_active(ctx: &CommandCtx, next: Option<usize>) {
+    let index = next.unwrap_or(NO_ACTIVE_COMMAND);
+    set_command_active(ctx.active, index);
+    use_signal(&format!("{}__cmd_virtual_focus", ctx.id), || {
+        NO_ACTIVE_COMMAND
+    })
+    .set_silent(index);
+    if let Some(index) = next {
+        scroll_into_view(
+            format!("{}:list", ctx.id),
+            format!("{}:item:{index}", ctx.id),
+            "nearest",
+        );
+    }
+}
+
+fn command_key_handler(
+    ctx: CommandCtx,
+    prev_key: Option<Rc<RefCell<dyn FnMut(winit::event::KeyEvent) -> bool>>>,
+    searchable: bool,
+) -> impl FnMut(winit::event::KeyEvent) -> bool {
+    let cmd_id = ctx.id.clone();
+    let open = ctx.open;
+    let active = ctx.active;
+    let dismissible = ctx.surface.dismissible();
+    let behavior = command_behavior();
+    let query = use_signal(&input_value_signal_key(&ctx.filter_id), String::new);
+    let mut prefix = String::new();
+    let mut last_typed = None::<std::time::Instant>;
+    move |ev| {
+        if ev.state != winit::event::ElementState::Pressed
+            && (!searchable || matches!(ev.logical_key, Key::Named(NamedKey::Escape)))
+        {
+            return false;
+        }
+        if !searchable {
+            if behavior.selection.is_some()
+                && matches!(&ev.logical_key, Key::Character(text) if text.as_str() == " ")
+            {
+                if let Some(action) = take_activate(&cmd_id, active.peek()) {
+                    batch(|| action());
+                }
+                prefix.clear();
+                return true;
+            }
+            if matches!(ev.logical_key, Key::Named(NamedKey::Home | NamedKey::End)) {
+                prefix.clear();
+                reveal_command_active(
+                    &ctx,
+                    activate_registry::enabled_edge(
+                        &cmd_id,
+                        matches!(ev.logical_key, Key::Named(NamedKey::End)),
+                    ),
+                );
+                return true;
+            }
+            if let Key::Character(_) = &ev.logical_key {
+                if let Some(typed) = ev
+                    .text_with_all_modifiers
+                    .as_ref()
+                    .or(ev.text.as_ref())
+                    .filter(|text| !text.is_empty() && !text.chars().any(char::is_control))
+                {
+                    let now = std::time::Instant::now();
+                    if last_typed.is_none_or(|last| now.duration_since(last).as_millis() > 600) {
+                        prefix.clear();
+                    }
+                    let typed = typed.to_lowercase();
+                    // Repeated single letters cycle matches instead of searching for "aaa".
+                    if prefix != typed {
+                        prefix.push_str(&typed);
+                    }
+                    last_typed = Some(now);
+                    let next = ctx.visible.with_untracked(|items| {
+                        let count = items.len();
+                        let current = active.peek();
+                        let start = usize::from(prefix.chars().count() == 1 && current < count);
+                        let current = if current < count { current } else { 0 };
+                        (start..count + start)
+                            .map(|step| (current + step) % count)
+                            .find(|&index| {
+                                !items[index].disabled
+                                    && items[index].label.to_lowercase().starts_with(&prefix)
+                            })
+                    });
+                    if next.is_some() {
+                        reveal_command_active(&ctx, next);
+                    }
+                    return true;
+                }
+            }
+        }
+        if !command_filter_consumes_key(&ev.logical_key) {
+            if let Some(prev) = &prev_key {
+                return prev.borrow_mut()(ev);
+            }
+            return false;
+        }
+        match &ev.logical_key {
+            Key::Named(NamedKey::Escape) if searchable && !query.peek().is_empty() => {
+                batch(|| reset_command_session(&cmd_id));
+                return true;
+            }
+            Key::Named(NamedKey::Escape) if dismissible => {
+                reset_scroll_item_into_view(&format!("{cmd_id}:list"));
+                open.set(false);
+                clear_button_focus();
+                return true;
+            }
+            Key::Named(
+                NamedKey::ArrowDown | NamedKey::ArrowUp | NamedKey::PageDown | NamedKey::PageUp,
+            ) => {
+                let down = matches!(
+                    ev.logical_key,
+                    Key::Named(NamedKey::ArrowDown | NamedKey::PageDown)
+                );
+                let next = if matches!(
+                    ev.logical_key,
+                    Key::Named(NamedKey::PageDown | NamedKey::PageUp)
+                ) {
+                    let height_key = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(
+                        &format!("{cmd_id}:list"),
+                    )
+                    .viewport_h;
+                    let height = use_signal(&height_key, || 0.0_f32).peek();
+                    command_page_enabled(&cmd_id, active.peek(), height, down)
+                } else {
+                    activate_registry::move_enabled(
+                        &cmd_id,
+                        active.peek(),
+                        if down { 1 } else { -1 },
+                    )
+                };
+                prefix.clear();
+                reveal_command_active(&ctx, next);
+                return true;
+            }
+            Key::Named(NamedKey::Enter) => {
+                if let (Some(selection), Some(confirm)) = (behavior.selection, &behavior.confirm) {
+                    batch(|| {
+                        confirm(selection.peek());
+                        if dismissible {
+                            reset_scroll_item_into_view(&format!("{cmd_id}:list"));
+                            open.set(false);
+                            clear_button_focus();
+                        }
+                    });
+                    return true;
+                }
+                let ix = active.peek();
+                if ix < activate_registry::count(&cmd_id) {
+                    if let Some(act) = take_activate(&cmd_id, ix) {
+                        batch(|| {
+                            act();
+                            if dismissible && behavior.selection.is_none() {
+                                reset_scroll_item_into_view(&format!("{cmd_id}:list"));
+                                open.set(false);
+                                clear_button_focus();
+                            }
+                        });
+                    }
+                    return true;
+                }
+            }
+            _ => {}
+        }
+        false
+    }
+}
+
 crate::__component_contract! {
 CommandInputProps [];
 /// ShadCN / solid-ui `CommandInput`: bottom border + search icon + transparent input.
@@ -931,15 +1470,13 @@ plain [] children: Option<Element>,
 ) -> Element {
     let _ = children;
     let ctx = require_command("CommandInput");
+    if !command_behavior().searchable {
+        return Element::new().w(0.0).h(0.0);
+    }
     let ph = placeholder
         .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| ctx.placeholder.clone());
     let filter_id = ctx.filter_id.clone();
-    let cmd_id = ctx.id.clone();
-    let open = ctx.open;
-    let active = ctx.active;
-    let visible = ctx.visible;
-    let dismissible = ctx.surface.dismissible();
 
     let icon = build_icon_text_node(lucide_named("search"))
         .text_size(16.0)
@@ -964,6 +1501,16 @@ plain [] children: Option<Element>,
         .px(0.0)
         .py(0.0)
         .bg([0.0, 0.0, 0.0, 0.0]);
+    field = field.accesskit_role("combobox").accesskit_name(ph.as_str());
+    field.set_attr("aria-haspopup", "listbox");
+    field.set_attr("aria-autocomplete", "list");
+    sync_command_input_semantics(&mut field, &ctx);
+    let semantics = ctx.clone();
+    crate::authoring::presentation::attach(
+        &mut field,
+        crate::authoring::presentation::Phase::State,
+        move |element, _, _| sync_command_input_semantics(element, &semantics),
+    );
     field.style.shadow_blur = 0.0;
     field.style.shadow_spread = 0.0;
     field.style.shadow_color = [0.0, 0.0, 0.0, 0.0];
@@ -972,60 +1519,7 @@ plain [] children: Option<Element>,
     }
 
     let prev_key = field.on_key_down.clone();
-    field = field.on_key_down(move |ev| {
-        if !command_filter_consumes_key(&ev.logical_key) {
-            if let Some(prev) = &prev_key {
-                return prev.borrow_mut()(ev);
-            }
-            return false;
-        }
-        let list = visible.peek();
-        let n = list.len();
-        match &ev.logical_key {
-            Key::Named(NamedKey::Escape)
-                if dismissible => {
-                    open.set(false);
-                    clear_button_focus();
-                    return true;
-                }
-            Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowUp) => {
-                let next = if active.peek() == NO_ACTIVE_COMMAND {
-                    if n == 0 {
-                        None
-                    } else if matches!(ev.logical_key, Key::Named(NamedKey::ArrowDown)) {
-                        Some(0)
-                    } else {
-                        Some(n - 1)
-                    }
-                } else {
-                    crate::utils::list_nav::list_nav_move_arrows(&ev.logical_key, n, active.peek())
-                };
-                if let Some(next) = next {
-                    set_command_active(active, next);
-                }
-                return true;
-            }
-            Key::Named(NamedKey::Enter) => {
-                let ix = active.peek();
-                if let Some(item) = list.get(ix) {
-                    if !item.disabled {
-                        batch(|| {
-                            if let Some(act) = take_activate(&cmd_id, ix) {
-                                act();
-                            }
-                            if dismissible {
-                                open.set(false);
-                                clear_button_focus();
-                            }
-                        });
-                    }
-                    return true;
-                }
-            }
-            _ => {}
-        }
-        false
-    });
+    field = field.on_key_down(command_key_handler(ctx.clone(), prev_key, true));
 
     // Search icon sits inside the rounded input shell on the left; leave gap between shell and panel so the bottom divider is not full-bleed.
     let mut shell: Element = hstack()
@@ -1081,8 +1575,19 @@ plain [] children: Option<Element>,
         .flex_grow(0.0)
         .flex_shrink(0.0)
         .children(kids);
-    if ctx.visible.peek().is_empty() {
-        col = col.child(command_empty_ui(&ctx.empty_msg.peek()));
+    if ctx.visible.with_untracked(Vec::is_empty) {
+        let loading = command_behavior().loading.is_some_and(|loading| loading.get());
+        let message = if loading {
+            crate::tr_default_zh("jadix.command.loading", "Loading…", "加载中…")
+        } else {
+            ctx.empty_msg.peek()
+        };
+        let mut empty = command_empty_ui(&message);
+        if loading {
+            empty = empty.accesskit_role("status").accesskit_name(&message);
+            empty.set_attr("data-slot", "command-loading");
+        }
+        col = col.child(empty);
     }
     // Content-shell padding-bottom. Column `pb` is invisible to `content_h` (extent
     // is descendant boxes, not own padding), so this is a real child.
@@ -1093,13 +1598,11 @@ plain [] children: Option<Element>,
             .flex_shrink(0.0)
             .pointer_events_none(),
     );
-    let n = ctx.visible.peek().len();
-    if n == 0 {
-        set_command_active(ctx.active, NO_ACTIVE_COMMAND);
-    } else if ctx.active.peek() != NO_ACTIVE_COMMAND && ctx.active.peek() >= n {
-        set_command_active(ctx.active, n - 1);
-    }
+    clamp_command_active(&ctx);
     let scroll_id = format!("{}:list", ctx.id);
+    // A rebuilt/filtered list can reuse an index for a different item. Keyboard
+    // highlight updates only repaint, so their requests survive until layout.
+    reset_scroll_item_into_view(&scroll_id);
     // ShadCN `max-h-[300px] overflow-y-auto` on every surface. `max_h` on ScrollArea gives a
     // definite scroll-box height under auto-height Dialog / Overlay parents (plain `overflow:auto`
     // on a vstack collapses to 0 in Taffy).
@@ -1122,8 +1625,194 @@ plain [] children: Option<Element>,
     }
     let mut list: Element = sa.child(col).into();
     list.set_attr("data-slot", "command-list");
+    list.set_attr("id", format!("{}:listbox", ctx.id));
+    command_list_interaction(list.accesskit_role("listbox"), &ctx)
+}
+}
+
+fn command_list_interaction(mut list: Element, ctx: &CommandCtx) -> Element {
+    let behavior = command_behavior();
+    if behavior.selection.is_some() {
+        list.set_attr("aria-multiselectable", "true");
+    }
+    let busy = behavior.loading.is_some_and(|loading| loading.get());
+    list.set_attr("aria-busy", busy.to_string());
+    list.set_attr(
+        "accesskit_size_of_set",
+        ctx.visible.with_untracked(Vec::len).to_string(),
+    );
+    if !behavior.searchable {
+        list = list.focus_id(format!("{}:listbox", ctx.id)).focusable(true);
+        list = list.accesskit_name(&ctx.placeholder);
+        let previous = list.on_key_down.clone();
+        list = list.on_key_down(command_key_handler(ctx.clone(), previous, false));
+        sync_command_list_semantics(&mut list, ctx);
+    }
+    let semantics = ctx.clone();
+    crate::authoring::presentation::attach(
+        &mut list,
+        crate::authoring::presentation::Phase::State,
+        move |element, _, _| {
+            let busy = behavior
+                .loading
+                .is_some_and(|loading| loading.peek())
+                .to_string();
+            let mut impact = LayoutStatus::Clean;
+            if element.attrs.get("aria-busy") != Some(&busy) {
+                element.set_attr("aria-busy", busy);
+                impact = LayoutStatus::StyleChanged;
+            }
+            let size = semantics.visible.with_untracked(Vec::len).to_string();
+            if element.attrs.get("accesskit_size_of_set") != Some(&size) {
+                element.set_attr("accesskit_size_of_set", size);
+                impact = LayoutStatus::StyleChanged;
+            }
+            if !behavior.searchable {
+                impact = impact.merge(sync_command_list_semantics(element, &semantics));
+            }
+            impact
+        },
+    );
+    if let Some(selection) = behavior.selection {
+        // One retained binding schedules State paint for external writes without
+        // subscribing the filtering/body effect or creating per-option effects.
+        list = crate::app::reactive::bind_prop(
+            list,
+            format!("{}:selection-paint", ctx.id),
+            move || selection.with(|_| ()),
+            |_, ()| LayoutStatus::StyleChanged,
+        );
+    }
     list
 }
+
+fn command_active_option(ctx: &CommandCtx) -> Option<String> {
+    let active = ctx.active.peek();
+    ctx.open
+        .peek()
+        .then(|| {
+            ctx.visible.with_untracked(|items| {
+                items
+                    .get(active)
+                    .filter(|item| !item.disabled)
+                    .map(|_| format!("{}:item:{active}", ctx.id))
+            })
+        })
+        .flatten()
+}
+
+fn sync_command_list_semantics(list: &mut Element, ctx: &CommandCtx) -> LayoutStatus {
+    let option = command_active_option(ctx);
+    if list.attrs.get("aria-activedescendant") == option.as_ref() {
+        return LayoutStatus::Clean;
+    }
+    if let Some(option) = option {
+        list.set_attr("aria-activedescendant", option);
+    } else {
+        list.attrs.remove("aria-activedescendant");
+    }
+    LayoutStatus::StyleChanged
+}
+
+// Keyboard highlight uses silent Signals and a paint pass; accessibility must
+// follow that same state without subscribing or rebuilding the input subtree.
+fn sync_command_input_semantics(field: &mut Element, ctx: &CommandCtx) -> LayoutStatus {
+    let expanded = ctx.open.peek();
+    let option = command_active_option(ctx);
+    let mut impact = LayoutStatus::Clean;
+    for (key, value) in [
+        ("aria-expanded", Some(expanded.to_string())),
+        (
+            "aria-controls",
+            expanded.then(|| format!("{}:listbox", ctx.id)),
+        ),
+        ("aria-activedescendant", option),
+    ] {
+        if field.attrs.get(key) != value.as_ref() {
+            if let Some(value) = value {
+                field.set_attr(key, value);
+            } else {
+                field.attrs.remove(key);
+            }
+            impact = LayoutStatus::StyleChanged;
+        }
+    }
+    impact
+}
+
+fn command_page_enabled(id: &str, current: usize, viewport: f32, down: bool) -> Option<usize> {
+    let rows = use_signal(
+        &format!("{id}__cmd_virtual_rows"),
+        || None::<Rc<Vec<usize>>>,
+    )
+    .peek();
+    let Some(rows) = rows else {
+        return activate_registry::page_enabled(id, current, viewport, down);
+    };
+    let Some(&row) = rows.get(current) else {
+        return activate_registry::enabled_edge(id, !down);
+    };
+    let geometry = use_signal(&format!("{id}__cmd_virtual_geometry"), || {
+        None::<VirtualListHandle>
+    })
+    .peek();
+    // Unmeasured rows retain VirtualList's estimate; measured rows and group
+    // headings use the same geometry as scrolling and focus reveal.
+    let position = |row| {
+        geometry
+            .as_ref()
+            .and_then(|geometry| geometry.row_offset(row))
+            .unwrap_or(row as f64 * 32.0)
+    };
+    let distance = if viewport.is_finite() {
+        f64::from(viewport.max(1.0))
+    } else {
+        32.0
+    };
+    let target = if down {
+        position(row) + distance
+    } else {
+        position(row) - distance
+    };
+    let mut best = None;
+    let mut best_distance = f64::INFINITY;
+    for step in 1..rows.len() {
+        let index = if down {
+            current
+                .checked_add(step)
+                .filter(|&index| index < rows.len())
+        } else {
+            current.checked_sub(step)
+        };
+        let Some(index) = index else { break };
+        if activate_registry::take(id, index).is_none() {
+            continue;
+        }
+        let offset = position(rows[index]);
+        let distance = (offset - target).abs();
+        if distance < best_distance {
+            best = Some(index);
+            best_distance = distance;
+        }
+        if (down && offset >= target) || (!down && offset <= target) {
+            break;
+        }
+    }
+    best.or_else(|| activate_registry::take(id, current).map(|_| current))
+}
+
+fn clamp_command_active(ctx: &CommandCtx) {
+    let active = ctx.active.peek();
+    if active != NO_ACTIVE_COMMAND {
+        let next = ctx
+            .visible
+            .with_untracked(|visible| match visible.get(active) {
+                Some(item) if !item.disabled => Some(active),
+                Some(_) => None,
+                None => visible.iter().rposition(|item| !item.disabled),
+            });
+        set_command_active(ctx.active, next.unwrap_or(NO_ACTIVE_COMMAND));
+    }
 }
 
 fn command_empty_ui(msg: &str) -> Element {
@@ -1247,8 +1936,17 @@ plain [] children: Option<Element>,
         value
     };
     let keywords = keywords.unwrap_or_default();
-    let query = query_of(&ctx);
-    if !command_item_matches_query(&label_text, &value, &keywords, &query) {
+    let behavior = command_behavior();
+    let matches = if !behavior.searchable || !behavior.filterable {
+        true
+    } else if let Some(filter) = use_context(command_filter_context()).filter(|filter| filter.borrow().is_active()) {
+        filter.borrow_mut().matches(
+            [label_text.as_str(), value.as_str()].into_iter().chain(keywords.iter().map(String::as_str)),
+        )
+    } else {
+        command_item_matches_query(&label_text, &value, &keywords, &query_of(&ctx))
+    };
+    if !matches {
         let mut hidden = Element::new().w(0.0).h(0.0);
         hidden.set_attr("jadix_command_hidden", "1");
         return hidden;
@@ -1258,44 +1956,84 @@ plain [] children: Option<Element>,
         let on_click = on_click.clone();
         Rc::new(move || on_click.borrow_mut().call(())) as Rc<dyn Fn()>
     };
-    let activate_click = activate.clone();
-    let ix = {
-        let mut list = ctx.visible.peek();
+    let activate = command_item_activation(value.clone(), activate);
+    let ix = ctx.visible.update_in_place(|list| {
         let ix = list.len();
         list.push(CommandVisibleItem {
             value: value.clone(),
             label: label_text.clone(),
             disabled,
         });
-        ctx.visible.set(list);
-        push_activate(&ctx.id, activate);
         ix
-    };
+    });
+    activate_registry::push_enabled(&ctx.id, activate.clone(), !disabled);
+    let kids = children.map(take_packed)
+        .unwrap_or_else(|| vec![Element::new().text(label_text)]);
+    command_item_row(ctx, ix, disabled, checked, activate, kids)
+}
+}
 
+fn command_item_row(
+    ctx: CommandCtx,
+    ix: usize,
+    disabled: bool,
+    checked: bool,
+    activate_click: Rc<dyn Fn()>,
+    mut inner_kids: Vec<Element>,
+) -> Element {
     let highlighted = ctx.active.peek() == ix;
     let open = ctx.open;
     let active = ctx.active;
-    let dismissible = ctx.surface.dismissible();
-
-    let mut inner_kids = children
-        .map(take_packed)
-        .unwrap_or_else(|| vec![Element::new().text(label_text.clone())]);
-    let show_check = checked && !inner_kids.iter().any(has_shortcut_slot);
+    let selection = command_behavior().selection;
+    let value = ctx.visible.with_untracked(|items| items[ix].value.clone());
+    let selected =
+        selection.is_some_and(|selection| selection.with_untracked(|items| items.contains(&value)));
+    let dismissible = ctx.surface.dismissible() && selection.is_none();
+    let show_check = selection.is_some() || (checked && !inner_kids.iter().any(has_shortcut_slot));
     if show_check {
         let g = crate::utils::lucide_glyph("check").unwrap_or_else(|| "✓".into());
-        inner_kids.push(
-            build_icon_text_node(g)
-                .text_size(14.0)
-                .text_color(parse_text_color(if highlighted {
-                    "accent-foreground"
-                } else {
-                    "popover-foreground"
-                }))
-                .w(14.0)
-                .h(14.0)
-                .flex_shrink(0.0)
-                .pointer_events_none(),
-        );
+        let mut check = build_icon_text_node(g)
+            .text_size(14.0)
+            .text_color(parse_text_color(if highlighted {
+                "accent-foreground"
+            } else {
+                "popover-foreground"
+            }))
+            .w(14.0)
+            .h(14.0)
+            .flex_shrink(0.0)
+            .opacity(if selection.is_none() || selected {
+                1.0
+            } else {
+                0.0
+            })
+            .pointer_events_none();
+        if selection.is_some() {
+            check.set_attr("data-slot", "command-selection-check");
+            check.set_attr("aria-hidden", "true");
+            let value = value.clone();
+            crate::authoring::presentation::attach(
+                &mut check,
+                crate::authoring::presentation::Phase::State,
+                move |element, _, _| {
+                    let opacity = if selection
+                        .unwrap()
+                        .with_untracked(|items| items.contains(&value))
+                    {
+                        1.0
+                    } else {
+                        0.0
+                    };
+                    if element.style.opacity == opacity {
+                        LayoutStatus::Clean
+                    } else {
+                        element.style.opacity = opacity;
+                        LayoutStatus::StyleChanged
+                    }
+                },
+            );
+        }
+        inner_kids.push(check);
     }
 
     let item_fg = parse_text_color(if highlighted {
@@ -1303,8 +2041,13 @@ plain [] children: Option<Element>,
     } else {
         "popover-foreground"
     });
+    let query = if command_behavior().searchable {
+        query_of(&ctx)
+    } else {
+        String::new()
+    };
     for k in &mut inner_kids {
-        style_command_item_text(k, item_fg);
+        style_command_item_text(k, item_fg, &query);
     }
 
     let mut row = hstack()
@@ -1333,16 +2076,34 @@ plain [] children: Option<Element>,
         row = row.opacity(0.5);
     }
 
+    let scroll_id = format!("{}:list", ctx.id);
+    let pointer = command_pointer(&ctx.id);
+    let pointer_scroll_id = scroll_id.clone();
     let mut hit: Element = interactive(row)
-        .on_hover(move |h| {
-            // Do not `Signal::set`: that rebuilds the whole Command tree mid-hover dispatch,
-            // freezing highlight, dropping later hover targets, and breaking click (Toast).
-            if !disabled {
-                if h {
+        .on_mousemove(move |event| {
+            let at = [event.x, event.y];
+            if event.buttons != 0 || !at.iter().all(|v| v.is_finite()) {
+                return;
+            }
+            if pointer.peek() != Some(at) {
+                pointer.set_silent(Some(at));
+                if !disabled {
+                    reset_scroll_item_into_view(&pointer_scroll_id);
                     set_command_active(active, ix);
-                } else if active.peek() == ix {
-                    set_command_active(active, NO_ACTIVE_COMMAND);
                 }
+            }
+        })
+        .on_mouseleave(move |event| {
+            // Layout reconciliation can emit leave under a stationary cursor.
+            // Leave must not consume the next row's move sample.
+            let at = [event.x, event.y];
+            if !disabled
+                && event.buttons == 0
+                && at.iter().all(|v| v.is_finite())
+                && pointer.peek().is_some_and(|previous| previous != at)
+                && active.peek() == ix
+            {
+                set_command_active(active, NO_ACTIVE_COMMAND);
             }
         })
         .on_click(move || {
@@ -1354,6 +2115,7 @@ plain [] children: Option<Element>,
             batch(|| {
                 activate_click();
                 if dismissible {
+                    reset_scroll_item_into_view(&scroll_id);
                     open.set(false);
                     clear_button_focus();
                 }
@@ -1365,15 +2127,51 @@ plain [] children: Option<Element>,
             CursorKind::Pointer
         })
         .into();
+    hit = hit.accesskit_role("listboxoption");
+    hit.set_attr("id", format!("{}:item:{ix}", ctx.id));
+    hit.set_attr(
+        "aria-selected",
+        if selected || (selection.is_none() && highlighted && !disabled) {
+            "true"
+        } else {
+            "false"
+        },
+    );
+    hit.set_attr("aria-disabled", disabled.to_string());
+    hit.set_attr("aria-posinset", (ix + 1).to_string());
+    hit.set_attr(
+        "aria-setsize",
+        ctx.visible.with_untracked(Vec::len).to_string(),
+    );
     hit.set_attr("data-slot", "command-item");
     hit.set_attr("jadix_command_id", ctx.id.clone());
     hit.set_attr("jadix_command_ix", ix.to_string());
+    if selection.is_some() {
+        hit.set_attr("jadix_command_multiselect", "1");
+    }
+    hit.set_attr("jadix_scroll_target", format!("{}:item:{ix}", ctx.id));
     crate::authoring::presentation::attach(
         &mut hit,
         crate::authoring::presentation::Phase::State,
-        |element, layout, _context| {
+        move |element, layout, _context| {
             let mut impact = LayoutStatus::Clean;
             sync_command_item_paint_node(element, layout, &mut impact);
+            // Compound items register incrementally. State sees the completed
+            // logical set; virtual rows use the same count without mounting it.
+            let size = ctx.visible.with_untracked(Vec::len).to_string();
+            if element.attrs.get("aria-setsize") != Some(&size) {
+                element.set_attr("aria-setsize", size);
+                impact = impact.merge(LayoutStatus::StyleChanged);
+            }
+            if let Some(selection) = selection {
+                let selected = selection
+                    .with_untracked(|items| items.contains(&value))
+                    .to_string();
+                if element.attrs.get("aria-selected") != Some(&selected) {
+                    element.set_attr("aria-selected", selected);
+                    impact = impact.merge(LayoutStatus::StyleChanged);
+                }
+            }
             impact
         },
     );
@@ -1385,9 +2183,8 @@ plain [] children: Option<Element>,
     }
     hit
 }
-}
 
-fn style_command_item_text(el: &mut Element, color: [u8; 4]) {
+fn style_command_item_text(el: &mut Element, color: [u8; 4], query: &str) {
     crate::core::tree::walk_elements_mut_pruned(el, |el| {
         if el.attrs.get("data-slot").map(String::as_str) == Some("command-shortcut") {
             el.text_style.size = Some(12.0);
@@ -1403,6 +2200,15 @@ fn style_command_item_text(el: &mut Element, color: [u8; 4]) {
                 el.text_style.size = Some(14.0);
                 el.text_style.line_height_px = Some(14.0);
             } else {
+                // Preserve caller-provided rich text. Plain label leaves share
+                // ComboBox's Unicode match painting, including virtual rows.
+                if !query.is_empty() && el.text_spans.is_none() {
+                    el.text_spans = Some(crate::style::TextSpan::highlight_matches(
+                        el.text.as_deref().unwrap(),
+                        query,
+                        parse_text_color("match-foreground"),
+                    ));
+                }
                 el.text_style.size = Some(13.0);
                 // Caption size stays on the leaf. Line-height lives on the item
                 // root (`text-sm`); release Label `leading-none` so cascade copies it.
@@ -1436,9 +2242,17 @@ pub(crate) fn sync_command_item_paint_node(
             .and_then(|s| s.parse::<usize>().ok());
         let id = el.attrs.get("jadix_command_id").cloned();
         if let (Some(id), Some(ix)) = (id, ix) {
+            activate_registry::update_bounds(&id, ix, el.layout_bounds);
             let active =
                 use_signal(format!("{id}__cmd_active").as_str(), || NO_ACTIVE_COMMAND).peek();
             let on = !disabled && active == ix;
+            let selected = if on { "true" } else { "false" };
+            if !el.attrs.contains_key("jadix_command_multiselect")
+                && el.attrs.get("aria-selected").map(String::as_str) != Some(selected)
+            {
+                el.set_attr("aria-selected", selected);
+                *impact = impact.merge(LayoutStatus::StyleChanged);
+            }
             apply_command_item_highlight(el, layout_tree, impact, on);
         }
     }

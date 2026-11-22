@@ -431,7 +431,7 @@ fn validate_descriptor(descriptor: &NodeDescriptor, root: RootId) -> Result<(), 
     {
         return Err(LayoutError::InvalidStyle);
     }
-    if !descriptor.content.is_valid() {
+    if !descriptor.accessibility.is_valid() || !descriptor.content.is_valid() || !descriptor.keyboard.is_valid() || !descriptor.interaction.is_valid() {
         return Err(LayoutError::InvalidTree);
     }
     if !descriptor.accessibility_relations.is_valid_for(root) {
@@ -452,6 +452,12 @@ fn constraint(known: Option<f32>, available: AvailableSpace, viewport: f32) -> (
 }
 
 fn engine_style(node: &NodeDescriptor) -> Style {
+    if let NodeContent::Hosted { specification } = &node.content {
+        if matches!(jadix_core::hosted::HostedContent::from_json(specification),
+            Ok(jadix_core::hosted::HostedContent::TabBar { hidden: true, .. })) {
+            return Style { display: Display::None, ..Default::default() };
+        }
+    }
     let style = &node.style;
     let [top, right, bottom, left] = style.padding;
     Style {
@@ -478,6 +484,17 @@ fn engine_style(node: &NodeDescriptor) -> Style {
         flex_direction: match style.axis {
             Axis::Row => FlexDirection::Row,
             Axis::Column => FlexDirection::Column,
+        },
+        align_items: {
+            use jadix_core::presentation::style::AlignItems as Alignment;
+            match style.align_items {
+                Some(Alignment::Start) => AlignItems::START,
+                Some(Alignment::End) => AlignItems::END,
+                Some(Alignment::Center) => AlignItems::CENTER,
+                Some(Alignment::Stretch) => AlignItems::STRETCH,
+                Some(Alignment::Baseline) => AlignItems::BASELINE,
+                None => AlignItems::default(),
+            }
         },
         direction: match style.direction {
             Some(jadix_core::environment::LayoutDirection::RightToLeft) => {

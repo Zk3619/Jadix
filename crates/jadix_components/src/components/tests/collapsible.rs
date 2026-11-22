@@ -19,7 +19,11 @@ fn content_does_not_add_unrequested_bottom_spacing() {
     let (_owner, root): (_, Element) = create_root(|| {
         collapsible("col-spacing")
             .default_open(true)
-            .content_with(|content| content.child(Element::new().text("Body")))
+            .content_with(|content| {
+                content
+                    .reveal_spring(crate::style::SpringPhysics::default_css())
+                    .child(Element::new().text("Body"))
+            })
             .into()
     });
     let inner = find_slot(&root, SLOT_CONTENT_INNER).expect("content inner");
@@ -205,4 +209,73 @@ fn enter_anim_seeds_after_measure_not_on_empty_bounds() {
             "first real expand must run collapsible-down"
         );
     });
+}
+
+#[test]
+fn raw_content_state_is_retained_until_exit_and_released_before_remount() {
+    use crate::app::reactive::reset_registered_anchors;
+    use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+    use crate::core::reactivity::{mark_next_effect_as_ui_root, on_cleanup, Signal};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+
+    for (mode, spring) in [
+        ("keyframes", None),
+        ("spring", Some(crate::style::SpringPhysics::default_css())),
+    ] {
+        reset_registered_anchors();
+        let live = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+        let cleanups = Rc::new(Cell::new(0));
+        let observed = Rc::new(Cell::new(0));
+        let local = Rc::new(RefCell::new(None::<Signal<i32>>));
+        let id = format!("col_content_owner_{mode}");
+        let presence_key = format!("{id}:presence");
+        mark_next_effect_as_ui_root();
+        let (owner, open) = create_root(|| {
+            let open = Signal::new(true);
+            let cleanups = Rc::clone(&cleanups);
+            let observed = Rc::clone(&observed);
+            let local = Rc::clone(&local);
+            create_effect(move || {
+                let cleanups = Rc::clone(&cleanups);
+                let observed = Rc::clone(&observed);
+                let local = Rc::clone(&local);
+                *live.borrow_mut() = collapsible(&id).open(open).child(move || {
+                    collapsible_content_with_spring(spring, move || {
+                        let state = Signal::new(0);
+                        *local.borrow_mut() = Some(state);
+                        let cleanups = Rc::clone(&cleanups);
+                        on_cleanup(move || cleanups.set(cleanups.get() + 1));
+                        let observed = Rc::clone(&observed);
+                        create_effect(move || observed.set(state.get()));
+                        Element::new().text("body")
+                    })
+                });
+            });
+            open
+        });
+        let presence = use_collapse_panel_presence(&presence_key);
+        let state = local.borrow().unwrap();
+        open.set(false);
+        assert!(state.is_alive(), "exit retains child: {mode}");
+        open.set(true);
+        state.set(9);
+        assert_eq!(observed.get(), 9, "reversal retains observer: {mode}");
+        assert_eq!(local.borrow().unwrap().id(), state.id());
+        open.set(false);
+        presence.finish_exit();
+        crate::utils::collapse_panel::tick_collapse_panel_presence();
+        assert!(!presence.mounted().peek());
+        assert_eq!(cleanups.get(), 1, "settled exit cleans raw content: {mode}");
+        assert!(!state.is_alive(), "settled exit releases signal: {mode}");
+        open.set(true);
+        assert_eq!(local.borrow().unwrap().peek(), 0, "fresh state: {mode}");
+        drop(owner);
+        assert_eq!(cleanups.get(), 2, "root cleanup: {mode}");
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
 }

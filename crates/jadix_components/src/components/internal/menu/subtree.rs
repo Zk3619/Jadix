@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use crate::core::reactivity::{Signal, use_signal};
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::utils::activate_registry;
+use winit::keyboard::{Key, NamedKey};
 
 thread_local! {
     static SUB_SEQ: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
@@ -67,6 +68,53 @@ pub fn focus_submenu_first_item(sid: &str, active_slot: &str) {
     let active = use_signal(format!("{sid}__{active_slot}").as_str(), || usize::MAX);
     let next = activate_registry::enabled_edge(sid, false).unwrap_or(usize::MAX);
     set_menu_active(active, next);
+    reveal_menu_item(sid, active_slot, next);
+}
+
+pub fn menu_row_target(id: &str, index: usize) -> String {
+    format!("{id}__menu_row_{index}")
+}
+
+fn reveal_menu_item(id: &str, active_slot: &str, index: usize) {
+    if index == usize::MAX {
+        return;
+    }
+    let rest = format!("{id}__{}_scroll", active_slot.trim_end_matches("_active"));
+    crate::authoring::widgets::scroll::request_scroll_descendant_into_view_when(
+        rest,
+        menu_row_target(id, index),
+        crate::authoring::widgets::scroll::ScrollItemAlign::Nearest,
+        crate::authoring::widgets::scroll::ScrollAlignWhen::After,
+    );
+    crate::app::runtime::request_redraw();
+}
+
+/// Shared keyboard navigation; pointer highlights deliberately leave scroll alone.
+pub fn navigate_menu(id: &str, active_slot: &str, active: Signal<usize>, key: &Key) -> bool {
+    let next = match key {
+        Key::Named(NamedKey::ArrowDown) => activate_registry::move_enabled(id, active.peek(), 1),
+        Key::Named(NamedKey::ArrowUp) => activate_registry::move_enabled(id, active.peek(), -1),
+        Key::Named(NamedKey::Home) => activate_registry::enabled_edge(id, false),
+        Key::Named(NamedKey::End) => activate_registry::enabled_edge(id, true),
+        Key::Named(NamedKey::PageDown | NamedKey::PageUp) => {
+            let rest = format!("{id}__{}_scroll", active_slot.trim_end_matches("_active"));
+            let height_key =
+                crate::core::scroll_viewport::ScrollViewportSignalKeys::new(&rest).viewport_h;
+            let height = use_signal(&height_key, || 0.0_f32).peek();
+            activate_registry::page_enabled(
+                id,
+                active.peek(),
+                height,
+                matches!(key, Key::Named(NamedKey::PageDown)),
+            )
+        }
+        _ => return false,
+    };
+    if let Some(next) = next {
+        set_menu_active(active, next);
+        reveal_menu_item(id, active_slot, next);
+    }
+    true
 }
 
 pub fn close_open_submenu_keep_parent_highlight(sid: &str, active_slot: &str) {

@@ -9,10 +9,17 @@ readme = "README.md"
 
 [features]
 default = []
-json = ["dep:serde", "dep:serde_json"]
+json = ["dep:serde", "dep:serde_json", "dep:url"]
 native-https = []
+native-websocket = ["json", "dep:tokio", "dep:tokio-tungstenite", "dep:futures-util", "dep:url"]
 
 [dependencies]
 jadix_tasks.workspace = true
+httpdate = "=1.0.3"
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+
+tokio = { version = "1", features = ["rt", "net", "time", "sync", "macros"], optional = true }
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "native-tls"], optional = true }
+futures-util = { version = "0.3", features = ["sink"], optional = true }
+url = { version = "2.5", optional = true }

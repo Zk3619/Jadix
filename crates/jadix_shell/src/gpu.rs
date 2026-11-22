@@ -8,7 +8,8 @@ use jadix::{
     core::tree::Element,
 };
 use jadix_core::presentation::{
-    style::Axis, EventPayload, NodeContent, NodeId, PlatformEvent, PresentationNode,
+    style::{AlignItems, Axis},
+    EventPayload, NodeContent, NodeId, PlatformEvent, PresentationNode,
 };
 use std::{
     cell::RefCell,
@@ -37,6 +38,7 @@ struct ScrollState {
     x: Signal<f32>,
     y: Signal<f32>,
     observed: [f32; 2],
+    target: Option<[f64; 2]>,
     name: String,
     _observer: jadix::core::scroll_viewport::ScrollOffsetSubscription,
     effect: EffectId,
@@ -260,13 +262,19 @@ impl GpuApplication {
                     next.template_id.as_deref().unwrap(),
                     |mounted| {
                         applied = true;
-                        if mounted.text == next.text && mounted.focusable == next.focusable {
+                        if mounted.text == next.text && mounted.focusable == next.focusable
+                            && mounted.attrs.get("jadix_activate_on_press") == next.attrs.get("jadix_activate_on_press") {
                             return jadix::core::tree::LayoutStatus::Clean;
                         }
                         mounted.text = next.text.clone();
                         mounted.text_spans = next.text_spans.clone();
                         mounted.focusable = next.focusable;
                         mounted.on_click = next.on_click.clone();
+                        if let Some(value) = next.attrs.get("jadix_activate_on_press") {
+                            mounted.attrs.insert("jadix_activate_on_press".into(), value.clone());
+                        } else { mounted.attrs.remove("jadix_activate_on_press"); }
+                        mounted.on_hover = next.on_hover.clone();
+                        mounted.on_mousemove = next.on_mousemove.clone();
                         mounted.on_key_down = next.on_key_down.clone();
                         jadix::core::tree::LayoutStatus::LayoutChanged
                     },
@@ -471,7 +479,15 @@ impl GpuApplication {
             jadix::core::scroll_viewport::remove_scroll_viewport_signals(&state.name);
             false
         });
+        self.apply_focus_request();
         Ok(root)
+    }
+    fn apply_focus_request(&mut self) {
+        if let Some(node) = self.app.take_focus_request() {
+            let name = node_name(node);
+            let target = if self.fields.contains_key(&node) { format!("input:{name}") } else { name };
+            jadix::utils::roving::focus_by_id(target);
+        }
     }
     fn remember_projection(&mut self) {
         self.projected.clear();
@@ -613,6 +629,7 @@ impl GpuApplication {
             stats.projected_nodes = self.projected.len();
             stats.full_projection = true;
         }
+        self.apply_focus_request();
         Ok(stats)
     }
     /// Revoke script callbacks before releasing presentation resources. Hosts
@@ -678,6 +695,7 @@ fn project(
     let name = node_name(id);
     let mut payload = None;
     let mut el = match &descriptor.content {
+        NodeContent::Hosted { .. } => return Err(ApplicationError::Host("hosted platform content requires the native host".into())),
         NodeContent::Container | NodeContent::Dialog { .. } | NodeContent::Popover { .. } => {
             Element::new()
         }
@@ -708,12 +726,14 @@ fn project(
                     x,
                     y,
                     observed: previous,
+                    target: None,
                     name: name.clone(),
                     _observer: observer,
                     effect,
                 }
             });
-            activate_scroll_viewport(Element::new(), &name, "auto", "auto", "jump", "area")
+            let behavior = if descriptor.style.scroll_behavior == Some(jadix_core::presentation::style::ScrollBehavior::Smooth) { "smooth" } else { "jump" };
+            activate_scroll_viewport(Element::new(), &name, "auto", "auto", behavior, "area")
         }
         NodeContent::Image { source, alt } => {
             use base64::Engine;
@@ -827,7 +847,10 @@ fn project(
             if *enabled {
                 payload = Some(EventPayload::Activate);
             }
-            Element::new().text(label.clone()).focusable(*enabled)
+            {
+                let element = Element::new().focusable(*enabled);
+                if node.children.is_empty() { element.text(label.clone()) } else { element }
+            }
         }
         NodeContent::Checkbox {
             label,
@@ -949,6 +972,95 @@ fn project(
     ) {
         el = el.focus_id(name.clone());
     }
+    if matches!(descriptor.content, NodeContent::Input { enabled: true, .. }) && !descriptor.navigation_keys.is_empty() {
+        let keys = descriptor.navigation_keys.clone();
+        let notifications = events.clone();
+        let previous = el.text_edit_key_handler.take();
+        el.text_edit_key_handler = Some(jadix::authoring::text::navigation_handler(move || keys.clone(), move |key| {
+            if notifications.lifetime.is_disposed() || !wake.is_alive() { return; }
+            let mut pending = notifications.queue.borrow_mut();
+            if pending.len() < 1024 { pending.push_back(PlatformEvent { node: id, payload: EventPayload::Navigate { key, shift: false, control: false } }); }
+            drop(pending);
+            wake.set(wake.peek().wrapping_add(1));
+        }, previous));
+    }
+    if matches!(descriptor.content, NodeContent::Button { enabled: true, .. }) && !descriptor.navigation_keys.is_empty() {
+        let keys = descriptor.navigation_keys.clone();
+        let target = name.clone();
+        let focused = use_signal("__jadix_button_focus_id", String::new);
+        let notifications = events.clone();
+        jadix::authoring::keys::attach(&mut el, move |event| {
+            if focused.get() != target || !event.modifiers.is_empty() || event.state != winit::event::ElementState::Pressed { return false; }
+            let Some(key) = jadix::authoring::text::navigation_key(event.key).filter(|key| keys.contains(key)) else { return false; };
+            if notifications.lifetime.is_disposed() || !wake.is_alive() { return false; }
+            let mut pending = notifications.queue.borrow_mut();
+            if pending.len() < 1024 { pending.push_back(PlatformEvent { node: id, payload: EventPayload::Navigate { key, shift: false, control: false } }); }
+            drop(pending);
+            wake.set(wake.peek().wrapping_add(1));
+            true
+        });
+    }
+    if matches!(descriptor.content, NodeContent::Button { enabled: true, .. }) {
+        let notifications = events.clone();
+        el = el.on_mousemove(move |event| {
+            if notifications.lifetime.is_disposed() || !wake.is_alive() { return; }
+            let mut pending = notifications.queue.borrow_mut();
+            if pending.len() < 1024 { pending.push_back(PlatformEvent { node: id, payload: EventPayload::PointerMove { x: event.x.into(), y: event.y.into() } }); }
+            drop(pending);
+            wake.set(wake.peek().wrapping_add(1));
+        });
+        let notifications = events.clone();
+        el = el.on_hover(move |inside| {
+            if notifications.lifetime.is_disposed() || !wake.is_alive() { return; }
+            let mut pending = notifications.queue.borrow_mut();
+            if pending.len() < 1024 { pending.push_back(PlatformEvent { node: id, payload: EventPayload::Hover { inside } }); }
+            drop(pending);
+            wake.set(wake.peek().wrapping_add(1));
+        });
+    }
+    if let Some(scroll) = scrolls.get_mut(&id) {
+        if descriptor.style.scroll_to != scroll.target {
+            scroll.target = descriptor.style.scroll_to;
+            if let Some([x,y]) = scroll.target {
+                use jadix::core::scroll_viewport::*;
+                if descriptor.style.scroll_behavior != Some(jadix_core::presentation::style::ScrollBehavior::Smooth) {
+                    scroll.x.set(x as f32); scroll.y.set(y as f32);
+                }
+                use_signal(&scroll_target_x_signal_key(&name), || 0.0_f32).set(x as f32);
+                use_signal(&scroll_target_y_signal_key(&name), || 0.0_f32).set(y as f32);
+            }
+        }
+    }
+    el = el.hit_slop(descriptor.interaction.hit_slop.map(|v| v as f32)).pointer_events(
+        match descriptor.interaction.pointer_events {
+            jadix_core::presentation::interaction::PointerEvents::Auto => jadix::core::tree::PointerEvents::Auto,
+            jadix_core::presentation::interaction::PointerEvents::None => jadix::core::tree::PointerEvents::None,
+            jadix_core::presentation::interaction::PointerEvents::BoxNone => jadix::core::tree::PointerEvents::BoxNone,
+        });
+    descriptor.accessibility.write_attributes(&mut el.attrs);
+    if !descriptor.accessibility.actions.is_empty() {
+        let descriptor = descriptor.clone(); let queue = events.clone();
+        el = el.on_accessibility_action(move |action, value| {
+            if queue.lifetime.is_disposed() || !wake.is_alive() || !descriptor.accepts_accessibility_action(action, value) { return false; }
+            let mut pending = queue.queue.borrow_mut(); if pending.len() >= 1024 { return false; }
+            pending.push_back(PlatformEvent { node: id, payload: EventPayload::AccessibilityAction { id: action.into(), value } });
+            drop(pending); wake.set(wake.peek().wrapping_add(1)); true
+        });
+    }
+
+    if let Some(label) = &descriptor.accessible_name { el.attrs.insert("aria-label".into(), label.clone()); }
+    if let Some(role) = descriptor.accessible_role {
+        el.attrs.insert("accesskit_role".into(), role.aria_role().into());
+        if matches!(role, jadix_core::presentation::AccessibleRole::ListBoxOption { tab_stop: false }) { el.set_focusable(false); }
+    }
+    if let Some(description) = &descriptor.accessible_description { el.attrs.insert("aria-description".into(), description.clone()); }
+    if let Some(target) = descriptor.accessibility_relations.active_descendant {
+        el.attrs.insert("aria-activedescendant".into(), node_name(target));
+    }
+    if !descriptor.accessibility_relations.controls.is_empty() {
+        el.attrs.insert("aria-controls".into(), descriptor.accessibility_relations.controls.iter().map(|id| node_name(*id)).collect::<Vec<_>>().join(" "));
+    }
+    if let Some(selected) = descriptor.accessible_selected { el.attrs.insert("aria-selected".into(), selected.to_string()); }
     el.template_id = Some(name.clone());
     if let Some(payload) = payload {
         let queue = events.clone();
@@ -984,12 +1096,24 @@ fn project(
             }
         });
     }
+    if matches!(descriptor.accessible_role, Some(jadix_core::presentation::AccessibleRole::ListBoxOption { tab_stop: false })) {
+        el = el.activate_on_press();
+    }
     let s = &descriptor.style;
     el = if s.axis == Axis::Column && !matches!(descriptor.content, NodeContent::Input { .. }) {
         el.flex_col()
     } else {
         el.flex_row()
     };
+    if let Some(alignment) = s.align_items {
+        el = el.flex_items(match alignment {
+            AlignItems::Start => "start",
+            AlignItems::End => "end",
+            AlignItems::Center => "center",
+            AlignItems::Stretch => "stretch",
+            AlignItems::Baseline => "baseline",
+        });
+    }
     // NodeStyle contains independent flex fields. Element::flex_grow is an
     // Input authoring convenience that also forces basis=0 and width=auto;
     // applying it to a zero-grow SDK editor collapses its requested height.
@@ -1007,6 +1131,9 @@ fn project(
         .pb(s.padding[2])
         .pl(s.padding[3])
         .font_family(s.font_family.clone());
+    if let Some(text) = &s.text {
+        el = el.text_appearance(text.clone());
+    }
     if let Some(v) = s.width {
         el = el.w(v);
     }
@@ -1035,18 +1162,20 @@ fn project(
             TextOverflow::Clip if descriptor.style.max_lines.is_some_and(|lines| lines > 1) => {
                 el.text_overflow("clip")
             }
-            TextOverflow::Ellipsis if descriptor.style.max_lines.is_some_and(|lines| lines > 1) => {
+            TextOverflow::Ellipsis | TextOverflow::EllipsisStart | TextOverflow::EllipsisMiddle
+                if descriptor.style.max_lines.is_some_and(|lines| lines > 1) =>
+            {
                 el.text_overflow("ellipsis")
             }
             TextOverflow::Clip => el.whitespace_nowrap().text_overflow("clip"),
-            TextOverflow::Ellipsis => el.whitespace_nowrap().text_overflow("ellipsis"),
+            TextOverflow::Ellipsis | TextOverflow::EllipsisStart | TextOverflow::EllipsisMiddle => {
+                el.whitespace_nowrap().text_overflow("ellipsis")
+            }
         };
         if let Some(lines) = descriptor.style.max_lines.filter(|lines| *lines > 0) {
-            // The portable protocol intentionally carries no line-height
-            // field. Match the renderer's default text leading and cap the
-            // layout box so wrapped glyphs beyond the requested rows are
-            // clipped by the normal scene damage/overflow path.
-            let line_height = descriptor.style.font_size * 1.25;
+            let leading = s.text.as_ref().and_then(|text| text.line_height_multiple).unwrap_or(1.25);
+            let line_height = s.text.as_ref().and_then(|text| text.line_height)
+                .unwrap_or(descriptor.style.font_size * leading);
             let line_cap = line_height * f32::from(lines);
             let max_height = descriptor
                 .style
@@ -1055,7 +1184,7 @@ fn project(
                 .chain(descriptor.style.max_height)
                 .fold(line_cap, f32::min);
             el = el
-                .text_leading(1.25)
+                .text_line_height(line_height)
                 .text_max_lines(lines)
                 .max_h(max_height)
                 .overflow("hidden");

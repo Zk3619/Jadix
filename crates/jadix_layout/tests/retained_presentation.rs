@@ -1,4 +1,7 @@
-use jadix_core::presentation::{style::NodeStyle, *};
+use jadix_core::presentation::{
+    style::{AlignItems, Axis, NodeStyle},
+    *,
+};
 use jadix_layout::presentation::*;
 fn node(root: RootId, content: NodeContent) -> PresentationNode {
     PresentationNode {
@@ -15,6 +18,10 @@ fn node(root: RootId, content: NodeContent) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
         },
         children: vec![],
@@ -48,6 +55,31 @@ fn equivalent(
     assert_eq!(roots, fresh);
     assert_eq!(actual.nodes, expected.nodes);
     actual
+}
+
+#[test]
+fn baseline_aligned_row_uses_each_labels_measured_offset() {
+    let life = RootLifetime::new(RootId::new());
+    let mut row = node(life.id(), NodeContent::Container);
+    row.descriptor.style.axis = Axis::Row;
+    row.descriptor.style.align_items = Some(AlignItems::Baseline);
+    for font_size in [12., 24.] {
+        let mut label = node(life.id(), NodeContent::Text("label".into()));
+        label.descriptor.style.font_size = font_size;
+        row.children.push(label);
+    }
+    let mut roots = [row];
+    PresentationLayout::new(life)
+        .layout(&mut roots, [200., 100.], 0, |request, descriptor| {
+            let mut result = measure(request, descriptor)?;
+            result.baseline = Some(result.height * 0.75);
+            Ok(result)
+        })
+        .unwrap();
+    let small = roots[0].children[0].descriptor.frame;
+    let large = roots[0].children[1].descriptor.frame;
+    assert_eq!(small.y + small.height * 0.75, large.y + large.height * 0.75);
+    assert!(small.y > large.y);
 }
 #[test]
 fn stable_nodes_keep_engine_caches_and_structural_changes_match_a_fresh_engine() {

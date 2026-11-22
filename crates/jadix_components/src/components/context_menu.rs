@@ -321,6 +321,23 @@ fn item_row_chrome(inset: bool) -> crate::primitives::r#box::BoxBuilder {
 }
 
 fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
+    let keyboard_context = ctx.clone();
+    crate::authoring::keys::attach(&mut trigger, move |event| {
+        if event.state != winit::event::ElementState::Pressed
+            || use_signal("__jadix_button_focus_id", String::new).peek() != keyboard_context.trigger_fid.peek()
+            || event.modifiers.control_key() || event.modifiers.alt_key() || event.modifiers.meta_key()
+        { return false; }
+        let opens = matches!(event.key, Key::Named(NamedKey::ContextMenu))
+            || (matches!(event.key, Key::Named(NamedKey::F10)) && event.modifiers.shift_key());
+        if !opens { return false; }
+        if !event.repeat {
+            close_open_subs(&keyboard_context.id);
+            keyboard_context.cursor.set([-1.0, -1.0]);
+            set_ctx_active(keyboard_context.active, 0);
+            keyboard_context.open.set(true);
+        }
+        true
+    });
     let open_keys = ctx.open;
     let active_keys = ctx.active;
     let menu_id = ctx.id.clone();
@@ -330,43 +347,11 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
         }
 
         if let Some(sid) = context_menu_open_sub_id(&menu_id) {
-            let n = activate_count(&sid);
             let sub_active = use_signal(format!("{sid}__ctx_active").as_str(), || ACTIVE_NONE);
+            if subtree::navigate_menu(&sid, "ctx_active", sub_active, &ev.logical_key) {
+                return true;
+            }
             return match &ev.logical_key {
-                Key::Named(NamedKey::ArrowDown) => {
-                    if n == 0 {
-                        return true;
-                    }
-                    let cur = sub_active.peek();
-                    let Some(next) = activate_registry::move_enabled(&sid, cur, 1) else {
-                        return true;
-                    };
-                    set_ctx_active(sub_active, next);
-                    true
-                }
-                Key::Named(NamedKey::ArrowUp) => {
-                    if n == 0 {
-                        return true;
-                    }
-                    let cur = sub_active.peek();
-                    let Some(next) = activate_registry::move_enabled(&sid, cur, -1) else {
-                        return true;
-                    };
-                    set_ctx_active(sub_active, next);
-                    true
-                }
-                Key::Named(NamedKey::Home) => {
-                    if let Some(i) = activate_registry::enabled_edge(&sid, false) {
-                        set_ctx_active(sub_active, i);
-                    }
-                    true
-                }
-                Key::Named(NamedKey::End) => {
-                    if let Some(i) = activate_registry::enabled_edge(&sid, true) {
-                        set_ctx_active(sub_active, i);
-                    }
-                    true
-                }
                 k if crate::utils::keyboard::is_enter_or_space(k) => {
                     let ix = sub_active.peek();
                     if ix == ACTIVE_NONE {
@@ -390,39 +375,11 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
         if n == 0 {
             return false;
         }
+        if subtree::navigate_menu(&menu_id, "ctx_active", active_keys, &ev.logical_key) {
+            close_open_subs(&menu_id);
+            return true;
+        }
         match &ev.logical_key {
-            Key::Named(NamedKey::ArrowDown) => {
-                let cur = active_keys.peek();
-                let Some(next) = activate_registry::move_enabled(&menu_id, cur, 1) else {
-                    return false;
-                };
-                close_open_subs(&menu_id);
-                set_ctx_active(active_keys, next);
-                true
-            }
-            Key::Named(NamedKey::ArrowUp) => {
-                let cur = active_keys.peek();
-                let Some(next) = activate_registry::move_enabled(&menu_id, cur, -1) else {
-                    return false;
-                };
-                close_open_subs(&menu_id);
-                set_ctx_active(active_keys, next);
-                true
-            }
-            Key::Named(NamedKey::Home) => {
-                if let Some(i) = activate_registry::enabled_edge(&menu_id, false) {
-                    close_open_subs(&menu_id);
-                    set_ctx_active(active_keys, i);
-                }
-                true
-            }
-            Key::Named(NamedKey::End) => {
-                if let Some(i) = activate_registry::enabled_edge(&menu_id, true) {
-                    close_open_subs(&menu_id);
-                    set_ctx_active(active_keys, i);
-                }
-                true
-            }
             Key::Named(NamedKey::ArrowRight) => {
                 let ix = active_keys.peek();
                 if ix == ACTIVE_NONE {
@@ -565,8 +522,9 @@ pub fn context_menu_content(
     let _ = ctx.active;
     let chrome = opts.panel;
     let ao_opts = AnchoredOverlayContentOpts {
-        placement: Some(Placement::Point {
+        placement: Some(Placement::PointOrTrigger {
             pos: cursor,
+            placement: ctx.placement,
             gap: 2.0,
         }),
         kind: OverlayKind::Menu,
@@ -592,7 +550,7 @@ pub fn context_menu_content(
             scroll_area(scroll_id.as_str())
                 .overflow_x("hidden")
                 .overflow_y("auto")
-                .scrollbar_visibility("auto")
+                .scrollbar_visibility("never")
                 .w("100%")
                 .h("auto")
                 .min_h(0.0)
@@ -1272,15 +1230,30 @@ pub fn context_menu_sub_content(
         for k in kids {
             rows = rows.child(k);
         }
+        let scroll_id = format!("{sid}__ctx_scroll");
+        let viewport: Element = untrack(|| {
+            scroll_area(&scroll_id)
+                .overflow_x("hidden")
+                .overflow_y("auto")
+                .scrollbar_visibility("never")
+                .w("100%")
+                .h("auto")
+                .min_h(0.0)
+                .flex_grow(1.0)
+                .flex_shrink(1.0)
+                .child(rows)
+                .into()
+        });
         let mut panel: Element = vstack()
             .w("auto")
             .h("auto")
             .min_w("12rem")
+            .min_h(0.0)
             .p("0.25rem")
             .gap("0")
             .overflow_x("hidden")
             .overflow_y("hidden")
-            .child(rows)
+            .child(viewport)
             .into();
         panel = panel
             .bg(tokens::popover())

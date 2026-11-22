@@ -24,10 +24,10 @@ document-editing = ["gpu", "jadix/document-editing", "document"]
 document-diff = ["gpu", "jadix/document-diff"]
 document-science = ["gpu", "jadix/document-science", "document"]
 document-math = ["gpu", "jadix/document-math", "document", "svg"]
-syntax-highlighting = ["gpu", "jadix/syntax-highlighting"]
+syntax-highlighting = ["jadix/syntax-highlighting", "jadix_document/syntax"]
 scale-preview = ["gpu", "jadix/scale-preview"]
 webview = ["gpu", "jadix/webview"]
-i18n = ["gpu", "jadix/i18n"]
+i18n = ["jadix/i18n"]
 a11y = ["gpu", "jadix/a11y"]
 file-dialog = ["gpu", "jadix/file-dialog"]
 file-persistence = ["gpu", "jadix/file-persistence"]
@@ -49,6 +49,7 @@ theme-liquid-glass = ["jadix/theme-liquid-glass"]
 [dependencies]
 web-time.workspace = true
 jadix = { path = "../jadix", version = "0.1.0", default-features = false }
+jadix_document.workspace = true
 jadix_dnd = { workspace = true, optional = true }
 taffy.workspace = true
 winit = { workspace = true, optional = true }

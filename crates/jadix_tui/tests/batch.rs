@@ -22,6 +22,10 @@ fn descriptor(content: NodeContent, y: f64) -> NodeDescriptor {
         accessible_role: None,
         accessible_selected: None,
         accessible_expanded: None,
+        interaction: Default::default(),
+        keyboard: Default::default(),
+        navigation_keys: Vec::new(),
+        accessibility: Default::default(),
         accessibility_relations: Default::default(),
     }
 }

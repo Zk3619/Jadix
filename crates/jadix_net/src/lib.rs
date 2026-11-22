@@ -6,9 +6,14 @@
 mod backend;
 #[cfg(all(feature = "native-https", not(target_arch = "wasm32")))]
 pub mod native_https;
+#[cfg(all(feature = "native-https", feature = "json", not(target_arch = "wasm32")))]
+pub mod native_fetch;
 mod request;
 mod response;
+pub mod cache;
 mod state;
+#[cfg(feature = "json")]
+pub mod service;
 
 pub use backend::{HttpDispatcher, HttpEventSink, HttpStarter};
 pub use jadix_tasks::{CancellationToken, EventSendError, TaskHandle};
@@ -98,3 +103,8 @@ pub trait HttpBackend {
     fn dispatch(&mut self, command: HttpCommand) -> Result<(), HttpError>;
     fn poll_event(&mut self) -> Option<HttpEvent>;
 }
+
+#[cfg(feature = "json")]
+pub mod websocket;
+#[cfg(all(feature = "native-websocket", not(target_arch = "wasm32")))]
+pub mod native_websocket;

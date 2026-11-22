@@ -68,17 +68,39 @@ fn non_selectable_label_does_not_participate_in_selection() {
 #[test]
 fn copy_label_selection_updates_global_signal() {
     let mut root = Element::new();
-    let mut lbl = Element::new().text("hello world").selectable(true);
+    let text = "hello e\u{301}clair 👩🏽‍💻";
+    let mut lbl = Element::new().text(text).selectable(true);
     enable_label_selection(&mut lbl, "copy-lbl");
     root.children.push(lbl);
 
     let sk = label_selection_signal_key("copy-lbl");
-    use_signal(&sk, || None::<(usize, usize)>).set(Some((0, 5)));
+    let range = crate::utils::text_selection::selectable_word_range(text, 8).unwrap();
+    use_signal(&sk, || None::<(usize, usize)>).set(Some(range));
+    let mut impact = LayoutStatus::Clean;
+    sync_label_selection_paint_subtree(&mut root, &mut impact);
+    assert_eq!(impact, LayoutStatus::StyleChanged);
+    assert_eq!(
+        root.children[0]
+            .text_style
+            .input_caret
+            .as_ref()
+            .unwrap()
+            .selection,
+        Some(range)
+    );
     assert!(try_copy_label_selection(&root));
     assert_eq!(
         use_signal(LABEL_SELECTION_COPY_SIGNAL, String::new).get(),
-        "hello"
+        "e\u{301}clair"
     );
+    // A retained byte selection can become invalid after bound text changes.
+    root.children[0].text = Some("🙂".to_string());
+    for invalid in [(1, 4), (0, usize::MAX)] {
+        use_signal(&sk, || None::<(usize, usize)>).set(Some(invalid));
+        sync_label_selection_paint_subtree(&mut root, &mut impact);
+        assert!(root.children[0].text_style.input_caret.is_none());
+        assert!(!try_copy_label_selection(&root));
+    }
 }
 
 #[test]

@@ -234,3 +234,87 @@ fn disjoint_command_scopes_can_reuse_the_same_chord() {
     }
     assert_eq!(count.get(), 11);
 }
+
+#[test]
+fn shared_stroke_drives_menu_hint_accelerator_and_command_router() {
+    use jadix_core::shortcut::KeyChord;
+    use jadix_tui::{
+        ratatui::{buffer::Buffer, layout::Rect},
+        MenuInput, TerminalMenu,
+    };
+
+    let chord: KeyChord = "option+shift+=".parse().unwrap();
+    let registry = CommandRegistry::new(RootLifetime::new(RootId::new()));
+    let count = Rc::new(Cell::new(0));
+    registry
+        .register("zoom", "Zoom", Schema::Null, Default::default, {
+            let count = count.clone();
+            move |_| {
+                count.set(count.get() + 1);
+                Ok(())
+            }
+        })
+        .unwrap();
+    let mut menu = TerminalMenu::default();
+    menu.set_bar(vec![MenuItem::submenu(
+        "View",
+        vec![registry.menu("zoom").unwrap().key_chord(&chord)],
+    )])
+    .unwrap();
+    let mut router = CommandRouter::new(registry);
+    router
+        .set_bindings(vec![CommandBinding {
+            command: "zoom".into(),
+            chord: chord.to_string(),
+            scope: None,
+            in_editors: false,
+        }])
+        .unwrap();
+    let event = Event::Key(KeyEvent::new(
+        KeyCode::Char('='),
+        KeyModifiers::ALT | KeyModifiers::SHIFT,
+    ));
+    assert!(matches!(
+        router.handle(&event, CommandContext::default()).unwrap(),
+        CommandInput::Invoked { executed: true, .. }
+    ));
+    assert!(matches!(
+        router
+            .handle(
+                &Event::Key(KeyEvent::new(KeyCode::Char('='), KeyModifiers::ALT)),
+                CommandContext::default()
+            )
+            .unwrap(),
+        CommandInput::Pass
+    ));
+    let MenuInput::Command { run, .. } = menu.handle(&event, true, false) else {
+        panic!("menu accelerator");
+    };
+    run();
+    assert_eq!(count.get(), 2);
+    menu.handle(
+        &Event::Key(KeyEvent::new(KeyCode::F(10), KeyModifiers::NONE)),
+        true,
+        false,
+    );
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buffer = Buffer::empty(area);
+    menu.render(area, &mut buffer);
+    let text: String = buffer.content.iter().map(|cell| cell.symbol()).collect();
+    assert!(text.contains("Alt+Shift+="), "{text}");
+    assert!(!text.contains("Alt++"));
+
+    // Rejected replacement leaves the installed shortcut and callback usable.
+    assert!(menu
+        .set_bar(vec![MenuItem::submenu(
+            "Broken",
+            vec![MenuItem::command("bad", "Bad", || {}).accelerator("Alt+Alt+=")]
+        )])
+        .is_err());
+    menu.close();
+    let MenuInput::Command { run, .. } = menu.handle(&event, true, false) else {
+        panic!("old accelerator");
+    };
+    run();
+    assert_eq!(count.get(), 3);
+}

@@ -183,21 +183,13 @@ pub(crate) fn tick_resizable_drag(x: f32, y: f32) -> bool {
         let (min_b, max_b) = drag.limits[i + 1];
         let a0 = drag.start_sizes[i];
         let b0 = drag.start_sizes[i + 1];
-        let pair = a0 + b0;
-        let mut a = (a0 + delta_pct).clamp(min_a, max_a);
-        let mut b = pair - a;
-        if b < min_b {
-            b = min_b;
-            a = (pair - b).clamp(min_a, max_a);
-            b = pair - a;
-        } else if b > max_b {
-            b = max_b;
-            a = (pair - b).clamp(min_a, max_a);
-            b = pair - a;
-        }
+        let Some([a, b]) = jadix::portable::resizable::resize_pair(
+            [a0 as f64, b0 as f64], delta_pct as f64,
+            [[min_a as f64, max_a as f64], [min_b as f64, max_b as f64]],
+        ) else { return true; };
         let mut next = drag.start_sizes.clone();
-        next[i] = a;
-        next[i + 1] = b;
+        next[i] = a as f32;
+        next[i + 1] = b as f32;
         let sizes = drag.sizes;
         if sizes.peek() != next {
             drop(borrow);

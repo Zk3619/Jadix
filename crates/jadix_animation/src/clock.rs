@@ -27,8 +27,9 @@ pub fn css_timeline_now_ms() -> f64 {
     }
     CSS_TIMELINE_ORIGIN.with(|slot| {
         let mut g = slot.borrow_mut();
-        let origin = *g.get_or_insert_with(Instant::now);
-        origin.elapsed().as_secs_f64() * 1000.0
+        let now = jadix_core::clock::now();
+        let origin = *g.get_or_insert(now);
+        now.saturating_duration_since(origin).as_secs_f64() * 1000.0
     })
 }
 

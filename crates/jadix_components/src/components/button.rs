@@ -32,19 +32,19 @@
 use crate::components::base::SlotChrome;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
-    parse_color, parse_text_color, Element, IntoCssDim, IntoF32, IntoNodeBg, IntoNodeSize,
-    LayoutStatus,
+    Element, IntoCssDim, IntoF32, IntoNodeBg, IntoNodeSize, LayoutStatus, parse_color,
+    parse_text_color,
 };
 use crate::layout::layout_tree::LayoutTree;
+use crate::primitives::r#box::{BoxBuilder, hstack};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
-use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
-    apply_focus_ring_shadow, apply_focus_ring_shadow_color, ensure_class_list, extend_class_list,
-    focus_ring_border_color, focus_ring_color, focus_ring_destructive_color,
-    focus_ring_shadow_matches_color, ClassSet, ATTR_SYNC_LABEL_FG,
+    ATTR_SYNC_LABEL_FG, ClassSet, apply_focus_ring_shadow, apply_focus_ring_shadow_color,
+    ensure_class_list, extend_class_list, focus_ring_border_color, focus_ring_color,
+    focus_ring_destructive_color, focus_ring_shadow_matches_color,
 };
 use crate::utils::take_packed;
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone)]
@@ -82,11 +82,7 @@ fn button_ring_fallback(variant: &str) -> [f32; 4] {
 }
 
 fn hover_t_from_bool(hovered: bool, disabled: bool) -> f32 {
-    if disabled || !hovered {
-        0.0
-    } else {
-        1.0
-    }
+    if disabled || !hovered { 0.0 } else { 1.0 }
 }
 
 /// `link` + explicit rest text color (such as Breadcrumb muted): hover cuts `foreground`.
@@ -1010,11 +1006,7 @@ fn paint_table_row_hover_bg(
 ) {
     let mut hover_bg = parse_color("muted");
     hover_bg[3] *= 0.5;
-    let rest_bg = if el.attrs.get("data-table-footer-row").map(String::as_str) == Some("1") {
-        parse_color("muted/50")
-    } else {
-        [0.0, 0.0, 0.0, 0.0]
-    };
+    let rest_bg = super::table::table_row_rest_bg(el);
     let bg = if is_hovered { hover_bg } else { rest_bg };
     if color4_near(el.style.bg_color, bg) {
         return;
@@ -1369,16 +1361,7 @@ fn authored_button_style(element: &Element) -> Option<crate::style::Style> {
     let state = element.authoring_state.get::<ButtonHoverPaint>()?;
     let mut style = element.style.as_ref().clone();
     if state.variant == "table-row" {
-        style.bg_color = if element
-            .attrs
-            .get("data-table-footer-row")
-            .map(String::as_str)
-            == Some("1")
-        {
-            parse_color("muted/50")
-        } else {
-            [0.0; 4]
-        };
+        style.bg_color = super::table::table_row_rest_bg(element);
         return Some(style);
     }
     let (background, _, border) =

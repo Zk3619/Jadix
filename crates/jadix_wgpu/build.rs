@@ -37,6 +37,7 @@ fn main() {
     let requested_exhaust = std::env::var_os("CARGO_FEATURE_EXHAUST").is_some();
     let requested_fragile_send_sync_non_atomic_wasm =
         std::env::var_os("CARGO_FEATURE_FRAGILE_SEND_SYNC_NON_ATOMIC_WASM").is_some();
+    let requested_shader_translation = std::env::var_os("CARGO_FEATURE_SHADER_TRANSLATION").is_some();
     let requested_gles = std::env::var_os("CARGO_FEATURE_GLES").is_some();
     let requested_gles_angle = std::env::var_os("CARGO_FEATURE_GLES_ANGLE").is_some();
     let requested_glsl = std::env::var_os("CARGO_FEATURE_GLSL").is_some();
@@ -1093,7 +1094,7 @@ fn main() {
     if jadix_naga_feature_glsl_in {
         println!("cargo:rustc-cfg=jadix_naga_feature_glsl_in");
     }
-    let jadix_naga_feature_glsl_out = (!target_target_arch_wasm32
+    let jadix_naga_feature_glsl_out = requested_shader_translation || (!target_target_arch_wasm32
         && (requested_windows
             || target_target_os_linux
             || target_target_os_android
@@ -1326,7 +1327,7 @@ fn main() {
         println!("cargo:rustc-cfg=jadix_naga_feature_wgsl_in");
     }
     let jadix_naga_feature_wgsl_out =
-        requested_webgpu && ((requested_glsl) || (requested_naga_ir) || (requested_spirv));
+        requested_shader_translation || requested_webgpu && ((requested_glsl) || (requested_naga_ir) || (requested_spirv));
     println!("cargo:rustc-check-cfg=cfg(jadix_naga_feature_wgsl_out)");
     if jadix_naga_feature_wgsl_out {
         println!("cargo:rustc-cfg=jadix_naga_feature_wgsl_out");

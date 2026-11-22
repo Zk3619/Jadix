@@ -35,6 +35,7 @@ struct Binding {
     id: NodeId,
     component: String,
     properties: Value,
+    has_children: bool,
     revision: u64,
     preview: Option<String>,
     observed: Option<Value>,
@@ -81,6 +82,7 @@ pub struct Mount {
     bindings: HashMap<Vec<Slot>, Binding>,
     positions: HashMap<Vec<usize>, NodeId>,
     by_node: HashMap<NodeId, Vec<Slot>>,
+    focus_request: Option<NodeId>,
 }
 #[derive(Clone, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -101,6 +103,7 @@ pub struct PreparedMount {
     positions: HashMap<Vec<usize>, NodeId>,
     previous: u64,
     owner: NodeId,
+    focus_request: Option<NodeId>,
 }
 impl Mount {
     pub fn new(lifetime: RootLifetime) -> Self {
@@ -111,6 +114,7 @@ impl Mount {
             bindings: HashMap::new(),
             positions: HashMap::new(),
             by_node: HashMap::new(),
+            focus_request: None,
         }
     }
     pub fn lifetime(&self) -> &RootLifetime {
@@ -144,9 +148,11 @@ impl Mount {
         }
         let tree = tree.as_ref();
         let mut bindings = HashMap::new();
+        let mut focus_request = None;
         let mut positions = HashMap::new();
         let mut anchors = BTreeMap::<String, Vec<NodeId>>::new();
         let mut popovers = BTreeMap::<NodeId, String>::new();
+        let mut relations = BTreeMap::new();
         enum Work<'a> {
             Visit(&'a ElementSpec, Vec<Slot>, Vec<usize>),
             Finish,
@@ -173,6 +179,7 @@ impl Mount {
                         id: NodeId::new(self.lifetime.id()),
                         component: element.component.clone(),
                         properties: element.props.clone(),
+                        has_children: !element.children.is_empty(),
                         revision: 0,
                         preview: None,
                         observed: None,
@@ -187,16 +194,43 @@ impl Mount {
                     if previous.is_some() {
                         binding.update_properties(kind, &element.props)?;
                     }
+                    if let Some(Value::Number(token)) = property(&element.props, "focusRequest") {
+                        if !token.is_finite() || token.fract() != 0.0 || !(0.0..=9_007_199_254_740_991.0).contains(token) { return Err(MountError::Properties); }
+                        if *token > 0.0 && previous.and_then(|old| property(&old.properties, "focusRequest")) != Some(&Value::Number(*token))
+                            && !matches!(property(&element.props, "disabled"), Some(Value::Bool(true))) {
+                            focus_request = Some(binding.id);
+                        }
+                    }
+                    binding.has_children = !element.children.is_empty();
                     binding.events = element.events.clone();
                     let content = content(element, kind, &binding)?;
+                    let mut style = element.style.clone();
                     if let Some(key) = &element.key {
                         anchors.entry(key.clone()).or_default().push(binding.id);
                     }
+                    let active = match property(&element.props, "accessibleActiveDescendant") {
+                        Some(Value::String(name)) => Some(name.clone()), None => None,
+                        _ => return Err(MountError::Properties),
+                    };
+                    let controls = match property(&element.props, "accessibleControls") {
+                        Some(Value::Array(names)) => names.iter().map(|name| match name {
+                            Value::String(name) => Ok(name.clone()), _ => Err(MountError::Properties),
+                        }).collect::<Result<Vec<_>, _>>()?,
+                        None => Vec::new(), _ => return Err(MountError::Properties),
+                    };
+                    relations.insert(binding.id, (active, controls));
                     if kind == NodeKind::Popover {
                         let Some(Value::String(anchor)) = property(&element.props, "anchor") else {
                             return Err(MountError::Properties);
                         };
                         popovers.insert(binding.id, anchor.clone());
+                        style.popover_margin = popover_inset(&element.props, "margin")?;
+                        style.popover_close_on_escape =
+                            match property(&element.props, "close_on_escape") {
+                                Some(Value::Bool(value)) => Some(*value),
+                                None => None,
+                                _ => return Err(MountError::Properties),
+                            };
                     }
                     positions.insert(position.clone(), binding.id);
                     let node = PresentationNode {
@@ -204,13 +238,49 @@ impl Mount {
                         descriptor: NodeDescriptor {
                             content,
                             frame: Rect::default(),
-                            accessible_role: None,
-                            accessible_selected: None,
+                            accessible_role: match property(&element.props, "accessibleRole") {
+                                None => None,
+                                Some(Value::String(role)) => Some(match role.as_str() {
+                                    "listbox" => AccessibleRole::ListBox,
+                                    "option" => AccessibleRole::ListBoxOption { tab_stop: false },
+                                    "heading" => AccessibleRole::Heading,
+                                    "radiogroup" => AccessibleRole::RadioGroup,
+                                    "radio" => AccessibleRole::RadioItem { tab_stop: true },
+                                    "tablist" => AccessibleRole::TabList,
+                                    "tab" => AccessibleRole::TabItem,
+                                    "tabpanel" => AccessibleRole::TabPanel,
+                                    "tree" => AccessibleRole::Tree,
+                                    "treeitem" => AccessibleRole::TreeItem,
+                                    _ => return Err(MountError::Properties),
+                                }),
+                                _ => return Err(MountError::Properties),
+                            },
+                            accessible_selected: match property(&element.props, "accessibleSelected") { Some(Value::Bool(value)) => Some(*value), _ => None },
                             accessible_expanded: None,
+                            interaction: match property(&element.props, "interaction") {
+                                Some(value) => serde_json::from_value(serde_json::to_value(value).map_err(|_| MountError::Properties)?).map_err(|_| MountError::Properties)?,
+                                None => Default::default(),
+                            },
+                            keyboard: match property(&element.props, "keyboard") {
+                                Some(value) => serde_json::from_value(serde_json::to_value(value).map_err(|_| MountError::Properties)?).map_err(|_| MountError::Properties)?,
+                                None => Default::default(),
+                            },
+                            navigation_keys: match property(&element.props, "navigationKeys") {
+                                Some(value) => serde_json::from_value::<Vec<NavigationKey>>(serde_json::to_value(value).map_err(|_| MountError::Properties)?).map_err(|_| MountError::Properties)?,
+                                None => Vec::new(),
+                            },
+                            accessibility: match property(&element.props, "accessibility") {
+                                Some(value) => serde_json::from_value(serde_json::to_value(value).map_err(|_| MountError::Properties)?).map_err(|_| MountError::Properties)?,
+                                None => Default::default(),
+                            },
                             accessibility_relations: Default::default(),
-                            accessible_description: None,
-                            accessible_name: None,
-                            style: element.style.clone(),
+                            accessible_description: match property(&element.props, "accessibleDescription") { Some(Value::String(value)) => Some(value.clone()), _ => None },
+                            accessible_name: match property(&element.props, "accessibleName") {
+                                Some(Value::String(value)) => Some(value.clone()),
+                                _ if kind == NodeKind::Button && binding.has_children => match property(&element.props, "label") { Some(Value::String(value)) => Some(value.clone()), _ => None },
+                                _ => None,
+                            },
+                            style,
                         },
                         children: Vec::new(),
                     };
@@ -246,6 +316,11 @@ impl Mount {
         let mut tree = [completed.pop().ok_or(MountError::Properties)?];
         let mut pending = vec![&mut tree[0]];
         while let Some(node) = pending.pop() {
+            if let Some((active, controls)) = relations.get(&node.id) {
+                node.descriptor.accessibility_relations = AccessibilityRelations::resolve_named(
+                    active.as_deref(), controls, |name| anchors.get(name).filter(|ids| ids.len() == 1).map(|ids| ids[0]),
+                );
+            }
             if let NodeContent::Popover { anchor, .. } = &mut node.descriptor.content {
                 let key = popovers.get(&node.id).ok_or(MountError::Properties)?;
                 let candidates = anchors.get(key).ok_or(MountError::Properties)?;
@@ -260,6 +335,7 @@ impl Mount {
             roots: tree.into(),
             bindings,
             positions,
+            focus_request,
             previous: self.revision,
             owner: self.owner,
         })
@@ -273,6 +349,8 @@ impl Mount {
             return Err(MountError::Revision);
         }
         self.revision = self.revision.checked_add(1).ok_or(MountError::Revision)?;
+        self.focus_request = candidate.focus_request.or(self.focus_request)
+            .filter(|id| candidate.positions.values().any(|current| current == id));
         self.bindings = candidate.bindings;
         self.positions = candidate.positions;
         self.by_node = self
@@ -281,6 +359,12 @@ impl Mount {
             .map(|(p, b)| (b.id, p.clone()))
             .collect();
         Ok(())
+    }
+    /// A request is consumed only after successful publication, and never replayed
+    /// by an unchanged keyed snapshot.
+    pub fn take_focus_request(&mut self) -> Option<NodeId> {
+        if self.lifetime.is_disposed() { self.focus_request = None; }
+        self.focus_request.take()
     }
     /// Validate only addressed, already mounted Text/Button/Input/Textarea leaves. Structure,
     /// style, key and event handles cannot change through this protocol.
@@ -348,6 +432,16 @@ impl Mount {
                         registry,
                     )
                     .map_err(MountError::Session)?;
+                // Leaf packets carry content only. Metadata changes require a full
+                // snapshot so every host receives the corresponding descriptor.
+                for name in ["accessibility", "interaction", "keyboard", "navigationKeys", "focusRequest", "accessibleName", "accessibleDescription", "accessibleSelected", "accessibleRole", "accessibleActiveDescendant", "accessibleControls"] {
+                    if property(&binding.properties, name) != property(&patch.props, name) { return Err(MountError::Properties); }
+                }
+                if kind == NodeKind::Button && binding.has_children
+                    && property(&binding.properties, "accessibleName").is_none()
+                    && property(&binding.properties, "label") != property(&patch.props, "label") {
+                    return Err(MountError::Properties);
+                }
                 binding.update_properties(kind, &patch.props)?;
                 Ok(PreparedLeafPatch {
                     path: patch.path.clone(),
@@ -382,7 +476,24 @@ impl Mount {
             };
             let binding = self.bindings.get_mut(path).ok_or(MountError::Properties)?;
             let (name, arguments) = match event.payload {
+                EventPayload::FileDrop(event) => ("fileDrop", serde_json::to_value(event).map_err(|_| MountError::Properties)?),
+                EventPayload::Interaction(event) => ("interaction", serde_json::to_value(event).map_err(|_| MountError::Properties)?),
+                EventPayload::Hover { inside } => ("hover", serde_json::json!({"inside": inside})),
+                EventPayload::PointerMove { x, y } => ("pointerMove", serde_json::json!({"x": x, "y": y})),
                 EventPayload::Activate => ("activate", serde_json::Value::Null),
+                EventPayload::ImageLoad(result) => match result {
+                    ImageLoadEvent::Started => ("loadStart", serde_json::Value::Null),
+                    ImageLoadEvent::Progress { loaded, total } => {
+                        ("progress", serde_json::json!({"loaded": loaded, "total": total}))
+                    }
+                    ImageLoadEvent::Loaded { width, height } => {
+                        ("load", serde_json::json!({"width": width, "height": height}))
+                    }
+                    ImageLoadEvent::Failed { message } => {
+                        ("error", serde_json::json!({"message": message}))
+                    }
+                    ImageLoadEvent::Ended => ("loadEnd", serde_json::Value::Null),
+                },
                 EventPayload::Submit { revision } => {
                     if revision <= binding.revision || binding.preview.is_some() {
                         continue;
@@ -434,15 +545,46 @@ impl Mount {
                         serde_json::json!({"backdrop":backdrop,"revision":revision.to_string()}),
                     )
                 }
+                EventPayload::PopoverCancel { backdrop } => {
+                    ("cancel", serde_json::json!({"backdrop": backdrop}))
+                }
+                EventPayload::PopoverLifecycle { open } => {
+                    (if open { "open" } else { "close" }, serde_json::json!({}))
+                }
+                EventPayload::PopoverPosition { position } => (
+                    "positionChange",
+                    position.map_or_else(
+                        || serde_json::json!({}),
+                        |position| serde_json::json!({"position": position}),
+                    ),
+                ),
+                EventPayload::ScrollViewport { x, y, width, height } => (
+                    "scroll", serde_json::json!({"x":x,"y":y,"viewport":[width,height]}),
+                ),
                 EventPayload::Scroll { x, y } => ("scroll", serde_json::json!({"x":x,"y":y})),
+                EventPayload::Key(event) => ("key", serde_json::to_value(event).map_err(|_| MountError::Properties)?),
+                EventPayload::AccessibilityAction { id, value } => ("accessibilityAction", value.map_or_else(|| serde_json::json!({"id":id}), |value| serde_json::json!({"id":id,"value":value}))),
+                EventPayload::Shortcut { id } => ("shortcut", serde_json::json!({"id":id})),
+                EventPayload::Hosted { event, data } => ("hosted", serde_json::json!({"event": event,"data": data.to_string()})),
+                EventPayload::ScrollActivity(activity) => ("scrollActivity", serde_json::json!({"activity": activity})),
+                EventPayload::ScrollZoom { scale, x, y, width, height } => ("scrollZoom", serde_json::json!({"scale":scale,"x":x,"y":y,"width":width,"height":height})),
                 EventPayload::Wheel { delta_x, delta_y } => (
                     "wheel",
                     serde_json::json!({"deltaX":delta_x,"deltaY":delta_y}),
                 ),
+                EventPayload::Navigate { key, shift, control } => {
+                    if matches!(binding.component.as_str(), "Input" | "Button") && (shift || control || binding.preview.is_some()
+                        || matches!(property(&binding.properties, "disabled"), Some(Value::Bool(true)))
+                        || !property(&binding.properties, "navigationKeys")
+                            .and_then(|keys| serde_json::to_value(keys).ok())
+                            .and_then(|keys| serde_json::from_value::<Vec<NavigationKey>>(keys).ok())
+                            .is_some_and(|keys| keys.contains(&key))) { continue; }
+                    ("navigate", serde_json::json!({"key":key,"shift":shift,"control":control}))
+                },
                 EventPayload::Focus
                 | EventPayload::FocusVisible
                 | EventPayload::Blur
-                | EventPayload::Navigate { .. }
+
                 | EventPayload::Drag { .. }
                 | EventPayload::Expansion { .. }
                 | EventPayload::Tree { .. } => continue,
@@ -464,6 +606,7 @@ impl Mount {
         self.bindings.clear();
         self.positions.clear();
         self.by_node.clear();
+        self.focus_request = None;
         self.revision = self.revision.saturating_add(1);
     }
 }
@@ -479,6 +622,18 @@ fn property<'a>(props: &'a Value, name: &str) -> Option<&'a Value> {
         return None;
     };
     properties.get(name)
+}
+
+fn popover_inset(props: &Value, name: &str) -> Result<Option<u16>, MountError> {
+    match property(props, name) {
+        None => Ok(None),
+        Some(Value::Number(value))
+            if value.fract() == 0.0 && (0.0..=1024.0).contains(value) =>
+        {
+            Ok(Some(*value as u16))
+        }
+        _ => Err(MountError::Properties),
+    }
 }
 
 fn content(
@@ -511,10 +666,11 @@ fn content(
     };
     let revision = binding.revision;
     Ok(match kind {
+        NodeKind::Hosted => NodeContent::Hosted { specification: string("specification", false)? },
         NodeKind::Container => NodeContent::Container,
         NodeKind::Text => NodeContent::Text(string("text", false)?),
         NodeKind::Button => NodeContent::Button {
-            label: string("label", false)?,
+            label: if binding.has_children { String::new() } else { string("label", false)? },
             enabled,
         },
         NodeKind::Input => NodeContent::Input {
@@ -594,21 +750,10 @@ fn content(
                 }
                 _ => return Err(MountError::Properties),
             };
-            let gap = match property(&element.props, "gap") {
-                None => 4,
-                Some(Value::Number(value))
-                    if value.is_finite()
-                        && value.fract() == 0.0
-                        && (0.0..=1024.0).contains(value) =>
-                {
-                    *value as u16
-                }
-                _ => return Err(MountError::Properties),
-            };
             NodeContent::Popover {
                 anchor: binding.id,
                 placement,
-                gap,
+                gap: popover_inset(&element.props, "gap")?.unwrap_or(4),
                 open: boolean("open", false)?,
                 close_on_outside_click: boolean("close_on_outside_click", true)?,
                 revision,

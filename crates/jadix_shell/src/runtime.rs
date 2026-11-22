@@ -67,6 +67,11 @@ pub mod native {
         runtime: rquickjs::Runtime,
         deadline: Rc<Cell<Option<Instant>>>,
         limits: ResourceLimits,
+        busy: Cell<Duration>,
+        last_active: Cell<Instant>,
+        last_gc: Cell<Instant>,
+        gc_dirty: Cell<bool>,
+        heap: Cell<Option<jadix_core::performance::HeapSample>>,
     }
 
     impl BudgetedRuntime {
@@ -127,6 +132,11 @@ pub mod native {
                 runtime,
                 deadline,
                 limits,
+                busy: Cell::new(Duration::ZERO),
+                last_active: Cell::new(Instant::now()),
+                last_gc: Cell::new(Instant::now()),
+                gc_dirty: Cell::new(true),
+                heap: Cell::new(None),
             })
         }
 
@@ -142,6 +152,7 @@ pub mod native {
             if source.len() > 1024 * 1024 {
                 return Err(VmError::SourceLimit);
             }
+            let started = Instant::now();
             self.deadline
                 .set(Some(Instant::now() + Duration::from_millis(milliseconds)));
             let result = Self::with_stack(self.limits, || {
@@ -155,6 +166,7 @@ pub mod native {
                 .get()
                 .is_some_and(|deadline| Instant::now() >= deadline);
             self.deadline.set(None);
+            self.record_work(started);
             if expired {
                 return Err(VmError::Timeout);
             }
@@ -168,6 +180,8 @@ pub mod native {
         }
 
         pub fn drain_jobs(&self) -> Result<usize, VmError> {
+            let started = Instant::now();
+            let had_jobs = self.runtime.is_job_pending();
             self.deadline.set(Some(
                 Instant::now() + Duration::from_millis(self.limits.turn_milliseconds),
             ));
@@ -197,11 +211,69 @@ pub mod native {
             })();
             let expired = self.deadline.get().is_some_and(|end| Instant::now() >= end);
             self.deadline.set(None);
+            if had_jobs { self.record_work(started); }
             if expired {
                 Err(VmError::Timeout)
             } else {
                 result
             }
+        }
+
+        fn record_work(&self, started: Instant) {
+            self.busy.set(self.busy.get().saturating_add(started.elapsed()));
+            self.last_active.set(Instant::now()); self.gc_dirty.set(true);
+        }
+
+        /// Call outside host state borrows and VM turns. Collect cyclic garbage
+        /// after a quiet period, with a maximum delay for continuously active apps.
+        pub fn poll_idle(&self) -> Option<jadix_core::performance::HeapSample> {
+            let now = Instant::now();
+            if self.deadline.get().is_none() && !self.runtime.is_job_pending() && self.gc_dirty.get()
+                && now.duration_since(self.last_gc.get()) >= Duration::from_secs(1)
+                && (now.duration_since(self.last_active.get()) >= Duration::from_millis(250)
+                    || now.duration_since(self.last_gc.get()) >= Duration::from_secs(5)) {
+                let started = Instant::now();
+                Self::with_stack(self.limits, || {
+                    self.context.with(|context| Self::refresh_stack(&context));
+                    self.runtime.run_gc();
+                });
+                jadix_core::reactivity::collect_reactive_garbage();
+                let memory = self.runtime.memory_usage();
+                self.heap.set(Some(jadix_core::performance::HeapSample {
+                    allocated_bytes: memory.malloc_size.max(0) as u64,
+                    objects: memory.obj_count.max(0) as u64,
+                }));
+                self.busy.set(self.busy.get().saturating_add(started.elapsed()));
+                self.last_gc.set(now); self.gc_dirty.set(false);
+            }
+            self.heap.get()
+        }
+        pub fn take_busy_time(&self) -> Duration { self.busy.replace(Duration::ZERO) }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn idle_heap_is_unknown_until_gc_and_pending_jobs_defer_collection() {
+            let vm = BudgetedRuntime::new(ResourceLimits::default()).unwrap();
+            assert!(vm.poll_idle().is_none());
+            vm.eval_string("globalThis.garbage = []; for(let i=0;i<100;i++){let a={};a.self=a;garbage.push(a)};garbage=null;Promise.resolve().then(()=>{}); 'ok'").unwrap();
+            let before = Instant::now() - Duration::from_secs(6);
+            vm.last_gc.set(before); vm.last_active.set(before);
+            assert!(vm.poll_idle().is_none());
+            assert_eq!(vm.drain_jobs().unwrap(), 1);
+            vm.last_active.set(before);
+            let heap = vm.poll_idle().unwrap();
+            assert!(heap.allocated_bytes > 0 && heap.objects > 0);
+            assert!(!vm.gc_dirty.get());
+            assert!(!vm.take_busy_time().is_zero());
+            assert!(vm.take_busy_time().is_zero());
+            assert_eq!(vm.poll_idle().unwrap().allocated_bytes, heap.allocated_bytes);
+            vm.eval_string("'active'").unwrap();
+            assert!(vm.gc_dirty.get());
+            vm.poll_idle();
+            assert!(vm.gc_dirty.get(), "the minimum collection interval still applies");
         }
     }
 }

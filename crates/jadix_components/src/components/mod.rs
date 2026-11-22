@@ -105,6 +105,8 @@ pub mod drawer;
 pub mod dropdown_menu;
 mod editor_chrome;
 pub mod empty;
+pub mod emoji_picker;
+pub use emoji_picker::{emoji_picker, EmojiPicker, EmojiPickerBuilder, EmojiPickerProps};
 pub mod form;
 pub mod hover_card;
 #[cfg(feature = "webview")]
@@ -116,6 +118,7 @@ pub mod input_otp;
 pub mod item;
 pub mod kbd;
 pub mod label;
+pub mod link;
 pub mod list;
 pub mod marker;
 pub mod math_view;
@@ -160,6 +163,7 @@ pub mod toggle;
 pub mod toggle_group;
 pub mod tooltip;
 pub mod tree_view;
+pub mod virtual_grid;
 pub mod virtual_list;
 pub mod virtual_masonry;
 #[cfg(feature = "webview")]
@@ -172,12 +176,12 @@ pub use webview::{
 pub use crate::authoring::{BaseComponentBuilder, SlotChrome, SlotMap, SlotStyleFn};
 pub use crate::utils::text_field::SelectionOnBlur;
 pub use accordion::{
-    accordion, accordion_content, accordion_item, accordion_item_scope, accordion_scope,
-    accordion_trigger, accordion_use_grid_fr, set_accordion_use_grid_fr, use_accordion,
-    use_accordion_item, Accordion, AccordionBuilder, AccordionContent, AccordionContentBuilder,
-    AccordionContentProps, AccordionCtx, AccordionItem, AccordionItemBuilder, AccordionItemCtx,
-    AccordionItemProps, AccordionProps, AccordionTrigger, AccordionTriggerBuilder,
-    AccordionTriggerProps,
+    accordion, accordion_content, accordion_content_with_spring, accordion_item,
+    accordion_item_scope, accordion_scope, accordion_trigger, accordion_use_grid_fr,
+    set_accordion_use_grid_fr, use_accordion, use_accordion_item, Accordion, AccordionBuilder,
+    AccordionContent, AccordionContentBuilder, AccordionContentProps, AccordionCtx, AccordionItem,
+    AccordionItemBuilder, AccordionItemCtx, AccordionItemProps, AccordionProps, AccordionTrigger,
+    AccordionTriggerBuilder, AccordionTriggerProps,
 };
 pub use alert::{
     alert, alert_action, alert_description, alert_title, apply_alert_variant_paint,
@@ -296,17 +300,18 @@ pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
 #[cfg(feature = "code")]
 pub use code_editor::{code_editor, CodeEditor, CodeEditorBuilder};
 pub use collapsible::{
-    collapsible, collapsible_content, collapsible_content_slot, collapsible_scope,
-    collapsible_trigger, use_collapsible, Collapsible, CollapsibleBuilder, CollapsibleContent,
-    CollapsibleContentProps, CollapsibleContentSlotBuilder, CollapsibleCtx, CollapsibleProps,
-    CollapsibleTrigger, CollapsibleTriggerBuilder, CollapsibleTriggerProps,
+    collapsible, collapsible_content, collapsible_content_slot, collapsible_content_with_spring,
+    collapsible_scope, collapsible_trigger, use_collapsible, Collapsible, CollapsibleBuilder,
+    CollapsibleContent, CollapsibleContentProps, CollapsibleContentSlotBuilder, CollapsibleCtx,
+    CollapsibleProps, CollapsibleTrigger, CollapsibleTriggerBuilder, CollapsibleTriggerProps,
 };
 pub use color_picker::{
     color_picker, format_color, parse_color_str, ColorFormat, ColorPicker, ColorPickerBuilder,
     ColorPickerProps, ColorPickerVariant, Rgba,
 };
 pub use combobox::{
-    combobox, combobox_content, combobox_scope, use_combobox, Combobox, ComboboxBuilder,
+    combobox, combobox_content, combobox_query, combobox_scope, use_combobox, Combobox, ComboboxBuilder,
+    ComboboxChange, ComboboxChangeReason, ComboboxQuery,
     ComboboxContentOpts, ComboboxCtx, ComboboxEmpty, ComboboxEmptyProps, ComboboxGroup,
     ComboboxGroupData, ComboboxGroupProps, ComboboxInput, ComboboxInputProps, ComboboxItem,
     ComboboxItemData, ComboboxItemProps, ComboboxLabel, ComboboxLabelProps, ComboboxList,
@@ -315,14 +320,14 @@ pub use combobox::{
 };
 pub use command::{
     command, command_dialog_scope, command_empty, command_group, command_input, command_item,
-    command_list, command_overlay_scope, command_scope, command_separator, command_shortcut,
-    use_command, Command, CommandAction, CommandBuilder, CommandCtx, CommandEmpty,
-    CommandEmptyBuilder, CommandEmptyProps, CommandGroup, CommandGroupBuilder, CommandGroupData,
-    CommandGroupProps, CommandInput, CommandInputBuilder, CommandInputProps, CommandItem,
-    CommandItemBuilder, CommandItemProps, CommandList, CommandListBuilder, CommandListProps,
-    CommandProps, CommandSeparator, CommandSeparatorBuilder, CommandSeparatorProps,
-    CommandShortcut, CommandShortcutBuilder, CommandShortcutProps, CommandSurface,
-    CommandVisibleItem,
+    command_list, command_overlay_scope, command_query, command_scope, command_separator,
+    command_shortcut, use_command, Command, CommandAction, CommandBuilder, CommandCtx,
+    CommandEmpty, CommandEmptyBuilder, CommandEmptyProps, CommandGroup, CommandGroupBuilder,
+    CommandGroupData, CommandGroupProps, CommandInput, CommandInputBuilder, CommandInputProps,
+    CommandItem, CommandItemBuilder, CommandItemProps, CommandList, CommandListBuilder,
+    CommandListProps, CommandProps, CommandQuery, CommandSeparator, CommandSeparatorBuilder,
+    CommandSeparatorProps, CommandShortcut, CommandShortcutBuilder, CommandShortcutProps,
+    CommandSurface, CommandVisibleItem,
 };
 pub use context_menu::{
     context_menu, context_menu_content, context_menu_content_slot, context_menu_group,
@@ -358,11 +363,14 @@ pub use diff_view::{diff_view, DiffView, DiffViewBuilder, DiffViewProps};
 pub use dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
 #[cfg(feature = "document-editing")]
 pub use document_editor::{
-    document_editor, DocumentEditor, DocumentEditorBuilder, DocumentEditorProps,
+    document_editor, DocumentDeferredPasteHandler, DocumentEditor, DocumentEditorBuilder,
+    DocumentEditorProps,
 };
 #[cfg(feature = "document")]
 pub use document_view::{
-    document_view, DocumentBlockRenderer, DocumentView, DocumentViewBuilder, DocumentViewProps,
+    document_view, DocumentBlockRenderer, DocumentLinkHandler, DocumentLinkHover,
+    DocumentLinkHoverHandler, DocumentTaskHandler, DocumentTaskToggle, DocumentView,
+    DocumentViewBuilder, DocumentViewProps,
 };
 pub use drawer::{
     coerce_snap_point_list, coerce_snap_points, drawer, drawer_active_snap_point, drawer_body,
@@ -451,6 +459,7 @@ pub use label::{
     text_node as text, try_copy_label_selection, Label, LabelBuilder, LabelProps,
     LABEL_SELECTION_COPY_SIGNAL,
 };
+pub use link::{link, Link, LinkBuilder, LinkProps};
 pub use list::{
     list, list_description, list_header, list_item, List, ListBuilder, ListDescription,
     ListDescriptionBuilder, ListDescriptionProps, ListHeader, ListHeaderBuilder, ListHeaderProps,
@@ -701,9 +710,13 @@ pub use tooltip::{
     TooltipTriggerBuilder, TooltipTriggerProps,
 };
 pub use tree_view::{
-    tree_node, tree_view, tree_view_item_scope, tree_view_scope, use_tree_view, use_tree_view_item,
-    TreeNode, TreeView, TreeViewBuilder, TreeViewChrome, TreeViewCtx, TreeViewItem,
-    TreeViewItemCtx, TreeViewVariant,
+    tree_node, tree_view, tree_view_item_scope, tree_view_scope, tree_view_scope_with_spring,
+    use_tree_view, use_tree_view_item, TreeNode, TreeView, TreeViewBuilder, TreeViewChrome,
+    TreeViewCtx, TreeViewItem, TreeViewItemCtx, TreeViewVariant,
 };
-pub use virtual_list::{virtual_list, VirtualListBuilder};
+pub use virtual_grid::{
+    virtual_grid, virtual_wrap, GridViewport, UniformGridWindow, VirtualGridBuilder, VirtualGridHandle,
+    VirtualWrapBuilder,
+};
+pub use virtual_list::{virtual_list, VirtualListBuilder, VirtualListHandle};
 pub use virtual_masonry::{virtual_masonry, VirtualMasonryBuilder};

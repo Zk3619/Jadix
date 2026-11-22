@@ -158,7 +158,7 @@ impl Engine {
                 Plan {
                     style: engine_style(node.descriptor),
                     children: node.children.iter().map(|id| Key::Node(*id)).collect(),
-                    leaf: (!node.descriptor.content.accepts_children())
+                    leaf: needs_measurement(node.descriptor, node.children.is_empty())
                         .then_some((node.id, node.descriptor)),
                 },
             );
@@ -311,7 +311,7 @@ fn plan<'a>(
     } else {
         engine_style(descriptor)
     };
-    let leaf = if !hidden && !descriptor.content.accepts_children() {
+    let leaf = if !hidden && needs_measurement(descriptor, node.children.is_empty()) {
         Some((node.id, &node.descriptor))
     } else {
         None
@@ -329,4 +329,11 @@ fn plan<'a>(
             plan(child, Key::Node(child.id), None, plans);
         }
     }
+}
+
+// Buttons can host authored content, but a plain label still needs the host's
+// intrinsic control metrics. Child admission is not a measurement policy.
+fn needs_measurement(descriptor: &NodeDescriptor, empty: bool) -> bool {
+    !descriptor.content.accepts_children()
+        || (empty && matches!(descriptor.content, NodeContent::Button { .. } | NodeContent::Hosted { .. }))
 }

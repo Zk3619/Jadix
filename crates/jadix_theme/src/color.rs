@@ -1019,6 +1019,7 @@ pub fn try_parse_color(s: &str) -> Option<[f32; 4]> {
         "code-foreground" => colors.code_foreground,
         "code-highlight" => colors.code_highlight,
         "code-number" => colors.code_number,
+        "match-foreground" => colors.match_foreground,
         "caret" | "caret-color" => colors.caret,
         "selection" | "selection-background" => colors.selection_background,
         "selection-foreground" => colors.selection_foreground,

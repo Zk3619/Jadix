@@ -3,14 +3,15 @@
 //! Only viewport rows are materialized. No wrapping, editing or block layout;
 //! selection currently uses Label's per-line selection, not a document selection.
 
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
-use crate::components::base::{paint_slot, SlotChrome};
+use crate::components::base::{SlotChrome, paint_slot};
 use crate::components::label::enable_label_selection;
 use crate::components::virtual_list::virtual_list;
-use crate::core::reactivity::{create_effect, dispose_effect, Signal};
-use crate::core::tree::Element;
+use crate::core::reactivity::{Signal, create_effect, dispose_effect};
+use crate::core::tree::{CursorValue, Element};
 use crate::text::TextDocument;
+use crate::utils::text_annotations::{DocumentHighlights, DocumentSyntax, TextDecoration};
 
 pub fn text_view(id: impl Into<String>) -> TextViewBuilder {
     TextViewBuilder {
@@ -22,6 +23,9 @@ pub fn text_view(id: impl Into<String>) -> TextViewBuilder {
         row_height: 22.0,
         viewport_h: 320.0,
         overscan: 3,
+        cursor: None,
+        highlights: Vec::new(),
+        language: None,
         chrome: SlotChrome::default(),
     }
 }
@@ -35,11 +39,28 @@ pub struct TextViewBuilder {
     row_height: f32,
     viewport_h: f32,
     overscan: usize,
+    cursor: Option<CursorValue>,
+    highlights: Vec<TextDecoration>,
+    language: Option<String>,
     chrome: SlotChrome,
 }
 
 impl TextViewBuilder {
     crate::impl_slot_chrome_methods!();
+
+    /// Ordered UTF-8 source-byte styles, bound to the initial document snapshot.
+    /// Publishing a replacement document clears these styles until rebuilt.
+    pub fn highlights(mut self, highlights: Vec<TextDecoration>) -> Self {
+        self.highlights = highlights;
+        self
+    }
+
+    /// Enable bounded syntax highlighting with the `syntax-highlighting` feature.
+    /// Parsed in the background per snapshot/theme; explicit highlights take precedence.
+    pub fn language(mut self, language: impl Into<String>) -> Self {
+        self.language = Some(language.into());
+        self
+    }
 
     pub fn document(mut self, document: impl Into<TextDocument>) -> Self {
         self.document = document.into();
@@ -77,6 +98,11 @@ impl TextViewBuilder {
         self.overscan = lines;
         self
     }
+
+    pub fn cursor(mut self, value: impl crate::style::IntoCursor) -> Self {
+        self.cursor = value.into_cursor();
+        self
+    }
 }
 
 pub(crate) fn gutter_width(line_count: usize) -> f32 {
@@ -90,6 +116,18 @@ pub(crate) fn source_line(
     numbers: bool,
     selectable: bool,
     row_height: f32,
+) -> Element {
+    source_line_with_cursor(id, document, line, numbers, selectable, row_height, None)
+}
+
+pub(crate) fn source_line_with_cursor(
+    id: &str,
+    document: &TextDocument,
+    line: Option<usize>,
+    numbers: bool,
+    selectable: bool,
+    row_height: f32,
+    cursor: Option<CursorValue>,
 ) -> Element {
     let mut row = Element::new()
         .display_flex()
@@ -140,6 +178,9 @@ pub(crate) fn source_line(
         text =
             text.on_unmount(move || crate::core::reactivity::remove_named_signal(&selection_key));
     }
+    if let Some(cursor) = cursor {
+        text = text.cursor(cursor);
+    }
     row.child(text)
 }
 
@@ -150,6 +191,18 @@ pub(crate) fn source_width(document: &TextDocument, numbers: bool) -> f32 {
         0.0
     };
     document.max_line_width_units() as f32 * 14.0 + gutter + 160.0
+}
+
+pub(crate) fn highlight_source_line(
+    mut row: Element,
+    document: &TextDocument,
+    line: Option<usize>,
+    highlights: &DocumentHighlights,
+) -> Element {
+    if let (Some(line), Some(text)) = (line, row.children.last_mut()) {
+        text.text_spans = highlights.line_spans(document, line, text.text_spans.as_deref());
+    }
+    row
 }
 
 pub(crate) fn redraw_on_snapshot<T: Clone + 'static>(
@@ -173,6 +226,21 @@ pub(crate) fn redraw_on_snapshot<T: Clone + 'static>(
     })
 }
 
+pub(crate) fn cancel_syntax_on_unmount(
+    mut root: Element,
+    syntax: Vec<Rc<RefCell<DocumentSyntax>>>,
+) -> Element {
+    let previous = root.on_unmount.take();
+    root.on_unmount(move || {
+        for syntax in &syntax {
+            syntax.borrow_mut().cancel();
+        }
+        if let Some(previous) = &previous {
+            previous.fire();
+        }
+    })
+}
+
 impl From<TextViewBuilder> for Element {
     fn from(builder: TextViewBuilder) -> Self {
         let TextViewBuilder {
@@ -184,6 +252,9 @@ impl From<TextViewBuilder> for Element {
             row_height,
             viewport_h,
             overscan,
+            cursor,
+            highlights,
+            language,
             chrome,
         } = builder;
         let id = crate::utils::resolve_instance_id(id, "text-view");
@@ -194,34 +265,74 @@ impl From<TextViewBuilder> for Element {
                 .unwrap_or_else(|| document.clone())
         });
         let count = source.clone();
+        let initial = source();
+        let initial_revision = initial.revision();
+        let syntax = Rc::new(RefCell::new(DocumentSyntax::new(language)));
+        let indexed = Rc::new(RefCell::new((
+            0,
+            DocumentHighlights::new(&initial, highlights.clone()),
+        )));
+        let key_syntax = syntax.clone();
+        let key_index = indexed.clone();
         let key = source.clone();
         let width = source.clone();
         let row_id = id.clone();
-        let root: Element = virtual_list(&id)
+        let item_cursor = cursor.clone();
+        let mut root: Element = virtual_list(&id)
             .height(viewport_h)
             .item_height(row_height)
             .overscan(overscan)
             .item_count_fn(move || count().line_count())
-            .data_key_fn(move || key().revision().to_string())
+            .data_key_fn(move || {
+                let document = key();
+                let mut syntax = key_syntax.borrow_mut();
+                let generation = syntax.update(&document, crate::style::is_dark_theme());
+                let mut indexed = key_index.borrow_mut();
+                if indexed.0 != generation {
+                    let explicit = if document.revision() == initial_revision {
+                        highlights.clone()
+                    } else {
+                        Vec::new()
+                    };
+                    *indexed = (
+                        generation,
+                        DocumentHighlights::from_syntax(&document, syntax.colors(), explicit),
+                    );
+                }
+                format!("{}:{generation}", document.revision())
+            })
             .content_width_fn(move || source_width(&width(), line_numbers))
             .render_item(move |line| {
-                source_line(
-                    &row_id,
-                    &source(),
+                let document = source();
+                highlight_source_line(
+                    source_line_with_cursor(
+                        &row_id,
+                        &document,
+                        Some(line),
+                        line_numbers,
+                        selectable,
+                        row_height,
+                        item_cursor.clone(),
+                    ),
+                    &document,
                     Some(line),
-                    line_numbers,
-                    selectable,
-                    row_height,
+                    &indexed.borrow().1,
                 )
             })
             .into();
+        if let Some(cursor) = cursor {
+            root = root.cursor(cursor);
+        }
         redraw_on_snapshot(
-            paint_slot(
-                root.font_family("monospace")
-                    .text_size(14.0)
-                    .accesskit_role("group"),
-                "text-view",
-                &chrome,
+            cancel_syntax_on_unmount(
+                paint_slot(
+                    root.font_family("monospace")
+                        .text_size(14.0)
+                        .accesskit_role("group"),
+                    "text-view",
+                    &chrome,
+                ),
+                vec![syntax],
             ),
             document_signal,
         )
@@ -240,6 +351,9 @@ plain [] selectable: Option<bool>,
 plain [] row_height: Option<f32>,
 plain [] viewport_h: Option<f32>,
 plain [] overscan: Option<usize>,
+plain [] cursor: Option<CursorValue>,
+plain [] highlights: Option<Vec<TextDecoration>>,
+plain [] language: Option<String>,
 plain [] children: Option<crate::core::tree::Element>,
 ) -> Element {
     let mut builder = text_view(id)
@@ -259,6 +373,15 @@ plain [] children: Option<crate::core::tree::Element>,
     }
     if let Some(lines) = overscan {
         builder = builder.overscan(lines);
+    }
+    if let Some(cursor) = cursor {
+        builder = builder.cursor(cursor);
+    }
+    if let Some(highlights) = highlights {
+        builder = builder.highlights(highlights);
+    }
+    if let Some(language) = language {
+        builder = builder.language(language);
     }
     builder.into()
 }

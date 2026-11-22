@@ -299,6 +299,14 @@ pub fn collapsible_scope(
 
 /// 宏 `<CollapsibleContent>`：按 Root `open` 显隐 + 进出场过渡。
 pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
+    collapsible_content_with_spring(None, body)
+}
+
+/// Physical reveal on the shared collapse lifecycle; `None` uses keyframes.
+pub fn collapsible_content_with_spring(
+    reveal_spring: Option<crate::style::SpringPhysics>,
+    body: impl Fn() -> Element + 'static,
+) -> Element {
     let ctx = require_collapsible("CollapsibleContent");
     let open_sig = ctx.open;
     let menu_id = ctx.id.clone();
@@ -306,6 +314,7 @@ pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
     let effect_anchor = anchor.clone();
     let presence = use_collapse_panel_presence(&format!("{menu_id}:presence"));
     let sync_presence = presence.clone();
+    presence.set_reveal_spring(reveal_spring);
     let mounted = presence.mounted();
     sync_collapse_panel_open(open_sig, &presence);
     let open_presence = presence.clone();
@@ -327,7 +336,8 @@ pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
                 .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
             return hidden;
         }
-        let mut body = body();
+        // Release raw content state and cleanup with this mounted generation.
+        let mut body = crate::core::reactivity::component_root(&body);
         if body.attrs.get("jadix_fragment").map(|s| s.as_str()) == Some("1") {
             let kids = std::mem::take(&mut body.children);
             body = vstack().w("100%").min_w(0.0).children(kids).into();
@@ -497,10 +507,12 @@ CollapsibleContentProps [];
 #[allow(non_snake_case)]
 pub fn CollapsibleContent(
 plain [] children: Option<Element>,
+plain [] reveal_spring: Option<crate::style::SpringPhysics>,
 ) -> Element {
     let ctx = require_collapsible("CollapsibleContent");
     let open_sig = ctx.open;
     let presence = use_collapse_panel_presence(&format!("{}:presence", ctx.id));
+    presence.set_reveal_spring(reveal_spring);
     sync_collapse_panel_open(open_sig, &presence);
 
     let mut body = children.unwrap_or_default();
@@ -680,12 +692,59 @@ impl_simple_slot_builder!(
     CollapsibleTrigger,
     CollapsibleTriggerProps
 );
-impl_simple_slot_builder!(
-    CollapsibleContentSlotBuilder,
-    collapsible_content_slot,
-    CollapsibleContent,
-    CollapsibleContentProps
-);
+pub struct CollapsibleContentSlotBuilder {
+    children: Vec<Element>,
+    chrome: SlotChrome,
+    reveal_spring: Option<crate::style::SpringPhysics>,
+}
+
+pub fn collapsible_content_slot() -> CollapsibleContentSlotBuilder {
+    CollapsibleContentSlotBuilder {
+        children: Vec::new(),
+        chrome: SlotChrome::default(),
+        reveal_spring: None,
+    }
+}
+
+impl CollapsibleContentSlotBuilder {
+    impl_slot_chrome_methods!();
+
+    /// Animate height with physical spring settling and velocity-preserving reversal.
+    pub fn reveal_spring(mut self, physics: crate::style::SpringPhysics) -> Self {
+        self.reveal_spring = Some(physics);
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children
+            .extend(crate::utils::take_packed(child.into()));
+        self
+    }
+
+    pub fn text(mut self, text: impl Into<String>) -> Self {
+        self.children.push(Element::new().text(text.into()));
+        self
+    }
+}
+
+impl From<CollapsibleContentSlotBuilder> for Element {
+    fn from(builder: CollapsibleContentSlotBuilder) -> Self {
+        let el = CollapsibleContent(CollapsibleContentProps {
+            children: crate::authoring::packed_children(builder.children),
+            reveal_spring: builder.reveal_spring,
+            base: None,
+        });
+        builder
+            .chrome
+            .apply(crate::style::apply_stylesheet_rules(el))
+    }
+}
+
+impl crate::core::tree::IntoElementList for CollapsibleContentSlotBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
 
 impl From<CollapsibleBuilder> for Element {
     fn from(builder: CollapsibleBuilder) -> Self {

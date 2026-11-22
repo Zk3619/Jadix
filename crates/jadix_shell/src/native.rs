@@ -86,6 +86,7 @@ impl<Host: PlatformHost> NativeMount<Host> {
             .present(&mut candidate.roots, viewport, environment)
             .map_err(MountError::Host)?;
         self.projection.accept(candidate)?;
+        if let Some(node) = self.projection.take_focus_request() { self.root.focus(Some(node)).map_err(MountError::Host)?; }
         Ok(stats)
     }
     pub fn poll(&mut self, session: &Session) -> Result<Vec<EventDelivery>, MountError> {

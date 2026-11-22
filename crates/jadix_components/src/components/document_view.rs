@@ -9,9 +9,35 @@ use crate::components::text_view::redraw_on_snapshot;
 use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
 use crate::style::TextSpan;
-use crate::text::{Document, DocumentBlock, DocumentBlockKind, DocumentInline, DocumentInlineKind};
+use crate::text::{
+    document_inline_spans, is_safe_document_destination, Document, DocumentBlock,
+    DocumentBlockKind, DocumentInline, DocumentInlineKind,
+};
 
 pub type DocumentBlockRenderer = Rc<dyn Fn(&Document, &DocumentBlock) -> Option<Element>>;
+
+/// A controlled task change request against the current document snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DocumentTaskToggle {
+    pub block_id: u64,
+    pub revision: u64,
+    pub source: std::ops::Range<usize>,
+    pub checked: bool,
+}
+
+pub type DocumentTaskHandler = Rc<dyn Fn(DocumentTaskToggle)>;
+pub type DocumentLinkHandler = Rc<dyn Fn(&str)>;
+
+/// A view-local link hover transition. `None` dismisses the host's preview.
+/// Coordinates are window logical pixels; the component does not fetch the URL.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DocumentLinkHover {
+    pub view_id: String,
+    pub href: Option<String>,
+    pub position: [f32; 2],
+}
+
+pub type DocumentLinkHoverHandler = Rc<dyn Fn(DocumentLinkHover)>;
 
 pub(crate) fn is_table_separator(document: &Document, block: &DocumentBlock) -> bool {
     block.kind == DocumentBlockKind::Syntax
@@ -35,6 +61,9 @@ pub fn document_view(id: impl Into<String>) -> DocumentViewBuilder {
         viewport_h: 480.0,
         overscan: 3,
         renderer: None,
+        on_task_toggle: None,
+        on_link: None,
+        on_link_hover: None,
         selectable: true,
         asset_root: None,
         chrome: SlotChrome::default(),
@@ -48,6 +77,9 @@ pub struct DocumentViewBuilder {
     viewport_h: f32,
     overscan: usize,
     renderer: Option<DocumentBlockRenderer>,
+    on_task_toggle: Option<DocumentTaskHandler>,
+    on_link: Option<DocumentLinkHandler>,
+    on_link_hover: Option<DocumentLinkHoverHandler>,
     selectable: bool,
     asset_root: Option<std::path::PathBuf>,
     chrome: SlotChrome,
@@ -80,6 +112,24 @@ impl DocumentViewBuilder {
         self.selectable = selectable;
         self
     }
+    /// Enable focusable task checkboxes. The application owns document updates;
+    /// requests identify a live block rather than its virtual row position.
+    pub fn on_task_toggle(mut self, handler: impl Fn(DocumentTaskToggle) + 'static) -> Self {
+        self.on_task_toggle = Some(Rc::new(handler));
+        self
+    }
+    /// Activate an inline destination. The application decides how to navigate.
+    pub fn on_link(mut self, handler: impl Fn(&str) + 'static) -> Self {
+        self.on_link = Some(Rc::new(handler));
+        self
+    }
+
+    /// Observe link changes for a host-owned preview, scoped to this view ID.
+    /// Plain text, pointer leave/press and unmount dismiss an active preview.
+    pub fn on_link_hover(mut self, handler: impl Fn(DocumentLinkHover) + 'static) -> Self {
+        self.on_link_hover = Some(Rc::new(handler));
+        self
+    }
     pub fn block_renderer(
         mut self,
         renderer: impl Fn(&Document, &DocumentBlock) -> Option<Element> + 'static,
@@ -90,54 +140,19 @@ impl DocumentViewBuilder {
 }
 
 pub(crate) fn inline_spans(inlines: &[DocumentInline]) -> Vec<TextSpan> {
-    inlines
-        .iter()
-        .map(|inline| {
-            let mut span = TextSpan::new(&inline.text);
-            if inline.style.bold {
-                span = span.weight(700);
+    let mut spans = document_inline_spans(inlines);
+    for (inline, span) in inlines.iter().zip(&mut spans) {
+        if inline.style.code {
+            span.padding_x = 2.0;
+            if inline.style.background.is_none() {
+                span.background = Some(crate::style::parse_text_color("muted"));
             }
-            if inline.style.italic {
-                span = span.italic();
-            }
-            if let Some(color) = inline.style.color {
-                span = span.color(color);
-            }
-            if let Some(background) = inline.style.background {
-                span = span.background(background);
-            }
-            if let Some(size) = inline.style.font_size {
-                span = span.size(f32::from(size).clamp(8.0, 96.0));
-            }
-            if inline.style.code {
-                span = span
-                    .monospace()
-                    .background(crate::style::parse_text_color("muted"))
-                    .padding_x(2.0);
-            }
-            if let Some(link) = &inline.style.link {
-                if safe_destination(link) {
-                    span = span
-                        .underline()
-                        .color(crate::style::parse_text_color("primary"))
-                        .href(link);
-                }
-            }
-            span
-        })
-        .collect()
-}
-
-fn safe_destination(destination: &str) -> bool {
-    let normalized = destination.trim().to_ascii_lowercase();
-    if normalized.chars().any(|character| character.is_control()) {
-        return false;
+        }
+        if span.href.is_some() {
+            span.color = Some(crate::style::parse_text_color("primary"));
+        }
     }
-    !normalized.contains(':')
-        || normalized.starts_with("https:")
-        || normalized.starts_with("http:")
-        || normalized.starts_with("mailto:")
-        || normalized.starts_with("data:image/")
+    spans
 }
 
 fn text_leaf(inlines: &[DocumentInline], size: f32) -> Element {
@@ -157,7 +172,6 @@ fn render_inlines(
 ) -> Element {
     if inlines.iter().all(|inline| {
         inline.kind == DocumentInlineKind::Text
-            && !inline.style.strike
             && !inline.style.superscript
             && !inline.style.subscript
     }) {
@@ -174,7 +188,7 @@ fn render_inlines(
         let element = match &inline.kind {
             DocumentInlineKind::Math => math_view(&inline.text).font_size(size).into(),
             DocumentInlineKind::Image { destination, title }
-                if safe_destination(destination)
+                if is_safe_document_destination(destination)
                     || std::path::Path::new(destination).is_absolute() =>
             {
                 let destination =
@@ -239,9 +253,6 @@ fn render_inlines(
                     // container width. Keep one span so padding is not added per glyph.
                     leaf = leaf.w(width).min_w(0.0).max_w("100%");
                 }
-                if inline.style.strike {
-                    leaf = leaf.text_decoration("line-through");
-                }
                 if inline.style.superscript {
                     leaf = leaf.text_size(size * 0.75).translate(0.0, -size * 0.25);
                 }
@@ -261,6 +272,7 @@ pub(crate) fn render_document_block(
     block: &DocumentBlock,
     renderer: &Option<DocumentBlockRenderer>,
     asset_root: Option<&std::path::Path>,
+    task: Option<Element>,
 ) -> Element {
     if let Some(custom) = renderer
         .as_ref()
@@ -333,20 +345,7 @@ pub(crate) fn render_document_block(
             checked,
         } => {
             let marker_element = if let Some(checked) = checked {
-                let mut checkbox = Element::new()
-                    .w(16.0)
-                    .h(16.0)
-                    .min_w(16.0)
-                    .mt(4.0)
-                    .rounded(3.0)
-                    .border("muted-foreground", 1.0)
-                    .text(if *checked { "✓" } else { "" })
-                    .text_size(13.0)
-                    .text_align("center")
-                    .text_leading(1.0);
-                checkbox.set_attr("accesskit_role", "checkbox");
-                checkbox.set_attr("aria-checked", checked.to_string());
-                checkbox
+                task.unwrap_or_else(|| task_checkbox(*checked, &block.text()))
             } else {
                 Element::new()
                     .text(marker)
@@ -532,13 +531,59 @@ impl From<DocumentViewBuilder> for Element {
             active: None,
         });
         let selection_id = id.clone();
+        let task_source = source.clone();
         let render = Rc::new(
             move |surface: &DocumentSurface, index: usize, _width: f32, _active: bool| {
+                let document_block = &surface.document.blocks()[index];
+                let task = match (&document_block.kind, &builder.on_task_toggle) {
+                    (
+                        DocumentBlockKind::ListItem {
+                            checked: Some(checked),
+                            ..
+                        },
+                        Some(handler),
+                    ) => {
+                        let block_id = document_block.id;
+                        let source = task_source.clone();
+                        let handler = handler.clone();
+                        let mut checkbox = task_checkbox(*checked, &document_block.text())
+                            .focus_id(format!("document:{selection_id}:task:{block_id}"))
+                            .focusable(true)
+                            .cursor("pointer")
+                            .on_click(move || {
+                                if signal.is_some_and(|signal| signal.try_peek().is_none()) {
+                                    return;
+                                }
+                                let document = source().document;
+                                let Some(block) =
+                                    document.blocks().iter().find(|block| block.id == block_id)
+                                else {
+                                    return;
+                                };
+                                if let DocumentBlockKind::ListItem {
+                                    checked: Some(checked),
+                                    ..
+                                } = block.kind
+                                {
+                                    handler(DocumentTaskToggle {
+                                        block_id,
+                                        revision: document.revision(),
+                                        source: block.source.clone(),
+                                        checked: !checked,
+                                    });
+                                }
+                            });
+                        checkbox.set_attr("aria-readonly", "false");
+                        Some(checkbox)
+                    }
+                    _ => None,
+                };
                 let mut block = render_document_block(
                     &surface.document,
                     &surface.document.blocks()[index],
                     &builder.renderer,
                     builder.asset_root.as_deref(),
+                    task,
                 );
                 if builder.selectable {
                     make_selectable(
@@ -561,7 +606,55 @@ impl From<DocumentViewBuilder> for Element {
             render,
             None,
         );
-        redraw_on_snapshot(paint_slot(root, "document-view", &builder.chrome), signal)
+        let mut root = paint_slot(root, "document-view", &builder.chrome);
+        if let Some(on_link) = builder.on_link {
+            root = root.on_text_link(move |event| {
+                if let Some(link) = &event.text_link {
+                    on_link(&link.href);
+                    event.stop_propagation();
+                }
+            });
+        }
+        if let Some(on_hover) = builder.on_link_hover {
+            let active = Rc::new(std::cell::Cell::new(false));
+            let position = Rc::new(std::cell::Cell::new([0.0; 2]));
+            root = root.on_text_link_hover({
+                let on_hover = on_hover.clone();
+                let id = id.clone();
+                let active = active.clone();
+                let position = position.clone();
+                move |event| {
+                    let href = event
+                        .hovered_text_link
+                        .as_ref()
+                        .map(|link| link.href.clone());
+                    if href.is_none() && !active.get() {
+                        return;
+                    }
+                    active.set(href.is_some());
+                    position.set([event.x, event.y]);
+                    on_hover(DocumentLinkHover {
+                        view_id: id.clone(),
+                        href,
+                        position: position.get(),
+                    });
+                }
+            });
+            let previous = root.on_unmount.take();
+            root = root.on_unmount(move || {
+                if active.replace(false) {
+                    on_hover(DocumentLinkHover {
+                        view_id: id.clone(),
+                        href: None,
+                        position: position.get(),
+                    });
+                }
+                if let Some(previous) = previous {
+                    previous.fire();
+                }
+            });
+        }
+        redraw_on_snapshot(root, signal)
     }
 }
 
@@ -575,6 +668,9 @@ plain [] value: Option<Signal<Document>>,
 plain [] text: Option<String>,
 plain [] viewport_h: Option<f32>,
 plain [] selectable: Option<bool>,
+plain [] on_task_toggle: Option<DocumentTaskHandler>,
+plain [] on_link: Option<DocumentLinkHandler>,
+plain [] on_link_hover: Option<DocumentLinkHoverHandler>,
 plain [] children: Option<crate::core::tree::Element>,
 ) -> Element {
     let mut builder = document_view(id);
@@ -593,8 +689,30 @@ plain [] children: Option<crate::core::tree::Element>,
     if let Some(selectable) = selectable {
         builder = builder.selectable(selectable);
     }
+    builder.on_task_toggle = on_task_toggle;
+    builder.on_link = on_link;
+    builder.on_link_hover = on_link_hover;
     builder.into()
 }
+}
+
+fn task_checkbox(checked: bool, label: &str) -> Element {
+    let mut checkbox = Element::new()
+        .w(16.0)
+        .h(16.0)
+        .min_w(16.0)
+        .mt(4.0)
+        .rounded(3.0)
+        .border("muted-foreground", 1.0)
+        .text(if checked { "✓" } else { "" })
+        .text_size(13.0)
+        .text_align("center")
+        .text_leading(1.0);
+    checkbox.set_attr("accesskit_role", "checkbox");
+    checkbox.set_attr("aria-checked", checked.to_string());
+    checkbox.set_attr("aria-readonly", "true");
+    checkbox.set_attr("aria-label", label);
+    checkbox
 }
 
 fn make_selectable(element: &mut Element, prefix: &str, counter: &mut usize) {

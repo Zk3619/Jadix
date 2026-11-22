@@ -191,11 +191,10 @@ pub fn tooltip_bubble(mut body: Element) -> Element {
         .border_color(tokens::border())
         .popup_shadow();
     if is_text_leaf(&body) {
-        let t = body.text.clone().unwrap_or_default();
-        body = text(t)
-            .size(12.0)
-            .color(parse_text_color("popover-foreground"))
-            .into();
+        body.text_style.size.get_or_insert(12.0);
+        body.text_style
+            .color
+            .get_or_insert(parse_text_color("popover-foreground"));
     }
     panel.set_attr("data-slot", "tooltip-content");
     crate::style::apply_stylesheet_rules(panel.child(body))
@@ -224,7 +223,9 @@ fn chain_trigger_hover(el: Element, ctx: TooltipCtx, focus_id: String) -> Elemen
     let trigger_hovered = ctx.trigger_hovered;
     let open = ctx.open;
     create_effect(move || {
-        let is_keyboard_focused = focus_visible.get() && focused_id.get() == focus_id;
+        let is_keyboard_focused = focus_visible.get()
+            && focused_id.get() == focus_id
+            && !crate::utils::roving::is_restored_focus(&focus_id);
         let was_keyboard_focused = keyboard_focused.peek();
         set_hovered(keyboard_focused, is_keyboard_focused);
         if is_keyboard_focused && !was_keyboard_focused {
@@ -350,15 +351,16 @@ plain [] children: Option<Element>,
             .into();
             chain_trigger_hover(el, ctx, trigger_id)
         }
-        Some(c) if is_text_leaf(&c) => {
-            let t = c.text.clone().unwrap_or_default();
-            let mut el: Element = interactive(label(trigger_id.as_str()).text(t).into())
-                .focus_id(trigger_id.as_str())
-                .focusable(true)
-                .into();
-            chain_trigger_hover(el, ctx, trigger_id)
-        }
         Some(mut c) => {
+            if is_text_leaf(&c) {
+                c.text_style.size.get_or_insert(14.0);
+                c.text_style.weight.get_or_insert(500);
+                c.text_style.color.get_or_insert(parse_text_color("foreground"));
+                if !c.text_style.line_height_specified() {
+                    c = c.text_leading_none();
+                }
+                c = c.focusable(true);
+            }
             if c.focus_id.is_none() {
                 c = c.focus_id(trigger_id.as_str());
             }

@@ -114,6 +114,8 @@ pub struct DesignTokens {
     pub code_foreground: [f32; 4],
     pub code_highlight: [f32; 4],
     pub code_number: [f32; 4],
+    /// Foreground for search matches in text and lists (`match-foreground`).
+    pub match_foreground: [f32; 4],
     /// I-beam fill (`caret` / `caret-color`). Defaults to `foreground`.
     pub caret: [f32; 4],
     /// Selected-range fill (`selection-background`; alias `selection`).
@@ -232,6 +234,7 @@ impl Theme {
                 code_foreground: foreground,
                 code_highlight: oklch_to_display_srgba(0.96, 0.0, 0.0, 1.0),
                 code_number: oklch_to_display_srgba(0.56, 0.0, 0.0, 1.0),
+                match_foreground: tw_600(37, 99, 235),
                 caret: foreground,
                 selection_background: foreground,
                 selection_foreground: background,
@@ -300,6 +303,7 @@ impl Theme {
                 code_foreground: surface_fg,
                 code_highlight: oklch_to_display_srgba(0.27, 0.0, 0.0, 1.0),
                 code_number: oklch_to_display_srgba(0.72, 0.0, 0.0, 1.0),
+                match_foreground: tw_600(96, 165, 250),
                 caret: foreground,
                 selection_background: oklch_to_display_srgba(0.922, 0.0, 0.0, 1.0),
                 selection_foreground: oklch_to_display_srgba(0.205, 0.0, 0.0, 1.0),

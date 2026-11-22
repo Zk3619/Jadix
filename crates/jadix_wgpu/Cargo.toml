@@ -30,6 +30,8 @@
 ["features"]
 # Public compute pipeline/pass entry points; backend capability is still checked at runtime.
 "compute" = []
+# CPU-only WGSL validation and GLES emission, shared by native adapters.
+"shader-translation" = ["naga-ir", "wgsl", "glsl", "std"]
 "angle" = ["dep:arrayvec", "dep:bytemuck", "dep:glow", "dep:glutin_wgl_sys", "dep:js-sys", "dep:khronos-egl", "dep:libloading", "dep:ndk-sys", "dep:objc2", "dep:parking_lot", "dep:profiling", "dep:renderdoc-sys", "dep:wasm-bindgen", "dep:wayland-sys", "dep:web-sys", "dep:windows", "dep:windows-result", "js-sys/std", "khronos-egl/dynamic", "khronos-egl/no-pkg-config", "khronos-egl/static", "wayland-sys/client", "wayland-sys/dlopen", "wayland-sys/egl", "web-sys/HtmlCanvasElement", "web-sys/HtmlImageElement", "web-sys/HtmlVideoElement", "web-sys/ImageBitmap", "web-sys/ImageData", "web-sys/OffscreenCanvas", "web-sys/VideoFrame", "web-sys/WebGl2RenderingContext", "web-sys/Window", "web-sys/default", "web-sys/std", "windows-result/std", "windows/Win32_Graphics_Gdi", "windows/Win32_Graphics_OpenGL", "windows/Win32_System_LibraryLoader", "windows/Win32_UI_WindowsAndMessaging"]
 "counters" = []
 "custom" = []

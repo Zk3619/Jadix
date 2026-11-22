@@ -95,7 +95,13 @@ fn builder_renders_items() {
     let (_h, el): (_, Element) = create_root(|| {
         accordion("acc-b")
             .default_value(vec!["x".into()])
-            .item("x", "Q", || Element::new().text("A"))
+            .item_with("x", |item| {
+                item.trigger("Q").content_with(|content| {
+                    content
+                        .reveal_spring(crate::style::SpringPhysics::default_css())
+                        .child(Element::new().text("A"))
+                })
+            })
             .into()
     });
     assert_eq!(el.template_id.as_deref(), Some("acc-b"));
@@ -281,4 +287,103 @@ fn grid_fr_enter_does_not_wait_for_used_height() {
         let used = first_track_fr(&el.style.grid_template_rows).unwrap_or(-1.0);
         assert!(used < 0.05, "tick(0) must leave used at 0fr, got {used}");
     });
+}
+
+#[test]
+fn mounted_content_survives_sibling_toggles_and_exit_reversal() {
+    use crate::app::reactive::reset_registered_anchors;
+    use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+    use crate::core::reactivity::{mark_next_effect_as_ui_root, on_cleanup, Signal};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+
+    for (mode, spring) in [
+        ("keyframes", None),
+        ("spring", Some(crate::style::SpringPhysics::default_css())),
+    ] {
+        reset_registered_anchors();
+        let live = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+        let builds = Rc::new([Cell::new(0), Cell::new(0)]);
+        let cleanups = Rc::new([Cell::new(0), Cell::new(0)]);
+        let observed = Rc::new(Cell::new(0));
+        let local = Rc::new(RefCell::new(None::<Signal<i32>>));
+        let id = format!("acc_retained_{mode}");
+        let key = format!("{id}:presence:a");
+        mark_next_effect_as_ui_root();
+        let (owner, open) = create_root(|| {
+            let open = use_signal(&format!("{id}::open"), || vec!["a".into()]);
+            let builds = Rc::clone(&builds);
+            let cleanups = Rc::clone(&cleanups);
+            let observed = Rc::clone(&observed);
+            let local = Rc::clone(&local);
+            create_effect(move || {
+                let tree = accordion_scope(&id, Some(open), Vec::new(), true, false, || {
+                    Element::new().children(
+                        ["a", "b"]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, value)| {
+                                let builds = Rc::clone(&builds);
+                                let cleanups = Rc::clone(&cleanups);
+                                let observed = Rc::clone(&observed);
+                                let local = Rc::clone(&local);
+                                accordion_item_scope(value, false, || {
+                                    accordion_content_with_spring(spring, move || {
+                                        builds[i].set(builds[i].get() + 1);
+                                        let cleanups = Rc::clone(&cleanups);
+                                        on_cleanup(move || cleanups[i].set(cleanups[i].get() + 1));
+                                        if i == 0 {
+                                            let state = Signal::new(0);
+                                            *local.borrow_mut() = Some(state);
+                                            let observed = Rc::clone(&observed);
+                                            create_effect(move || observed.set(state.get()));
+                                        }
+                                        Element::new().text(value)
+                                    })
+                                })
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                });
+                *live.borrow_mut() = tree;
+            });
+            open
+        });
+        let presence = use_accordion_panel_presence(&key);
+        assert_eq!([builds[0].get(), builds[1].get()], [1, 0], "{mode}");
+        let state = local.borrow().unwrap();
+        open.set(vec!["a".into(), "b".into()]);
+        assert_eq!(
+            [builds[0].get(), builds[1].get()],
+            [1, 1],
+            "sibling toggle: {mode}"
+        );
+        open.set(vec!["b".into()]);
+        assert_eq!(presence.phase(), PresencePhase::Exiting);
+        open.set(vec!["a".into(), "b".into()]);
+        assert_eq!(builds[0].get(), 1, "exit reversal: {mode}");
+        assert_eq!(cleanups[0].get(), 0, "still-mounted owner: {mode}");
+        state.set(7);
+        assert_eq!(observed.get(), 7, "child observer remains live: {mode}");
+        open.set(vec!["b".into()]);
+        presence.finish_exit();
+        crate::utils::collapse_panel::tick_collapse_panel_presence();
+        assert!(!presence.mounted().peek());
+        assert_eq!(cleanups[0].get(), 1, "settled exit disposes child: {mode}");
+        assert!(
+            !state.is_alive(),
+            "settled exit releases child state: {mode}"
+        );
+        open.set(vec!["a".into(), "b".into()]);
+        assert_eq!(builds[0].get(), 2, "reopen mounts new child: {mode}");
+        assert_eq!(builds[1].get(), 1, "other item stays mounted: {mode}");
+        assert_eq!(local.borrow().unwrap().peek(), 0, "fresh child: {mode}");
+        drop(owner);
+        assert_eq!([cleanups[0].get(), cleanups[1].get()], [2, 1], "{mode}");
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
 }

@@ -3,6 +3,103 @@
 use jadix_components::prelude::*;
 
 #[test]
+fn tree_physical_reveal_rsx_and_builders_share_presence_configuration() {
+    use jadix_components::core::reactivity::{create_root, use_signal};
+    use jadix_components::style::SpringPhysics;
+    use std::collections::HashSet;
+
+    let (_owner, ()) = create_root(|| {
+        let spring = SpringPhysics::default_css();
+        let expanded = use_signal("spring-trees-expanded", || HashSet::from(["parent".into()]));
+        let _roots: Element = tree_view("spring-tree-roots")
+            .variant("collapsible")
+            .reveal_spring(spring)
+            .expanded_signal(expanded)
+            .expanded_storage_key("spring-trees-expanded")
+            .roots([
+                tree_node("parent", "Parent").children([tree_node("nested", "Nested").children([
+                    tree_node("inner", "Inner").children([tree_node("leaf", "Leaf")]),
+                ])]),
+            ])
+            .into();
+        let _child = tree_view("spring-tree-child")
+            .variant("collapsible")
+            .reveal_spring(spring)
+            .expanded_signal(expanded)
+            .expanded_storage_key("spring-trees-expanded")
+            .child(|| {
+                ui! {
+                    <TreeViewItem id="parent" label="Parent">
+                        <TreeViewItem id="nested" label="Nested">
+                            <TreeViewItem id="inner" label="Inner">
+                                <TreeViewItem id="leaf" label="Leaf" />
+                            </TreeViewItem>
+                        </TreeViewItem>
+                    </TreeViewItem>
+                }
+            });
+        let _rsx = ui! {
+            <TreeView id="spring-tree-rsx" variant="collapsible" revealSpring={spring}
+                expandedSignal={expanded} expandedStorageKey="spring-trees-expanded">
+                <TreeViewItem id="parent" label="Parent">
+                    <TreeViewItem id="nested" label="Nested">
+                        <TreeViewItem id="inner" label="Inner">
+                            <TreeViewItem id="leaf" label="Leaf" />
+                        </TreeViewItem>
+                    </TreeViewItem>
+                </TreeViewItem>
+            </TreeView>
+        };
+        for tree in ["spring-tree-roots", "spring-tree-child", "spring-tree-rsx"] {
+            assert!(
+                jadix_components::utils::use_collapse_panel_presence(&format!(
+                    "{tree}::parent:presence"
+                ))
+                .has_reveal_spring(),
+                "missing spring for {tree}"
+            );
+        }
+    });
+}
+
+#[test]
+fn physical_reveal_rsx_and_builders_share_presence_configuration() {
+    use jadix_components::core::reactivity::create_root;
+    use jadix_components::style::SpringPhysics;
+    let (_owner, ()) = create_root(|| {
+        let spring = SpringPhysics::default_css();
+        let _collapsible: Element = collapsible("spring-builder-col")
+            .content_with(move |content| content.reveal_spring(spring).text("Body"))
+            .into();
+        let _accordion: Element = accordion("spring-builder-acc")
+            .item_with("one", move |item| {
+                item.content_with(|content| content.reveal_spring(spring).text("Body"))
+            })
+            .into();
+        let _rsx = ui! {
+            <VStack>
+                <Collapsible id="spring-rsx-col">
+                    <CollapsibleContent reveal_spring={spring}>"Body"</CollapsibleContent>
+                </Collapsible>
+                <Accordion id="spring-rsx-acc">
+                    <AccordionItem value="one">
+                        <AccordionContent reveal_spring={spring}>"Body"</AccordionContent>
+                    </AccordionItem>
+                </Accordion>
+            </VStack>
+        };
+        for key in [
+            "spring-builder-col:presence",
+            "spring-rsx-col:presence",
+            "spring-builder-acc:presence:one",
+            "spring-rsx-acc:presence:one",
+        ] {
+            assert!(jadix_components::utils::use_collapse_panel_presence(key).has_reveal_spring());
+        }
+    });
+}
+
+#[test]
 fn slider_accessibility_value_clamps_steps_and_syncs_without_remount() {
     use jadix_components::core::reactivity::{create_root, create_signal};
     use jadix_components::layout::LayoutTree;

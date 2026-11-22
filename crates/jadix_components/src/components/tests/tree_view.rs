@@ -170,8 +170,9 @@ fn collapsible_tree_exclusive_false_keeps_sibling_open() {
             s.insert("docs".into());
             s
         });
-        let _: Element = tree_view("tv_col_multi")
+        let _tree: Element = tree_view("tv_col_multi")
             .variant("collapsible")
+            .reveal_spring(SpringPhysics::default_css())
             .height(160.0)
             .expanded_storage_key(expanded_key)
             .roots(sample_workspace_tree())
@@ -186,6 +187,10 @@ fn collapsible_tree_exclusive_false_keeps_sibling_open() {
         assert_eq!(
             sibling_open, 2,
             "default collapsible must keep sibling folders open, set={set:?}"
+        );
+        assert!(
+            crate::utils::use_collapse_panel_presence("tv_col_multi::root:presence")
+                .has_reveal_spring()
         );
     });
 }
@@ -490,6 +495,7 @@ fn emit_select_writes_selected_signal() {
             exclusive: false,
             chrome: TreeViewChrome::Default,
             selected: Some(sel),
+            reveal_spring: None,
         };
         emit_select(&ctx, "leaf");
         assert_eq!(sel.try_peek().as_deref(), Some("leaf"));
@@ -509,8 +515,50 @@ fn dual_surface_compiles_shape() {
         exclusive: None,
         chrome: None,
         selected: None,
+        reveal_spring: None,
         children: None,
         base: None,
     });
     let _: Element = el;
+}
+
+#[test]
+fn physical_reveal_reaches_late_nested_branches() {
+    use crate::app::reactive::reset_registered_anchors;
+    use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+    use crate::core::reactivity::mark_next_effect_as_ui_root;
+    use std::{cell::RefCell, rc::Rc};
+
+    reset_registered_anchors();
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    mark_next_effect_as_ui_root();
+    let (_owner, expanded) = create_root(|| {
+        let expanded = use_signal("tv_spring_late::expanded", HashSet::<String>::new);
+        create_effect(move || {
+            let tree: Element = tree_view("tv_spring_late")
+                .variant("collapsible")
+                .reveal_spring(SpringPhysics::default_css())
+                .expanded_storage_key("tv_spring_late::expanded")
+                .roots(sample_workspace_tree())
+                .into();
+            *live.borrow_mut() = tree;
+        });
+        expanded
+    });
+    assert!(
+        crate::utils::use_collapse_panel_presence("tv_spring_late::root:presence")
+            .has_reveal_spring()
+    );
+    // src/docs do not exist until the initially closed root opens.
+    expanded.set(HashSet::from(["root".into()]));
+    for node in ["src", "docs"] {
+        assert!(
+            crate::utils::use_collapse_panel_presence(&format!("tv_spring_late::{node}:presence"))
+                .has_reveal_spring(),
+            "missing spring for {node}"
+        );
+    }
+    clear_test_reconcile_root();
+    reset_registered_anchors();
 }

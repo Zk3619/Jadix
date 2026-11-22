@@ -1,5 +1,5 @@
 use jadix_components::components::{
-    scroll_viewport, scrollbar, ScrollViewportBuilder, ScrollbarBuilder, ScrollbarOrientation,
+    ScrollViewportBuilder, ScrollbarBuilder, ScrollbarOrientation, scroll_viewport, scrollbar,
 };
 use jadix_components::core::reactivity::{create_root, use_signal};
 use jadix_components::core::scroll_viewport::{
@@ -10,8 +10,567 @@ use jadix_components::core::scrollbar::scrollbar_visibility_signal_key;
 use jadix_components::core::tree::Element;
 
 #[test]
+fn horizontal_lists_wait_for_width_follow_end_and_reveal_focus_without_y_navigation() {
+    use jadix_components::components::virtual_list::{VirtualListHandle, virtual_list};
+    use jadix_components::core::{scroll_viewport::ScrollViewportSignalKeys, tree::LayoutTree};
+    use std::{cell::Cell, rc::Rc};
+    fn sync(el: &mut Element, layout: &mut LayoutTree) {
+        if let Some(callback) = el.reactive_sync.clone() {
+            callback.run(el, layout);
+        }
+        for child in &mut el.children {
+            sync(child, layout);
+        }
+    }
+    let (_owner, ()) = create_root(|| {
+        for measured in [false, true] {
+            let id = format!("horizontal-focus-{measured}");
+            let count = Rc::new(Cell::new(100));
+            let focus = Rc::new(Cell::new(None));
+            let extent = Rc::new(Cell::new(20.0));
+            let renders = Rc::new(Cell::new(0));
+            let handle = VirtualListHandle::default();
+            let mut builder = virtual_list(&id)
+                .horizontal()
+                .handle(handle.clone())
+                .item_count_fn({
+                    let count = count.clone();
+                    move || count.get()
+                })
+                .focused_index_fn({
+                    let focus = focus.clone();
+                    move || focus.get()
+                })
+                .item_extent_fn({
+                    let extent = extent.clone();
+                    move || extent.get()
+                })
+                .height(40.0)
+                .overscan(0)
+                .initial_scroll_at_end()
+                .follow_end(true)
+                .render_item({
+                    let renders = renders.clone();
+                    move |_| {
+                        renders.set(renders.get() + 1);
+                        Element::new().w(20.0)
+                    }
+                });
+            if measured {
+                builder = builder.measure_rows();
+            }
+            let mut root: Element = builder.into();
+            let keys = ScrollViewportSignalKeys::new(&id);
+            let x = use_signal(&keys.offset_x, || 0.0_f32);
+            let y = use_signal(&keys.offset_y, || 0.0_f32);
+            let width = use_signal(&keys.viewport_w, || 0.0_f32);
+            let mut layout = LayoutTree::new();
+            sync(&mut root, &mut layout);
+            assert!(handle.viewport().is_none());
+            width.set_silent(120.0);
+            sync(&mut root, &mut layout);
+            assert_eq!(x.peek(), 1880.0, "use actual width, not viewport height");
+            count.set(101);
+            sync(&mut root, &mut layout);
+            assert_eq!(x.peek(), 1900.0);
+            focus.set(Some(10));
+            sync(&mut root, &mut layout);
+            assert_eq!(x.peek(), 200.0);
+            assert!(handle.viewport().unwrap().visible.contains(&10));
+            focus.set(None);
+            count.set(102);
+            sync(&mut root, &mut layout);
+            assert_eq!(x.peek(), 200.0, "focus supersedes End ownership");
+            extent.set(40.0);
+            sync(&mut root, &mut layout);
+            assert_eq!(
+                x.peek(),
+                400.0,
+                "retain the anchored item after estimate changes"
+            );
+            assert_eq!(y.peek(), 0.0, "horizontal navigation leaves Y alone");
+            assert!(
+                renders.get() < 35,
+                "no intervening windows are materialized"
+            );
+        }
+    });
+}
+
+#[test]
+fn spaced_virtual_lists_share_navigation_measurement_and_visible_geometry() {
+    use jadix_components::components::virtual_list::{
+        ListScrollAlign, VirtualListHandle, virtual_list,
+    };
+    use jadix_components::core::{scroll_viewport::ScrollViewportSignalKeys, tree::LayoutTree};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+    fn sync(el: &mut Element, layout: &mut LayoutTree) {
+        if let Some(callback) = el.reactive_sync.clone() {
+            callback.run(el, layout);
+        }
+        for child in &mut el.children {
+            sync(child, layout);
+        }
+    }
+    fn measure(el: &mut Element, index: usize, height: f32, dimension: usize) -> bool {
+        if el.attrs.get("__jadix_vlist_row_key") == Some(&format!("i:{index}")) {
+            el.layout_bounds[dimension] = height;
+            return true;
+        }
+        el.children
+            .iter_mut()
+            .any(|child| measure(child, index, height, dimension))
+    }
+    let (_owner, ()) = create_root(|| {
+        for horizontal in [false, true] {
+            for measured in [false, true] {
+                let id = format!("spacing-{horizontal}-{measured}");
+                let count = Rc::new(Cell::new(100_000));
+                let renders = Rc::new(Cell::new(0));
+                let position = Rc::new(RefCell::new(None));
+                let handle = VirtualListHandle::default();
+                let mut builder = virtual_list(&id)
+                    .handle(handle.clone())
+                    .item_count_fn({
+                        let count = count.clone();
+                        move || count.get()
+                    })
+                    .item_extent(20.0)
+                    .item_gap(10.0)
+                    .item_gap(f32::NAN)
+                    .item_gap(-1.0)
+                    .height(80.0)
+                    .overscan(0)
+                    .render_item({
+                        let renders = renders.clone();
+                        move |_| {
+                            renders.set(renders.get() + 1);
+                            if horizontal {
+                                Element::new().w(20.0)
+                            } else {
+                                Element::new().h(20.0)
+                            }
+                        }
+                    })
+                    .on_scroll_position({
+                        let position = position.clone();
+                        move |value| *position.borrow_mut() = value
+                    });
+                if horizontal {
+                    builder = builder.horizontal();
+                }
+                if measured {
+                    builder = builder.measure_rows();
+                }
+                let mut root: Element = builder.into();
+                let keys = ScrollViewportSignalKeys::new(&id);
+                let offset = use_signal(
+                    if horizontal {
+                        &keys.offset_x
+                    } else {
+                        &keys.offset_y
+                    },
+                    || 0.0_f32,
+                );
+                let viewport = use_signal(
+                    if horizontal {
+                        &keys.viewport_w
+                    } else {
+                        &keys.viewport_h
+                    },
+                    || 80.0_f32,
+                );
+                viewport.set_silent(80.0);
+                let mut layout = LayoutTree::new();
+                assert_eq!(handle.row_offset(100_000), Some(2_999_990.0));
+                for (align, expected) in [
+                    (ListScrollAlign::Start, 300.0),
+                    (ListScrollAlign::Center, 270.0),
+                    (ListScrollAlign::End, 240.0),
+                ] {
+                    handle.scroll_to_index(10, align, 0.0);
+                    sync(&mut root, &mut layout);
+                    assert_eq!(offset.peek(), expected);
+                }
+                offset.set_silent(25.0);
+                viewport.set_silent(3.0);
+                sync(&mut root, &mut layout);
+                assert!(handle.viewport().unwrap().visible.is_empty());
+                assert_eq!(*position.borrow(), None);
+                viewport.set_silent(10.0);
+                sync(&mut root, &mut layout);
+                assert_eq!(handle.viewport().unwrap().visible, 1..2);
+                assert_eq!(position.borrow().unwrap().offset, 0.0);
+                viewport.set_silent(80.0);
+                handle.scroll_to_index(10, ListScrollAlign::Center, 0.0);
+                sync(&mut root, &mut layout);
+                if measured {
+                    assert!(measure(&mut root, 10, 60.0, if horizontal { 2 } else { 3 }));
+                    sync(&mut root, &mut layout);
+                    assert_eq!(offset.peek(), 290.0);
+                    assert_eq!(handle.row_offset(11), Some(370.0));
+                    // Reflow invalidates measured widths on a height change (and vice versa).
+                    let cross = if horizontal {
+                        &keys.viewport_h
+                    } else {
+                        &keys.viewport_w
+                    };
+                    use_signal(cross, || 0.0_f32).set_silent(120.0);
+                    sync(&mut root, &mut layout);
+                    assert_eq!(handle.row_offset(11), Some(330.0));
+                }
+                handle.scroll_to_end();
+                sync(&mut root, &mut layout);
+                count.set(100_001);
+                sync(&mut root, &mut layout);
+                assert_eq!(
+                    offset.peek(),
+                    handle.row_offset(100_001).unwrap() as f32 - 80.0
+                );
+                count.set(1);
+                sync(&mut root, &mut layout);
+                assert_eq!(handle.row_offset(1), Some(20.0));
+                assert_eq!(offset.peek(), 0.0);
+                assert!(
+                    renders.get() < 45,
+                    "navigation must mount only bounded destination windows"
+                );
+            }
+        }
+    });
+}
+
+#[test]
+fn virtual_list_navigation_coalesces_waits_for_viewport_and_realigns_measured_rows() {
+    use jadix_components::components::virtual_list::{
+        ListScrollAlign, VirtualListHandle, virtual_list,
+    };
+    use jadix_components::core::{scroll_viewport::ScrollViewportSignalKeys, tree::LayoutTree};
+    use std::{cell::Cell, rc::Rc};
+    fn sync(el: &mut Element, layout: &mut LayoutTree) {
+        if let Some(callback) = el.reactive_sync.clone() {
+            callback.run(el, layout);
+        }
+        for child in &mut el.children {
+            sync(child, layout);
+        }
+    }
+    fn measure(el: &mut Element, index: usize, extent: f32) -> bool {
+        if el.attrs.get("__jadix_vlist_row_key") == Some(&format!("i:{index}")) {
+            el.layout_bounds[3] = extent;
+            return true;
+        }
+        el.children
+            .iter_mut()
+            .any(|child| measure(child, index, extent))
+    }
+    let handle = VirtualListHandle::default();
+    assert!(!handle.scroll_to_end());
+    let (owner, retained) = create_root(|| {
+        for measured in [false, true] {
+            let id = format!("navigation-{measured}");
+            let count = Rc::new(Cell::new(100_000));
+            let renders = Rc::new(Cell::new(0));
+            let queued_in_callback = Rc::new(Cell::new(false));
+            let mut builder = virtual_list(&id)
+                .handle(handle.clone())
+                .item_count_fn({
+                    let count = count.clone();
+                    move || count.get()
+                })
+                .item_height(20.0)
+                .height(80.0)
+                .overscan(1)
+                .render_item({
+                    let renders = renders.clone();
+                    move |i| {
+                        renders.set(renders.get() + 1);
+                        Element::new().text(i.to_string())
+                    }
+                })
+                .on_visible_range_change({
+                    let handle = handle.clone();
+                    let queued = queued_in_callback.clone();
+                    move |range| {
+                        if !measured && range == Some(99_996..100_000) && !queued.replace(true) {
+                            assert!(handle.scroll_to_index(1, ListScrollAlign::Start, 0.0));
+                        }
+                    }
+                });
+            if measured {
+                builder = builder.measure_rows();
+            }
+            let mut root: Element = builder.into();
+            let keys = ScrollViewportSignalKeys::new(&id);
+            let viewport = use_signal(&keys.viewport_h, || 0.0_f32);
+            let offset = use_signal(&keys.offset_y, || 0.0_f32);
+            let target = use_signal(&keys.target_y, || 0.0_f32);
+            let mut layout = LayoutTree::new();
+            viewport.set_silent(0.0);
+            assert!(handle.scroll_to_index(50_000, ListScrollAlign::Start, 0.0));
+            assert!(handle.scroll_to_index(10, ListScrollAlign::Fraction(0.25), 5.0));
+            assert!(!handle.scroll_to_index(0, ListScrollAlign::Fraction(f64::NAN), 0.0));
+            sync(&mut root, &mut layout);
+            assert_eq!(offset.peek(), 0.0);
+            viewport.set_silent(80.0);
+            sync(&mut root, &mut layout);
+            assert_eq!(offset.peek(), 180.0);
+            assert_eq!(target.peek(), 180.0);
+            if measured {
+                assert!(measure(&mut root, 10, 60.0));
+                sync(&mut root, &mut layout);
+                assert_eq!(
+                    offset.peek(),
+                    190.0,
+                    "fraction realigns using the measured target height"
+                );
+                // An explicit user move cancels a pending correction.
+                assert!(handle.scroll_to_index(20, ListScrollAlign::Center, 0.0));
+                sync(&mut root, &mut layout);
+                assert!(measure(&mut root, 20, 60.0));
+                offset.set_silent(50.0);
+                sync(&mut root, &mut layout);
+                assert_eq!(offset.peek(), 50.0);
+            }
+            assert!(
+                renders.get() < 50,
+                "distant queued requests must not mount the intervening rows"
+            );
+            assert!(handle.scroll_to_end());
+            sync(&mut root, &mut layout);
+            assert_eq!(
+                offset.peek(),
+                handle.row_offset(100_000).unwrap() as f32 - 80.0
+            );
+            if !measured {
+                assert!(queued_in_callback.get());
+                sync(&mut root, &mut layout);
+                assert_eq!(
+                    offset.peek(),
+                    20.0,
+                    "callback request survives the current sync"
+                );
+            } else {
+                assert!(measure(&mut root, 99_999, 100.0));
+                sync(&mut root, &mut layout);
+                assert_eq!(
+                    offset.peek(),
+                    handle.row_offset(100_000).unwrap() as f32 - 80.0,
+                    "End remains attached to the measured bottom"
+                );
+            }
+            assert!(handle.scroll_to_index(usize::MAX, ListScrollAlign::End, 0.0));
+            sync(&mut root, &mut layout);
+            count.set(0);
+            assert!(handle.scroll_to_end());
+            sync(&mut root, &mut layout);
+            assert_eq!(offset.peek(), 0.0);
+            drop(root);
+            assert!(!handle.scroll_to_end());
+        }
+        let _retained: Element = virtual_list("disposed-navigation")
+            .handle(handle.clone())
+            .into();
+        // Keep the element beyond owner disposal to distinguish owner from node lifetime.
+        _retained
+    });
+    drop(owner);
+    assert!(!handle.scroll_to_end());
+    drop(retained);
+}
+
+#[test]
+fn virtual_list_viewport_and_page_notifications_share_geometry_and_rearm_after_data_changes() {
+    use jadix_components::components::virtual_list::{VirtualListHandle, virtual_list};
+    use jadix_components::core::scroll_viewport::ScrollViewportSignalKeys;
+    use jadix_components::core::tree::LayoutTree;
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
+
+    fn sync(element: &mut Element, layout: &mut LayoutTree) {
+        if let Some(callback) = element.reactive_sync.clone() {
+            callback.run(element, layout);
+        }
+        for child in &mut element.children {
+            sync(child, layout);
+        }
+    }
+    fn measure_first(element: &mut Element) -> bool {
+        if element
+            .attrs
+            .get("__jadix_vlist_row_key")
+            .map(String::as_str)
+            == Some("k:row-0")
+        {
+            element.layout_bounds[3] = 120.0;
+            return true;
+        }
+        element.children.iter_mut().any(measure_first)
+    }
+    let (_owner, ()) = create_root(|| {
+        for measured in [false, true] {
+            let id = format!("page-notifications-{measured}");
+            let handle = VirtualListHandle::default();
+            let count = Rc::new(Cell::new(100));
+            let revision = Rc::new(Cell::new(0));
+            let key_reads = Rc::new(Cell::new(0));
+            let ranges = Rc::new(RefCell::new(Vec::new()));
+            let end_requests = Rc::new(Cell::new(0));
+            let start_requests = Rc::new(Cell::new(0));
+            assert_eq!(handle.viewport(), None);
+            let mut builder = virtual_list(&id)
+                .handle(handle.clone())
+                .item_count_fn({
+                    let count = count.clone();
+                    move || count.get()
+                })
+                .data_key_fn({
+                    let revision = revision.clone();
+                    move || revision.get().to_string()
+                })
+                .item_key_fn({
+                    let reads = key_reads.clone();
+                    move |i| {
+                        reads.set(reads.get() + 1);
+                        format!("row-{i}")
+                    }
+                })
+                .item_height(20.0)
+                .height(80.0)
+                .overscan(5)
+                .load_more_threshold(0.5)
+                .load_more_threshold(f64::NAN)
+                .on_visible_range_change({
+                    let ranges = ranges.clone();
+                    let handle = handle.clone();
+                    move |range| {
+                        assert_eq!(handle.viewport().map(|v| v.visible), range);
+                        ranges.borrow_mut().push(range);
+                    }
+                })
+                .on_load_more({
+                    let requests = end_requests.clone();
+                    let handle = handle.clone();
+                    let count = count.clone();
+                    move || {
+                        let next = requests.get() + 1;
+                        requests.set(next);
+                        let viewport = handle.viewport().unwrap();
+                        assert_eq!(
+                            handle.row_offset(viewport.item_count),
+                            Some(viewport.total_extent)
+                        );
+                        // Mutating the source inside the callback takes effect next sync.
+                        if next == 3 {
+                            count.set(120);
+                        }
+                    }
+                })
+                .on_load_more_at_start({
+                    let requests = start_requests.clone();
+                    let handle = handle.clone();
+                    move || {
+                        assert!(handle.viewport().unwrap().item_count > 0);
+                        requests.set(requests.get() + 1);
+                    }
+                });
+            if measured {
+                builder = builder.measure_rows();
+            }
+            let mut root: Element = builder.into();
+            let keys = ScrollViewportSignalKeys::new(&id);
+            let offset = use_signal(&keys.offset_y, || 0.0_f32);
+            let viewport = use_signal(&keys.viewport_h, || 0.0_f32);
+            viewport.set_silent(0.0);
+            let mut layout = LayoutTree::new();
+            sync(&mut root, &mut layout);
+            assert_eq!(*ranges.borrow(), vec![None]);
+            assert_eq!(end_requests.get(), 0);
+            assert_eq!(start_requests.get(), 0);
+            viewport.set_silent(80.0);
+            offset.set_silent(205.0);
+            sync(&mut root, &mut layout);
+            assert_eq!(handle.viewport().unwrap().visible, 10..15);
+            assert_eq!(ranges.borrow().last(), Some(&Some(10..15)));
+            let notifications = ranges.borrow().len();
+            offset.set_silent(206.0);
+            sync(&mut root, &mut layout);
+            assert_eq!(
+                ranges.borrow().len(),
+                notifications,
+                "within-row motion must not notify"
+            );
+            assert_eq!(handle.viewport().unwrap().offset, 206.0);
+            assert_eq!(
+                key_reads.get(),
+                100,
+                "stable frames must not rescan all keys"
+            );
+
+            offset.set_silent(1880.0);
+            sync(&mut root, &mut layout);
+            sync(&mut root, &mut layout);
+            assert_eq!(end_requests.get(), 1);
+            revision.set(1);
+            sync(&mut root, &mut layout);
+            sync(&mut root, &mut layout);
+            assert_eq!(
+                end_requests.get(),
+                2,
+                "same-count data replacement rearms once"
+            );
+            assert_eq!(key_reads.get(), 200);
+            offset.set_silent(1000.0);
+            sync(&mut root, &mut layout);
+            offset.set_silent(1920.0);
+            sync(&mut root, &mut layout);
+            assert_eq!(end_requests.get(), 3);
+            assert_eq!(handle.viewport().unwrap().item_count, 100);
+            sync(&mut root, &mut layout);
+            assert_eq!(handle.viewport().unwrap().item_count, 120);
+            assert_eq!(end_requests.get(), 3);
+            assert_eq!(key_reads.get(), 320);
+            count.set(0);
+            sync(&mut root, &mut layout);
+            sync(&mut root, &mut layout);
+            assert_eq!(handle.viewport().unwrap().visible, 0..0);
+            assert_eq!(
+                end_requests.get(),
+                4,
+                "empty measured data can request its first page"
+            );
+            assert_eq!(start_requests.get(), 0);
+            count.set(2);
+            sync(&mut root, &mut layout);
+            sync(&mut root, &mut layout);
+            assert_eq!(start_requests.get(), 1);
+            assert_eq!(end_requests.get(), 5);
+            assert_eq!(handle.viewport().unwrap().visible, 0..2);
+            if measured {
+                assert!(measure_first(&mut root));
+                sync(&mut root, &mut layout);
+                let geometry = handle.viewport().unwrap();
+                assert_eq!(geometry.visible, 0..1, "overscan rows are not viewable");
+                assert_eq!(geometry.total_extent, 140.0);
+                assert_eq!(handle.row_offset(1), Some(120.0));
+                assert_eq!(
+                    end_requests.get(),
+                    5,
+                    "measured rows can leave the load edge"
+                );
+            }
+        }
+    });
+}
+
+#[test]
 fn virtual_list_reports_the_viewport_and_keeps_rows_anchored_when_heights_shrink() {
-    use jadix_components::components::virtual_list::{virtual_list, ListScrollPosition};
+    use jadix_components::components::virtual_list::{ListScrollPosition, virtual_list};
     use jadix_components::core::scroll_viewport::ScrollViewportSignalKeys;
     use jadix_components::core::tree::LayoutTree;
     use std::{
@@ -328,11 +887,13 @@ fn arrow_switches_work_in_both_scroll_component_tags() {
                 <Div w={600.0} h={700.0} />
             </ScrollArea>
         };
-        assert!(jadix_components::core::tree::find_in_tree(&area, |el| el
-            .get_attr("data-slot")
-            .map(String::as_str)
-            == Some("scrollbar-arrow-end"))
-        .is_some());
+        assert!(
+            jadix_components::core::tree::find_in_tree(&area, |el| el
+                .get_attr("data-slot")
+                .map(String::as_str)
+                == Some("scrollbar-arrow-end"))
+            .is_some()
+        );
     });
 }
 
@@ -398,7 +959,7 @@ fn product_viewports_default_to_smooth_and_allow_explicit_jump() {
 
 #[test]
 fn measured_virtual_list_uses_real_layout_and_preserves_a_shrinking_anchor() {
-    use jadix_components::components::virtual_list::{virtual_list, ListScrollPosition};
+    use jadix_components::components::virtual_list::{ListScrollPosition, virtual_list};
     use jadix_components::core::scroll_viewport::ScrollViewportSignalKeys;
     use jadix_components::core::tree::LayoutTree;
     use std::{
@@ -630,7 +1191,7 @@ fn measured_virtual_list_normalizes_nonfinite_configured_geometry() {
 
 #[test]
 fn measured_virtual_list_reorder_keeps_extents_and_scroll_anchor_by_item_key() {
-    use jadix_components::components::virtual_list::{virtual_list, ListScrollPosition};
+    use jadix_components::components::virtual_list::{ListScrollPosition, virtual_list};
     use jadix_components::core::scroll_viewport::ScrollViewportSignalKeys;
     use jadix_components::core::tree::LayoutTree;
     use std::{cell::RefCell, rc::Rc};
@@ -828,7 +1389,11 @@ fn measured_virtual_list_rebases_anchor_motion_after_extent_changes() {
     }
 
     fn row_motion(element: &Element, id: &str) -> Option<jadix_components::motion::LayoutMotion> {
-        if element.attrs.get("jadix_layout_id").is_some_and(|value| value == id) {
+        if element
+            .attrs
+            .get("jadix_layout_id")
+            .is_some_and(|value| value == id)
+        {
             return element.layout_motion_handle();
         }
         element
@@ -907,8 +1472,10 @@ fn measured_virtual_list_rebases_anchor_motion_after_extent_changes() {
 
         assert_eq!(offset.peek(), 63.0);
         assert_eq!(b.bounds().unwrap()[1], 60.0);
-        assert!(!b.is_active(), "the keyed anchor follows the corrected scroll origin");
-
+        assert!(
+            !b.is_active(),
+            "the keyed anchor follows the corrected scroll origin"
+        );
     });
 }
 
@@ -929,7 +1496,10 @@ fn virtual_list_resamples_rows_after_render_callback_mutates_data() {
     use jadix_components::core::reactivity::create_root;
     use jadix_components::core::scroll_viewport::ScrollViewportSignalKeys;
     use jadix_components::core::tree::LayoutTree;
-    use std::{cell::{Cell, RefCell}, rc::Rc};
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
     fn sync(element: &mut Element, layout: &mut LayoutTree) {
         if let Some(callback) = element.reactive_sync.clone() {

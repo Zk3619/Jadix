@@ -34,6 +34,10 @@ fn mixed_unicode_styles_wrap_and_invalid_ranges_preserve_active_surface() {
             accessible_name: None,
             accessible_role: None,
             accessible_expanded: None,
+            interaction: Default::default(),
+            keyboard: Default::default(),
+            navigation_keys: Vec::new(),
+            accessibility: Default::default(),
             accessibility_relations: Default::default(),
             accessible_selected: None,
             style: NodeStyle {
